@@ -16,7 +16,7 @@ The app currently binds to localhost and has no authenticated shared-user access
 
 ## Open — Platform and environment validation
 
-Windows builds and synthetic tests have been exercised. A macOS build and live social-platform sync have not been validated for this version. Verify each target environment and report actual results.
+Windows builds and synthetic tests have been exercised. A bounded live YouTube test-channel download and an Instagram reel/fallback test succeeded in disposable folders; these did not validate complete channel downloads or every account. A macOS build has not been validated. Verify each target environment and report actual results.
 
 ## Planned — Real account connections and analytics history
 
@@ -24,7 +24,7 @@ The dashboard supports manual snapshots, CSV, and opt-in Brave refresh of visibl
 
 ## Planned — Automated publishing and complete source picker
 
-The source-video picker and local queue reference existing files; auto publishing, category-level posting schedules, AI caption drafting, photo/carousel queueing, copying video files to the clipboard, and verification against real social accounts remain unimplemented. The date filter only uses available original metadata, and old posts may lack it. YouTube links are accepted but live YouTube sync has not been tested. See `POSTING_RESEARCH.md`.
+The source picker and local queue reference existing photo or video files; auto publishing, category-level posting schedules, AI caption drafting, whole-carousel queueing, copying video files to the clipboard, and verification of published posts against real social accounts remain unimplemented. Date filters use available original metadata or clearly labeled TikTok ID estimates; old posts may still lack dates. A bounded live YouTube test-channel download succeeded, but full-channel and account coverage remain unverified. See `POSTING_RESEARCH.md`.
 
 ## Open — Instagram account download coverage
 

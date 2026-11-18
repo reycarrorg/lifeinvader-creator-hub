@@ -43,11 +43,12 @@ Clone the upstream repository with the GitHub account that accepted the invitati
 
 ## Issues and progress
 
+- Start from `docs/TODO.md` for the shared agenda. Either collaborator can propose a different direction in a branch or fork; agree on shared defaults before merging. Keep the checklist current as work changes.
 - Keep `docs/PROGRESS.md` as a concise, dated handoff: what changed, what was actually tested, and what remains. Add meaningful entries rather than a play-by-play.
 - Keep `docs/ISSUES.md` as the in-repository list of known problems and planned work. Record reproduction steps and evidence when known. Distinguish confirmed behavior from assumptions.
 - Use the upstream repository's GitHub **Issues** for individual tasks and bugs when available. Include an issue or pull request link in the tracked documents once it exists. GitHub issues are associated with the repository on GitHub; their text is not automatically a file in Git.
 - Link pull requests to relevant issues, describe the resulting behavior, and include the tests run and any limitations. Do not mark an issue fixed until the change is verified.
-- AI assistants should read `AGENTS.md` and the two handoff documents at the start of a task and leave them current when finishing substantive work.
+- AI assistants should read `AGENTS.md`, `TODO.md`, and the handoff documents at the start of a task and leave them current when finishing substantive work. Follow the current user's requested direction while making shared changes reviewable.
 
 ## Local data and testing
 
