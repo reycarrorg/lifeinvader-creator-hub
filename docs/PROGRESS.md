@@ -33,3 +33,8 @@ Validation for the analytics and queue work: Rust unit tests; isolated analytics
 
 - Added automatic local date resolution for source listings and a separate per-source, category or all-source audit. The audit can optionally request platform metadata without downloading media; it tracks progress, cancellation, missing dates and failed checks. The app preserves archive/media files and labels TikTok ID-derived UTC dates as estimates. Queued items carry that provenance.
 - Verified synthetic local and online audit, ambiguous archive suffix handling, queue updates, cancellation and unchanged media/archive contents. Limited metadata-only live checks were performed without downloading media; platform access may fail. Source ID estimates can differ from published dates, especially around day/timezone boundaries.
+
+## 2026-11-18 — Shared agenda and AI handoff
+
+- Added `TODO.md` with the product direction, current implementation and validation boundaries, prioritized follow-up work, and a workflow for both collaborators and their AI assistants. Collaborators can adapt their own forks while proposing shared changes through review.
+- Corrected stale notes about the bounded YouTube test, date audit, photo selection and Brave refresh. Documentation-only change; verified references and consistency against the current repository and prior recorded tests.

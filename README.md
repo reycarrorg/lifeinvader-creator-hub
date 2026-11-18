@@ -17,7 +17,7 @@ A fresh database starts without accounts or source folders. Add your own account
 
 This is the shared upstream repository. The owner can invite a GitHub user as a collaborator. After the invitation is accepted, work in a personal fork if GitHub permits it, or in a separate branch in the shared repository. Submit a pull request into upstream `main` so the other person can review the change before it is merged.
 
-Start with the [collaboration guide](docs/COLLABORATION.md). AI assistants should also read [AGENTS.md](AGENTS.md), [project progress](docs/PROGRESS.md), and [known issues](docs/ISSUES.md) before making changes. Update those records with meaningful results and link related GitHub issues or pull requests when available.
+Start with the [shared to-do and project agenda](docs/TODO.md) and [collaboration guide](docs/COLLABORATION.md). AI assistants should also read [AGENTS.md](AGENTS.md), [project progress](docs/PROGRESS.md), and [known issues](docs/ISSUES.md) before making changes. Update those records with meaningful results and link related GitHub issues or pull requests when available.
 
 Your fork or clone contains the code, not another person's local accounts, database, or media. Do not add those files or credentials to the repository.
 
@@ -92,7 +92,7 @@ python tests/profile_sync_smoke.py
 python tests/scheduler_smoke.py
 ```
 
-The smoke tests use isolated temporary databases and fake downloaders on local port 3859. `tests/thumbnail_smoke.py` additionally needs `tools/ffmpeg.exe`. macOS builds and live platform downloads have not been verified for this version.
+The smoke tests use isolated temporary databases and fake downloaders on local port 3859. `tests/thumbnail_smoke.py` additionally needs `tools/ffmpeg.exe`. A bounded live YouTube test-channel download and Instagram reel/fallback test succeeded, but complete channel coverage and macOS builds remain unverified.
 
 ## Optional Brave profile refresh
 
