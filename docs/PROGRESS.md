@@ -21,3 +21,10 @@ Keep entries concise and dated. Record actual validation and remaining limitatio
 - Added optional profile sync schedules and tile countdowns alongside existing source schedules. See `POSTING_RESEARCH.md` for platform/authentication constraints and remaining work.
 
 Validation for the analytics and queue work: Rust unit tests; isolated analytics, queue, fresh-install, category, source sync, profile sync and scheduler smoke tests with synthetic data and fake downloaders. The new link dialog, manual analytics entry and source picker/queue were also exercised in a local test browser. No live account sync, upload or social-platform authorization was tested.
+
+## 2026-11-18 — Brave analytics refresh and broader source picker
+
+- Added an opt-in local Brave extension and paired bridge for scheduled visible TikTok/Instagram profile counts, with provenance, approximate-value labels, error reporting and optional refresh after a recorded post. It does not extract cookies or provide private Insights. The user must install and pair the extension; an installed-extension end-to-end test is still pending.
+- The source picker now shuffles photos and videos and supports media type, source/category, saved duration, date and text filtering with optional ordering. Length filtering excludes files without duration metadata; selecting one carousel asset does not queue the whole carousel.
+- Live bounded tests: the app downloaded from a YouTube test channel in a disposable folder. Instagram profile extraction failed; an individual owner reel succeeded and the app's browser-link fallback downloaded a partial reel in a separate disposable test. No real account was modified or post published.
+- See `BROWSER_ANALYTICS_AND_PUBLISHING.md` for setup, credential handling and researched publishing components.

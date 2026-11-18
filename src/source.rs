@@ -37,6 +37,7 @@ pub(crate) struct SourceFile {
     pub(crate) title: Option<String>,
     pub(crate) description: Option<String>,
     pub(crate) original_url: Option<String>,
+    pub(crate) duration_seconds: Option<f64>,
     asset_id: Option<String>,
     downloaded_at: Option<i64>,
     is_new: bool,
@@ -333,6 +334,7 @@ pub(crate) fn post_metadata(
     Option<String>,
     Option<String>,
     Option<String>,
+    Option<f64>,
 )> {
     let mut json_name = path.as_os_str().to_os_string();
     json_name.push(".json");
@@ -390,7 +392,11 @@ pub(crate) fn post_metadata(
     let title = text("title", 500);
     let description = text("description", 10000);
     let url = text("webpage_url", 2000).filter(|s| s.starts_with("https://"));
-    Some((date, id, asset_id, title, description, url))
+    let duration = value
+        .get("duration")
+        .and_then(|v| v.as_f64())
+        .filter(|n| n.is_finite() && *n >= 0.0 && *n <= 604800.0);
+    Some((date, id, asset_id, title, description, url, duration))
 }
 pub(crate) fn gather(
     root: &Path,
@@ -433,7 +439,7 @@ pub(crate) fn gather(
         let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
             continue;
         };
-        let (posted_date, post_id, asset_id, title, description, original_url) =
+        let (posted_date, post_id, asset_id, title, description, original_url, duration_seconds) =
             post_metadata(&path).unwrap_or_default();
         files.push(SourceFile {
             path: relative.replace('\\', "/"),
@@ -456,6 +462,7 @@ pub(crate) fn gather(
             title,
             description,
             original_url,
+            duration_seconds,
             asset_id,
             downloaded_at: None,
             is_new: false,
@@ -919,6 +926,15 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
     .map_err(internal)?;
     let run_id = tx.last_insert_rowid();
     tx.commit().map_err(internal)?;
+    let fallback_links: Vec<String> = if platform == "instagram" {
+        match db.prepare("SELECT url FROM analytics_bridge_links WHERE profile_id=? ORDER BY captured_at DESC LIMIT 50") {
+            Ok(mut stmt) => stmt.query_map([id], |r| r.get(0)).ok().map(|rows| rows.filter_map(Result::ok).collect()).unwrap_or_default(),
+            Err(_) => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+    drop(db);
     let db = app.db.clone();
     let photo_helper = cfg.photo_helper;
     let gallery_dir = gallery_dl_dir();
@@ -976,7 +992,7 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
                 root.join("download-archive.txt")
             })
             .arg("--output")
-            .arg(output)
+            .arg(&output)
             .arg("--")
             .arg(&url);
             #[cfg(windows)]
@@ -989,6 +1005,51 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
                 .stderr(Stdio::from(log.try_clone()?))
                 .status()?;
             let mut code = status.code().unwrap_or(1);
+            if code != 0 && !fallback_links.is_empty() {
+                writeln!(
+                    log,
+                    "\nProfile scan failed. Trying {} previously visible Instagram post links captured by Brave; older posts may be missing.",
+                    fallback_links.len()
+                )?;
+                let mut retry = Command::new(&tool);
+                retry
+                    .args([
+                        "--ignore-config",
+                        "--ignore-errors",
+                        "--windows-filenames",
+                        "--no-overwrites",
+                        "--write-description",
+                        "--write-info-json",
+                        "--color",
+                        "never",
+                        "--newline",
+                        "--progress",
+                        "--progress-delta",
+                        "1",
+                        "--progress-template",
+                        "download:__LV_PROGRESS__%(progress._percent_str)s",
+                        "--download-archive",
+                    ])
+                    .arg(if is_profile {
+                        account_dir.join("download-archive.txt")
+                    } else {
+                        root.join("download-archive.txt")
+                    })
+                    .arg("--output")
+                    .arg(&output)
+                    .arg("--")
+                    .args(&fallback_links);
+                #[cfg(windows)]
+                {
+                    use std::os::windows::process::CommandExt;
+                    retry.creation_flags(0x08000000);
+                }
+                let status = retry
+                    .stdout(Stdio::from(log.try_clone()?))
+                    .stderr(Stdio::from(log.try_clone()?))
+                    .status()?;
+                code = status.code().unwrap_or(1);
+            }
             if input.include_photos && platform == "tiktok" {
                 writeln!(log, "\nChecking TikTok photo posts...")?;
                 let mut cmd = Command::new("python");

@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Lifeinvader Profile Analytics",
+  "version": "0.1.0",
+  "description": "Reads visible counts from your selected Instagram and TikTok profiles for the local Lifeinvader app.",
+  "permissions": ["storage", "alarms", "scripting"],
+  "host_permissions": ["https://www.instagram.com/*", "https://instagram.com/*", "https://www.tiktok.com/*", "https://tiktok.com/*", "http://127.0.0.1:3847/*"],
+  "background": {"service_worker": "background.js"},
+  "action": {"default_title": "Lifeinvader analytics", "default_popup": "popup.html"}
+}

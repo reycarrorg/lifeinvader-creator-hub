@@ -91,12 +91,13 @@ pub struct Record {
     data: Snapshot,
     source: String,
     updated_at: String,
+    approx: Vec<String>,
 }
 pub async fn get(State(app): State<App>, Path(id): Path<i64>) -> ApiResult<Json<Vec<Record>>> {
     let db = app.db.lock().map_err(internal)?;
     exists(&db, id)?;
     let mut stmt=db.prepare("SELECT date,post_id,followers,following,views,likes,comments,shares,source,updated_at FROM analytics_snapshots WHERE profile_id=? ORDER BY date DESC, updated_at DESC LIMIT 10000").map_err(internal)?;
-    let result = stmt
+    let mut result = stmt
         .query_map([id], |r| {
             Ok(Record {
                 data: Snapshot {
@@ -111,11 +112,58 @@ pub async fn get(State(app): State<App>, Path(id): Path<i64>) -> ApiResult<Json<
                 },
                 source: r.get(8)?,
                 updated_at: r.get(9)?,
+                approx: vec![],
             })
         })
         .map_err(internal)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(internal)?;
+    let mut live=db.prepare("SELECT observed_at,followers,following,likes,followers_approx,following_approx,likes_approx FROM analytics_bridge_snapshots WHERE profile_id=? ORDER BY observed_at DESC LIMIT 10000").map_err(internal)?;
+    let extra = live
+        .query_map([id], |r| {
+            let observed: String = r.get(0)?;
+            let day = chrono::DateTime::parse_from_rfc3339(&observed)
+                .map(|value| {
+                    value
+                        .with_timezone(&chrono::Local)
+                        .date_naive()
+                        .format("%Y-%m-%d")
+                        .to_string()
+                })
+                .unwrap_or_else(|_| observed.get(..10).unwrap_or("").to_string());
+            Ok(Record {
+                data: Snapshot {
+                    date: day,
+                    post_id: String::new(),
+                    followers: r.get(1)?,
+                    following: r.get(2)?,
+                    views: None,
+                    likes: r.get(3)?,
+                    comments: None,
+                    shares: None,
+                },
+                source: "Brave profile".into(),
+                updated_at: observed,
+                approx: [
+                    ("followers", r.get::<_, bool>(4)?),
+                    ("following", r.get::<_, bool>(5)?),
+                    ("likes", r.get::<_, bool>(6)?),
+                ]
+                .into_iter()
+                .filter_map(|(name, flag)| flag.then_some(name.to_owned()))
+                .collect(),
+            })
+        })
+        .map_err(internal)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(internal)?;
+    result.extend(extra);
+    result.sort_by(|a, b| {
+        b.data
+            .date
+            .cmp(&a.data.date)
+            .then_with(|| b.updated_at.cmp(&a.updated_at))
+    });
     Ok(Json(result))
 }
 pub async fn add(

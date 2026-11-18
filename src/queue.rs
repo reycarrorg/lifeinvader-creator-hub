@@ -120,7 +120,7 @@ pub async fn add(
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
     schedule(&input.scheduled_for)?;
     let target = source::resolve_file(&app, input.source_id, &input.path, "source")?;
-    let (date, post_id, _, title, description, url) =
+    let (date, post_id, _, title, description, url, _) =
         source::post_metadata(&target).unwrap_or_default();
     let db = app.db.lock().map_err(internal)?;
     destination(&db, id)?;
@@ -166,6 +166,9 @@ pub async fn update(
     let updated=db.execute("UPDATE posting_queue SET state=?,caption=?,post_url=?,scheduled_for=?,updated_at=datetime('now') WHERE id=? AND profile_id=?",params![input.state,input.caption,input.post_url,input.scheduled_for,qid,id]).map_err(internal)?;
     if updated == 0 {
         return Err((StatusCode::NOT_FOUND, "Queue entry not found.".into()));
+    }
+    if input.state == "posted" {
+        db.execute("UPDATE analytics_bridge SET next_run=unixepoch() WHERE profile_id=? AND enabled=1 AND after_post=1",[id]).map_err(internal)?;
     }
     Ok(StatusCode::NO_CONTENT)
 }

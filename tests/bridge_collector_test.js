@@ -1,0 +1,6 @@
+const assert=require('assert');const {readProfile}=require('../browser-extension/collector.js');
+global.location={href:'https://www.tiktok.com/@demo'};
+global.document={querySelector:s=>({'[data-e2e="followers-count"]':{textContent:'460'},'[data-e2e="following-count"]':{textContent:'4'},'[data-e2e="likes-count"]':{textContent:'44.6K'},'body':{innerText:''}}[s]||null),body:{innerText:''}};
+let x=readProfile('https://www.tiktok.com/@demo','tiktok');assert.equal(x.followers,460);assert.equal(x.following,4);assert.equal(x.likes,44600);assert.equal(x.likes_approx,true);assert.equal(readProfile('https://www.tiktok.com/@other','tiktok').error,'identity');
+global.location={href:'https://www.instagram.com/demo/'};global.document={querySelector:s=>s==='main header'?{innerText:'demo\n31 posts\n64 followers\n17 following'}:null,querySelectorAll:()=>[{href:'https://www.instagram.com/demo/reel/abcde123/'},{href:'https://www.instagram.com/other/reel/abcde999/'}],body:{innerText:''}};x=readProfile('https://www.instagram.com/demo','instagram');assert.equal(x.followers,64);assert.equal(x.following,17);assert.equal(x.likes,null);assert.equal(x.post_links.length,1);
+console.log('PASS: collector parses visible exact and rounded counts and checks profile identity');

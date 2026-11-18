@@ -20,8 +20,12 @@ Windows builds and synthetic tests have been exercised. A macOS build and live s
 
 ## Planned — Real account connections and analytics history
 
-The first analytics dashboard uses manually entered snapshots or a template CSV. It does not fetch platform Insights, automatically fill profile photos, or publish posts. Official API access depends on each platform's permissions, account eligibility and app approval; see `ANALYTICS_RESEARCH.md`. Expand snapshot semantics and secure OAuth before advertising live analytics. Add corrections/deletion and platform-specific export mappings.
+The dashboard supports manual snapshots, CSV, and opt-in Brave refresh of visible profile counts. The Brave extension must be installed and paired by the user; the real extension flow has not yet been verified end to end. It does not fetch private platform Insights, automatically fill profile photos, or publish posts. Official API access depends on each platform's permissions, account eligibility and app approval; see `ANALYTICS_RESEARCH.md`. Expand snapshot semantics and secure OAuth before advertising live analytics. Add corrections/deletion and platform-specific export mappings.
 
 ## Planned — Automated publishing and complete source picker
 
 The source-video picker and local queue reference existing files; auto publishing, category-level posting schedules, AI caption drafting, photo/carousel queueing, copying video files to the clipboard, and verification against real social accounts remain unimplemented. The date filter only uses available original metadata, and old posts may lack it. YouTube links are accepted but live YouTube sync has not been tested. See `POSTING_RESEARCH.md`.
+
+## Open — Instagram account download coverage
+
+The unauthenticated Instagram profile extractor failed during a live test. An individual owner reel succeeded, and a bounded app test verified the fallback using a supplied captured link. The Brave link capture only covers visible posts and does not establish a complete account download. Photo/carousel coverage and the installed extension flow still need validation. See `BROWSER_ANALYTICS_AND_PUBLISHING.md`.

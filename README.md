@@ -5,11 +5,11 @@ A local desktop-style content hub built with Rust, SQLite, and a browser interfa
 ## What works
 
 - Separate profile and source views, categories, and category dashboards. Paste a supported account link to fill its name and platform; photos and categories can be set under More options.
-- Profile analytics for manually recorded account/post snapshots and template CSV imports, with offline charts. These values are not live platform insights. See [analytics research and roadmap](docs/ANALYTICS_RESEARCH.md).
+- Profile analytics for manual snapshots, template CSV imports and optional Brave-based refresh of visible TikTok/Instagram profile counts, with offline charts. Private platform Insights are not connected. See [analytics research and roadmap](docs/ANALYTICS_RESEARCH.md).
 - Source sync with a shared download archive, per-source Sync all exclusions, optional scheduled sync while the app is open, progress logs, and local video previews.
 - Profile sync for accessible TikTok, Instagram and YouTube videos and, when the optional photo tools are installed, photo posts. Profile downloads have their own folders and archives.
 - A manual content library with per-profile claim and posting status.
-- Pick downloaded source videos using source/category, original date and text filters; queue original file references for a profile and manually record status. Planned times do not automatically post. See [posting research and roadmap](docs/POSTING_RESEARCH.md). A reported post is a manual record; the app does not publish posts.
+- Shuffle downloaded source photos and videos using source/category, media type, available duration, original date and text filters; queue original file references for a profile and manually record status. Planned times do not automatically post. See [posting research and roadmap](docs/POSTING_RESEARCH.md). A reported post is a manual record; the app does not publish posts.
 
 A fresh database starts without accounts or source folders. Add your own accounts and choose your own library folder in the app. Profiles and downloaded files are local to each installation; a GitHub fork does not share the app's database or media.
 
@@ -72,6 +72,9 @@ After `cargo build`, run:
 cargo test
 python tests/fresh_start_smoke.py
 python tests/analytics_smoke.py
+python tests/bridge_smoke.py
+python tests/bridge_sync_smoke.py
+node tests/bridge_collector_test.js
 python tests/queue_smoke.py
 python tests/smoke.py
 python tests/categories_smoke.py
@@ -81,3 +84,7 @@ python tests/scheduler_smoke.py
 ```
 
 The smoke tests use isolated temporary databases and fake downloaders on local port 3859. `tests/thumbnail_smoke.py` additionally needs `tools/ffmpeg.exe`. macOS builds and live platform downloads have not been verified for this version.
+
+## Optional Brave profile refresh
+
+See [browser analytics setup and publishing research](docs/BROWSER_ANALYTICS_AND_PUBLISHING.md). Install the local `browser-extension` folder in Brave, pair it with the code shown under a profile's **Analytics → Brave refresh**, and enable the schedule. Both Brave and the hub must be open. The extension reads displayed profile counts, not private Insights or cookies. For Instagram sources, **Brave links** can capture visible post links to use as a partial fallback when profile extraction is blocked. This is not a full archive.
