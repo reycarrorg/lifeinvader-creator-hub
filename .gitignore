@@ -1,0 +1,13 @@
+/target/
+/data/
+/media/
+/tools/
+/Lifeinvader*.exe
+/READINESS.md
+**/__pycache__/
+*.py[cod]
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+.env
+.env.*
