@@ -51,6 +51,13 @@ with tempfile.TemporaryDirectory(prefix='lifeinvader-schedule-test-') as tmp:
         assert db.execute("SELECT count(*) FROM source_queue WHERE state='finished'").fetchone()[0]==4
         assert db.execute("SELECT count(*) FROM source_sync_runs").fetchone()[0]==4
         db.close()
-        print('PASS: automatic schedule, timer reset, source exclusion, serial batch sync, and archive reuse')
+        own=next(p['id'] for p in profiles if p['role']=='destination' and p['platform']=='tiktok')
+        assert json_post(f'/api/profiles/{own}/schedule',{'enabled':True,'interval_seconds':60})[0]==204
+        assert next(x for x in get('/api/source-schedules')['schedules'] if x['profile_id']==own)['enabled']
+        db=sqlite3.connect(env['LIFEINVADER_DB']);db.execute('UPDATE source_schedules SET next_run=unixepoch()-1 WHERE profile_id=?',(own,));db.commit();db.close()
+        until(lambda: get(f'/api/profiles/{own}/downloads')['last_run'] and get(f'/api/profiles/{own}/downloads')['last_run']['state']=='finished')
+        assert next(x for x in get('/api/source-schedules')['schedules'] if x['profile_id']==own)['next_run']>time.time()
+        assert json_post(f'/api/profiles/{own}/schedule',{'enabled':False,'interval_seconds':60})[0]==204
+        print('PASS: source and profile schedules, timer reset, source exclusion, serial batch sync, and archive reuse')
     finally:
         proc.terminate();proc.wait(timeout=5)

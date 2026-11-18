@@ -17,3 +17,11 @@ The app currently binds to localhost and has no authenticated shared-user access
 ## Open — Platform and environment validation
 
 Windows builds and synthetic tests have been exercised. A macOS build and live social-platform sync have not been validated for this version. Verify each target environment and report actual results.
+
+## Planned — Real account connections and analytics history
+
+The first analytics dashboard uses manually entered snapshots or a template CSV. It does not fetch platform Insights, automatically fill profile photos, or publish posts. Official API access depends on each platform's permissions, account eligibility and app approval; see `ANALYTICS_RESEARCH.md`. Expand snapshot semantics and secure OAuth before advertising live analytics. Add corrections/deletion and platform-specific export mappings.
+
+## Planned — Automated publishing and complete source picker
+
+The source-video picker and local queue reference existing files; auto publishing, category-level posting schedules, AI caption drafting, photo/carousel queueing, copying video files to the clipboard, and verification against real social accounts remain unimplemented. The date filter only uses available original metadata, and old posts may lack it. YouTube links are accepted but live YouTube sync has not been tested. See `POSTING_RESEARCH.md`.
