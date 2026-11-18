@@ -11,9 +11,17 @@ A local desktop-style content hub built with Rust, SQLite, and a browser interfa
 
 A fresh database starts without accounts or source folders. Add your own accounts and choose your own library folder in the app. Profiles and downloaded files are local to each installation; a GitHub fork does not share the app's database or media.
 
+## Collaborate with a friend or AI
+
+This is the shared upstream repository. The owner can invite a GitHub user as a collaborator. After the invitation is accepted, work in a personal fork if GitHub permits it, or in a separate branch in the shared repository. Submit a pull request into upstream `main` so the other person can review the change before it is merged.
+
+Start with the [collaboration guide](docs/COLLABORATION.md). AI assistants should also read [AGENTS.md](AGENTS.md), [project progress](docs/PROGRESS.md), and [known issues](docs/ISSUES.md) before making changes. Update those records with meaningful results and link related GitHub issues or pull requests when available.
+
+Your fork or clone contains the code, not another person's local accounts, database, or media. Do not add those files or credentials to the repository.
+
 ## Windows setup
 
-Install Git, [Rust](https://www.rust-lang.org/tools/install), the Visual Studio C++ build tools, and Microsoft Edge. Python 3 is required for the optional photo tools and smoke tests. In PowerShell, clone your fork and build:
+Install Git, [Rust](https://www.rust-lang.org/tools/install), the Visual Studio C++ build tools, and Microsoft Edge. Python 3 is required for the optional photo tools and smoke tests. In PowerShell, clone your fork or the shared repository and build:
 
 ```powershell
 git clone https://github.com/YOUR-USERNAME/lifeinvader-creator-hub.git
@@ -22,6 +30,8 @@ cargo build --release
 Copy-Item target\release\lifeinvader_hub.exe .\Lifeinvader.exe
 .\Lifeinvader.exe
 ```
+
+Replace `YOUR-USERNAME` with the owner of your fork, or with `reycarrorg` to clone the shared repository directly. GitHub authentication is required for a private repository.
 
 The app opens its own Edge window at `127.0.0.1:3847`. Closing that window ends the local service after any running sync finishes. You can also start a development server with `cargo run -- --server-only` and open the local address in a browser.
 

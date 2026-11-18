@@ -9,5 +9,13 @@
 *.sqlite3
 *.sqlite3-wal
 *.sqlite3-shm
+**/download-archive.txt
+**/.photo-scan-cache.sqlite3
+*.log
+*.part
+*.mp4
+*.mov
+*.mkv
+*.webm
 .env
 .env.*
