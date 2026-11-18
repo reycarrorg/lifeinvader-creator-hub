@@ -17,7 +17,9 @@ use std::{
 };
 use tower_http::services::ServeDir;
 use uuid::Uuid;
+mod analytics;
 mod categories;
+mod queue;
 mod scheduler;
 mod source;
 
@@ -172,6 +174,8 @@ fn init(db: &Connection) -> rusqlite::Result<()> {
     CREATE TABLE IF NOT EXISTS source_new_files (profile_id INTEGER NOT NULL REFERENCES profiles(id), root TEXT NOT NULL, path TEXT NOT NULL, downloaded_at INTEGER NOT NULL, seen INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(profile_id,root,path));")?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS profile_downloads (profile_id INTEGER NOT NULL REFERENCES profiles(id), root TEXT NOT NULL, platform TEXT NOT NULL, post_id TEXT NOT NULL, path TEXT NOT NULL, posted_date TEXT, PRIMARY KEY(profile_id,root,platform,post_id));")?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS profile_download_files (profile_id INTEGER NOT NULL REFERENCES profiles(id), root TEXT NOT NULL, platform TEXT NOT NULL, post_id TEXT NOT NULL, asset_id TEXT NOT NULL, path TEXT NOT NULL, PRIMARY KEY(profile_id,root,platform,asset_id));")?;
+    db.execute_batch("CREATE TABLE IF NOT EXISTS analytics_snapshots (profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, date TEXT NOT NULL, post_id TEXT NOT NULL DEFAULT '', followers INTEGER, following INTEGER, views INTEGER, likes INTEGER, comments INTEGER, shares INTEGER, source TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(profile_id,date,post_id));")?;
+    db.execute_batch("CREATE TABLE IF NOT EXISTS posting_queue (id INTEGER PRIMARY KEY, profile_id INTEGER NOT NULL REFERENCES profiles(id), source_id INTEGER NOT NULL REFERENCES profiles(id), platform TEXT NOT NULL, identity_key TEXT NOT NULL, root TEXT NOT NULL, path TEXT NOT NULL, post_id TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', posted_date TEXT NOT NULL DEFAULT '', original_url TEXT NOT NULL DEFAULT '', channel_url TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'queued' CHECK(state IN ('queued','posted','checked')), caption TEXT NOT NULL DEFAULT '', post_url TEXT NOT NULL DEFAULT '', scheduled_for TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')), UNIQUE(profile_id,platform,identity_key));")?;
     Ok(())
 }
 fn text_field(map: &HashMap<String, String>, key: &str) -> String {
@@ -722,6 +726,15 @@ async fn js() -> impl IntoResponse {
         include_str!("../web/app.js"),
     )
 }
+async fn chart_js() -> impl IntoResponse {
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/javascript; charset=utf-8",
+        )],
+        include_str!("../web/chart.umd.min.js"),
+    )
+}
 async fn previews_js() -> impl IntoResponse {
     (
         [(
@@ -848,12 +861,30 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .route("/style.css", get(css))
         .route("/app.js", get(js))
         .route("/previews.js", get(previews_js))
+        .route("/chart.js", get(chart_js))
         .route("/api/items", get(list).post(import))
         .route("/api/profiles", post(add_profile))
         .route("/api/categories", post(categories::create))
         .route("/api/categories/members", post(categories::set_members))
         .route("/api/profiles/{id}", post(edit_profile))
         .route("/api/profiles/{id}/photo", post(upload_avatar))
+        .route(
+            "/api/profiles/{id}/schedule",
+            post(scheduler::save_profile_schedule),
+        )
+        .route(
+            "/api/profiles/{id}/analytics",
+            get(analytics::get).post(analytics::add),
+        )
+        .route(
+            "/api/profiles/{id}/analytics/import",
+            post(analytics::import),
+        )
+        .route(
+            "/api/profiles/{id}/queue",
+            get(queue::list).post(queue::add),
+        )
+        .route("/api/profiles/{id}/queue/{qid}", post(queue::update))
         .route(
             "/api/profiles/{id}/downloads",
             get(source::profile_overview),

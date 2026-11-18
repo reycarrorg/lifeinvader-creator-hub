@@ -32,8 +32,11 @@ pub(crate) struct SourceFile {
     size: u64,
     modified: u64,
     created: Option<u64>,
-    posted_date: Option<String>,
-    post_id: Option<String>,
+    pub(crate) posted_date: Option<String>,
+    pub(crate) post_id: Option<String>,
+    pub(crate) title: Option<String>,
+    pub(crate) description: Option<String>,
+    pub(crate) original_url: Option<String>,
     asset_id: Option<String>,
     downloaded_at: Option<i64>,
     is_new: bool,
@@ -225,7 +228,7 @@ pub fn safe_folder_name(s: &str) -> bool {
 pub(crate) fn source_profile(db: &Connection, id: i64) -> ApiResult<(String, String, String)> {
     account_profile(db, id, "source")
 }
-fn account_profile(
+pub(crate) fn account_profile(
     db: &Connection,
     id: i64,
     expected_role: &str,
@@ -249,20 +252,29 @@ fn account_profile(
     let host_ok = match platform.as_str() {
         "tiktok" => ["tiktok.com", "www.tiktok.com", "m.tiktok.com"].contains(&host.as_str()),
         "instagram" => ["instagram.com", "www.instagram.com"].contains(&host.as_str()),
+        "youtube" => ["youtube.com", "www.youtube.com", "m.youtube.com"].contains(&host.as_str()),
         _ => false,
     };
     if !host_ok {
         return Err(bad(
-            "Source sync currently supports TikTok and Instagram profile links.",
+            "Sync supports TikTok, Instagram and YouTube account links.",
         ));
     }
     let parts: Vec<&str> = parsed.path().split('/').filter(|x| !x.is_empty()).collect();
-    if parts.len() != 1 {
-        return Err(bad(
-            "Use a source profile link rather than an individual post link.",
-        ));
-    }
-    let handle = parts[0].trim_start_matches('@');
+    let handle = if platform == "youtube" {
+        match parts.as_slice() {
+            [name] if name.starts_with('@') => name.trim_start_matches('@'),
+            [kind, name] if ["channel", "user", "c"].contains(kind) => *name,
+            _ => return Err(bad("Use a YouTube channel or @handle link.")),
+        }
+    } else {
+        if parts.len() != 1 {
+            return Err(bad(
+                "Use a source profile link rather than an individual post link.",
+            ));
+        }
+        parts[0].trim_start_matches('@')
+    };
     if !safe_folder_name(handle)
         || !handle
             .chars()
@@ -312,7 +324,16 @@ pub(crate) fn allowed_dirs(root: &Path, folder: &str) -> Vec<PathBuf> {
         .filter(|p| p.starts_with(root) && p.is_dir())
         .collect()
 }
-fn post_metadata(path: &Path) -> Option<(Option<String>, Option<String>, Option<String>)> {
+pub(crate) fn post_metadata(
+    path: &Path,
+) -> Option<(
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+)> {
     let mut json_name = path.as_os_str().to_os_string();
     json_name.push(".json");
     let info = path.with_extension("info.json");
@@ -359,7 +380,17 @@ fn post_metadata(path: &Path) -> Option<(Option<String>, Option<String>, Option<
         .or_else(|| value.get("id").and_then(as_id))
         .or_else(|| value.get("post_id").and_then(as_id));
     let asset_id = value.get("media_id").and_then(as_id).or_else(|| id.clone());
-    Some((date, id, asset_id))
+    let text = |key: &str, max: usize| {
+        value
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(|s| s.chars().take(max).collect::<String>())
+            .filter(|s| !s.trim().is_empty())
+    };
+    let title = text("title", 500);
+    let description = text("description", 10000);
+    let url = text("webpage_url", 2000).filter(|s| s.starts_with("https://"));
+    Some((date, id, asset_id, title, description, url))
 }
 pub(crate) fn gather(
     root: &Path,
@@ -402,7 +433,8 @@ pub(crate) fn gather(
         let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
             continue;
         };
-        let (posted_date, post_id, asset_id) = post_metadata(&path).unwrap_or_default();
+        let (posted_date, post_id, asset_id, title, description, original_url) =
+            post_metadata(&path).unwrap_or_default();
         files.push(SourceFile {
             path: relative.replace('\\', "/"),
             name: name.to_string(),
@@ -421,6 +453,9 @@ pub(crate) fn gather(
                 .map(|v| v.as_secs()),
             posted_date,
             post_id,
+            title,
+            description,
+            original_url,
             asset_id,
             downloaded_at: None,
             is_new: false,
@@ -599,7 +634,7 @@ async fn file_for(
         .map_err(internal)?;
     Ok(response.into_response())
 }
-fn resolve_file(app: &App, id: i64, path: &str, role: &str) -> ApiResult<PathBuf> {
+pub(crate) fn resolve_file(app: &App, id: i64, path: &str, role: &str) -> ApiResult<PathBuf> {
     let (folder, root) = {
         let db = app.db.lock().map_err(internal)?;
         let (_, _, folder) = account_profile(&db, id, role)?;
@@ -780,9 +815,6 @@ fn sync_for(app: App, id: i64, input: SyncInput, role: &str) -> ApiResult<impl I
     let run_id = start_sync_for(app, id, input, role)?;
     Ok((StatusCode::ACCEPTED, Json(serde_json::json!({"id":run_id}))))
 }
-pub(crate) fn start_sync(app: App, id: i64, input: SyncInput) -> ApiResult<i64> {
-    start_sync_for(app, id, input, "source")
-}
 fn ensure_folder(root: &Path, folder: &str) -> std::io::Result<PathBuf> {
     let mut path = root.to_path_buf();
     for component in Path::new(folder).components() {
@@ -801,7 +833,7 @@ fn ensure_folder(root: &Path, folder: &str) -> std::io::Result<PathBuf> {
     }
     Ok(path)
 }
-fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) -> ApiResult<i64> {
+pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) -> ApiResult<i64> {
     let mut db = app.db.lock().map_err(internal)?;
     let (platform, url, folder) = account_profile(&db, id, role)?;
     let is_profile = role == "destination";
