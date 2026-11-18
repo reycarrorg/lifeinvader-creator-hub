@@ -6,7 +6,7 @@ A local desktop-style content hub built with Rust, SQLite, and a browser interfa
 
 - Separate profile and source views, categories, and category dashboards. Paste a supported account link to fill its name and platform; photos and categories can be set under More options.
 - Profile analytics for manual snapshots, template CSV imports and optional Brave-based refresh of visible TikTok/Instagram profile counts, with offline charts. Private platform Insights are not connected. See [analytics research and roadmap](docs/ANALYTICS_RESEARCH.md).
-- Source sync with a shared download archive, per-source Sync all exclusions, optional scheduled sync while the app is open, progress logs, and local video previews.
+- Source sync with a shared download archive, per-source Sync all exclusions, optional scheduled sync while the app is open, progress logs, local video previews, and a separate date audit.
 - Profile sync for accessible TikTok, Instagram and YouTube videos and, when the optional photo tools are installed, photo posts. Profile downloads have their own folders and archives.
 - A manual content library with per-profile claim and posting status.
 - Shuffle downloaded source photos and videos using source/category, media type, available duration, original date and text filters; queue original file references for a profile and manually record status. Planned times do not automatically post. See [posting research and roadmap](docs/POSTING_RESEARCH.md). A reported post is a manual record; the app does not publish posts.
@@ -54,6 +54,14 @@ Choose an existing library folder under **Sources → Source folders** before sy
 
 Use the app only for content you have the right to access and use. Sync is manual unless you enable an individual source's timer. Use only one downloader at a time; separate programs are not coordinated.
 
+## Source date audit
+
+Source pages automatically use any saved original date. For older TikTok files with a full post ID in the filename, or a unique eight-digit suffix in the shared archive, the app can also show an **estimated post date (UTC)**. This is inferred from the ID creation time and can differ from the published date. Ambiguous suffixes and unrecognized IDs remain unknown; file/download dates are not passed off as original dates. The picker labels estimates and lets you exclude them.
+
+Choose **Sources → Audit dates** for all sources, or **Audit dates** inside a source or source category. The default local audit checks saved metadata, filenames and the existing archive, with progress and cancellation. Optionally check **Also check the platform for verified dates** to request missing dates with yt-dlp in metadata-only mode. This can take a long time and access may be blocked. The audit never downloads media, changes the download archive, or replaces a source sidecar. It stores results in the local database and keeps partial results when stopped. Online checks and normal sync run one at a time.
+
+The [TikTok ID timestamp research](https://hindsig.ht/blog/tinkering-with-tiktok-timestamps/) and [Bellingcat's timestamp tool](https://github.com/bellingcat/tiktok-timestamp) describe the ID-derived estimate. Platform-provided dates are preferred whenever available.
+
 ## Content and duplicates
 
 The profile download view saves post IDs and file locations for a future file-referencing chooser. It is not yet connected to the manual content library: **Add content** currently copies selected files into that library. The app rejects duplicate imported platform/post ID pairs, but it does not detect identical videos uploaded under different post IDs.
@@ -76,6 +84,7 @@ python tests/bridge_smoke.py
 python tests/bridge_sync_smoke.py
 node tests/bridge_collector_test.js
 python tests/queue_smoke.py
+python tests/date_audit_smoke.py
 python tests/smoke.py
 python tests/categories_smoke.py
 python tests/source_smoke.py

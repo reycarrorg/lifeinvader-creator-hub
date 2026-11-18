@@ -15,7 +15,7 @@ use tower_http::services::ServeFile;
 #[derive(Serialize)]
 pub struct SourceConfig {
     root: String,
-    downloader: String,
+    pub(crate) downloader: String,
     photo_helper: String,
 }
 #[derive(Deserialize)]
@@ -27,12 +27,13 @@ pub struct ConfigInput {
 #[derive(Serialize)]
 pub(crate) struct SourceFile {
     pub(crate) path: String,
-    name: String,
+    pub(crate) name: String,
     pub(crate) kind: String,
-    size: u64,
-    modified: u64,
+    pub(crate) size: u64,
+    pub(crate) modified: u64,
     created: Option<u64>,
     pub(crate) posted_date: Option<String>,
+    pub(crate) posted_date_kind: Option<String>,
     pub(crate) post_id: Option<String>,
     pub(crate) title: Option<String>,
     pub(crate) description: Option<String>,
@@ -116,7 +117,7 @@ pub async fn save_config(
     let mut db = app.db.lock().map_err(internal)?;
     let busy: bool = db
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM source_sync_runs WHERE state='running')",
+            "SELECT EXISTS(SELECT 1 FROM source_sync_runs WHERE state='running') OR EXISTS(SELECT 1 FROM source_date_audits WHERE state='running')",
             [],
             |r| r.get(0),
         )
@@ -124,7 +125,7 @@ pub async fn save_config(
     if busy {
         return Err((
             StatusCode::CONFLICT,
-            "Wait for the current sync to finish before changing folders.".into(),
+            "Wait for the current sync or date audit to finish before changing folders.".into(),
         ));
     }
     let tx = db.transaction().map_err(internal)?;
@@ -361,6 +362,21 @@ pub(crate) fn post_metadata(
                 .and_then(|s| s.get(..10))
                 .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
                 .map(|d| d.format("%Y-%m-%d").to_string())
+        })
+        .or_else(|| {
+            ["timestamp", "create_time", "createTime"]
+                .iter()
+                .find_map(|key| {
+                    let value = value.get(*key)?;
+                    let seconds = value
+                        .as_i64()
+                        .or_else(|| value.as_str()?.parse::<i64>().ok())?;
+                    if !(946_684_800..=chrono::Utc::now().timestamp() + 86_400).contains(&seconds) {
+                        return None;
+                    }
+                    chrono::DateTime::from_timestamp(seconds, 0)
+                        .map(|d| d.date_naive().format("%Y-%m-%d").to_string())
+                })
         });
     let as_id = |v: &serde_json::Value| -> Option<String> {
         let s = if let Some(s) = v.as_str() {
@@ -457,6 +473,7 @@ pub(crate) fn gather(
                 .ok()
                 .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                 .map(|v| v.as_secs()),
+            posted_date_kind: posted_date.as_ref().map(|_| "metadata".to_owned()),
             posted_date,
             post_id,
             title,
@@ -562,6 +579,9 @@ fn overview_for(app: App, id: i64, role: &str) -> ApiResult<Json<serde_json::Val
         gather(&root, &d, 0, &mut files).map_err(internal)?;
     }
     let db = app.db.lock().map_err(internal)?;
+    if role == "source" {
+        crate::date_audit::enrich(&db, id, &root, &platform, &mut files).map_err(internal)?;
+    }
     let mut stmt = db
         .prepare(
             "SELECT path,downloaded_at,seen FROM source_new_files WHERE profile_id=? AND root=?",
@@ -906,7 +926,7 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
     let tx = db.transaction().map_err(internal)?;
     let busy: bool = tx
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM source_sync_runs WHERE state='running')",
+            "SELECT EXISTS(SELECT 1 FROM source_sync_runs WHERE state='running') OR EXISTS(SELECT 1 FROM source_date_audits WHERE state='running')",
             [],
             |r| r.get(0),
         )
@@ -916,7 +936,7 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
         let _ = fs::remove_file(logpath);
         return Err((
             StatusCode::CONFLICT,
-            "A source sync is already running. Wait until it finishes.".into(),
+            "A sync or date audit is already running. Wait until it finishes.".into(),
         ));
     }
     tx.execute(
