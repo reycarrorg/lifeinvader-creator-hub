@@ -35,6 +35,7 @@ pub struct Entry {
     title: String,
     description: String,
     posted_date: String,
+    posted_date_kind: String,
     original_url: String,
     channel_url: String,
     state: String,
@@ -73,7 +74,7 @@ pub async fn list(State(app): State<App>, Path(id): Path<i64>) -> ApiResult<Json
         .and_then(|c| source::checked_root(&c).ok())
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let mut stmt=db.prepare("SELECT q.id,q.source_id,p.name,q.platform,q.path,q.post_id,q.title,q.description,q.posted_date,q.original_url,q.channel_url,q.state,q.caption,q.post_url,q.scheduled_for,q.root FROM posting_queue q JOIN profiles p ON p.id=q.source_id WHERE q.profile_id=? ORDER BY CASE WHEN q.state='queued' THEN 0 ELSE 1 END, q.id DESC").map_err(internal)?;
+    let mut stmt=db.prepare("SELECT q.id,q.source_id,p.name,q.platform,q.path,q.post_id,q.title,q.description,q.posted_date,q.original_url,q.channel_url,q.state,q.caption,q.post_url,q.scheduled_for,q.root,q.posted_date_kind FROM posting_queue q JOIN profiles p ON p.id=q.source_id WHERE q.profile_id=? ORDER BY CASE WHEN q.state='queued' THEN 0 ELSE 1 END, q.id DESC").map_err(internal)?;
     let rows = stmt
         .query_map([id], |r| {
             Ok((
@@ -87,6 +88,7 @@ pub async fn list(State(app): State<App>, Path(id): Path<i64>) -> ApiResult<Json
                     title: r.get(6)?,
                     description: r.get(7)?,
                     posted_date: r.get(8)?,
+                    posted_date_kind: r.get(16)?,
                     original_url: r.get(9)?,
                     channel_url: r.get(10)?,
                     state: r.get(11)?,
@@ -120,21 +122,33 @@ pub async fn add(
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
     schedule(&input.scheduled_for)?;
     let target = source::resolve_file(&app, input.source_id, &input.path, "source")?;
-    let (date, post_id, _, title, description, url, _) =
+    let (mut date, mut post_id, _, title, description, url, _) =
         source::post_metadata(&target).unwrap_or_default();
     let db = app.db.lock().map_err(internal)?;
     destination(&db, id)?;
     let (platform, channel_url, _) = source::source_profile(&db, input.source_id)?;
-    let root = source::checked_root(&source::config(&db).map_err(internal)?)?
-        .to_string_lossy()
-        .into_owned();
+    let root_path = source::checked_root(&source::config(&db).map_err(internal)?)?;
+    let mut date_kind = date.as_ref().map(|_| "metadata".to_owned());
+    crate::date_audit::resolve(
+        &db,
+        input.source_id,
+        &root_path,
+        &platform,
+        &input.path,
+        target.file_name().and_then(|n| n.to_str()).unwrap_or(""),
+        &mut post_id,
+        &mut date,
+        &mut date_kind,
+    )
+    .map_err(internal)?;
+    let root = root_path.to_string_lossy().into_owned();
     let pid = post_id.unwrap_or_default();
     let key = if pid.is_empty() {
         format!("file:{}:{}", input.source_id, input.path)
     } else {
         format!("post:{pid}")
     };
-    let outcome=db.execute("INSERT OR IGNORE INTO posting_queue(profile_id,source_id,platform,identity_key,root,path,post_id,title,description,posted_date,original_url,channel_url,scheduled_for) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",params![id,input.source_id,platform,key,root,input.path,pid,title.unwrap_or_default(),description.unwrap_or_default(),date.unwrap_or_default(),url.unwrap_or_default(),channel_url,input.scheduled_for]).map_err(internal)?;
+    let outcome=db.execute("INSERT OR IGNORE INTO posting_queue(profile_id,source_id,platform,identity_key,root,path,post_id,title,description,posted_date,original_url,channel_url,scheduled_for,posted_date_kind) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",params![id,input.source_id,platform,key,root,input.path,pid,title.unwrap_or_default(),description.unwrap_or_default(),date.unwrap_or_default(),url.unwrap_or_default(),channel_url,input.scheduled_for,date_kind.unwrap_or_default()]).map_err(internal)?;
     if outcome == 0 {
         return Err((
             StatusCode::CONFLICT,

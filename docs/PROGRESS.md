@@ -28,3 +28,8 @@ Validation for the analytics and queue work: Rust unit tests; isolated analytics
 - The source picker now shuffles photos and videos and supports media type, source/category, saved duration, date and text filtering with optional ordering. Length filtering excludes files without duration metadata; selecting one carousel asset does not queue the whole carousel.
 - Live bounded tests: the app downloaded from a YouTube test channel in a disposable folder. Instagram profile extraction failed; an individual owner reel succeeded and the app's browser-link fallback downloaded a partial reel in a separate disposable test. No real account was modified or post published.
 - See `BROWSER_ANALYTICS_AND_PUBLISHING.md` for setup, credential handling and researched publishing components.
+
+## 2026-11-18 — Source date audit
+
+- Added automatic local date resolution for source listings and a separate per-source, category or all-source audit. The audit can optionally request platform metadata without downloading media; it tracks progress, cancellation, missing dates and failed checks. The app preserves archive/media files and labels TikTok ID-derived UTC dates as estimates. Queued items carry that provenance.
+- Verified synthetic local and online audit, ambiguous archive suffix handling, queue updates, cancellation and unchanged media/archive contents. Limited metadata-only live checks were performed without downloading media; platform access may fail. Source ID estimates can differ from published dates, especially around day/timezone boundaries.

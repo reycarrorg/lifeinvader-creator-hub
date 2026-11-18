@@ -133,7 +133,7 @@ fn tick(app: &App) -> rusqlite::Result<()> {
         tx.execute("UPDATE source_queue SET state=COALESCE((SELECT CASE WHEN r.state='finished' THEN 'finished' WHEN r.state='running' THEN 'running' ELSE 'error' END FROM source_sync_runs r WHERE r.id=source_queue.run_id),'error') WHERE state='running' AND (NOT EXISTS(SELECT 1 FROM source_sync_runs r WHERE r.id=source_queue.run_id) OR EXISTS(SELECT 1 FROM source_sync_runs r WHERE r.id=source_queue.run_id AND r.state!='running'))",[])?;
         tx.execute("INSERT INTO source_queue(batch_id,profile_id,origin,state,message,created) SELECT 'auto',s.profile_id,'auto','pending','videos',unixepoch() FROM source_schedules s WHERE s.enabled=1 AND s.next_run IS NOT NULL AND s.next_run<=unixepoch() AND NOT EXISTS(SELECT 1 FROM source_queue q WHERE q.profile_id=s.profile_id AND q.state IN ('pending','starting','running')) AND NOT EXISTS(SELECT 1 FROM source_sync_runs r WHERE r.profile_id=s.profile_id AND r.state='running')",[])?;
         tx.execute("UPDATE source_schedules SET next_run=NULL WHERE profile_id IN (SELECT profile_id FROM source_queue WHERE origin='auto' AND state='pending') AND enabled=1",[])?;
-        let busy:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM source_sync_runs WHERE state='running') OR EXISTS(SELECT 1 FROM source_queue WHERE state='starting')",[],|r|r.get(0))?;
+        let busy:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM source_sync_runs WHERE state='running') OR EXISTS(SELECT 1 FROM source_date_audits WHERE state='running') OR EXISTS(SELECT 1 FROM source_queue WHERE state='starting')",[],|r|r.get(0))?;
         let job: Option<(i64, i64, String, String)> = if busy {
             None
         } else {
