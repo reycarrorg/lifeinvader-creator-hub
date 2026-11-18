@@ -18,6 +18,7 @@ use std::{
 use tower_http::services::ServeDir;
 use uuid::Uuid;
 mod analytics;
+mod bridge;
 mod categories;
 mod queue;
 mod scheduler;
@@ -176,6 +177,7 @@ fn init(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS profile_download_files (profile_id INTEGER NOT NULL REFERENCES profiles(id), root TEXT NOT NULL, platform TEXT NOT NULL, post_id TEXT NOT NULL, asset_id TEXT NOT NULL, path TEXT NOT NULL, PRIMARY KEY(profile_id,root,platform,asset_id));")?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS analytics_snapshots (profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, date TEXT NOT NULL, post_id TEXT NOT NULL DEFAULT '', followers INTEGER, following INTEGER, views INTEGER, likes INTEGER, comments INTEGER, shares INTEGER, source TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(profile_id,date,post_id));")?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS posting_queue (id INTEGER PRIMARY KEY, profile_id INTEGER NOT NULL REFERENCES profiles(id), source_id INTEGER NOT NULL REFERENCES profiles(id), platform TEXT NOT NULL, identity_key TEXT NOT NULL, root TEXT NOT NULL, path TEXT NOT NULL, post_id TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', posted_date TEXT NOT NULL DEFAULT '', original_url TEXT NOT NULL DEFAULT '', channel_url TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'queued' CHECK(state IN ('queued','posted','checked')), caption TEXT NOT NULL DEFAULT '', post_url TEXT NOT NULL DEFAULT '', scheduled_for TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')), UNIQUE(profile_id,platform,identity_key));")?;
+    db.execute_batch("CREATE TABLE IF NOT EXISTS analytics_bridge(profile_id INTEGER PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,enabled INTEGER NOT NULL DEFAULT 0,interval_seconds INTEGER NOT NULL DEFAULT 14400,after_post INTEGER NOT NULL DEFAULT 0,next_run INTEGER,last_attempt INTEGER,last_success INTEGER,last_error TEXT NOT NULL DEFAULT '',job_id TEXT,lease_until INTEGER); CREATE TABLE IF NOT EXISTS analytics_bridge_snapshots(id INTEGER PRIMARY KEY,profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,observed_at TEXT NOT NULL,followers INTEGER,following INTEGER,likes INTEGER,followers_approx INTEGER NOT NULL DEFAULT 0,following_approx INTEGER NOT NULL DEFAULT 0,likes_approx INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS analytics_bridge_links(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, url TEXT NOT NULL, captured_at TEXT NOT NULL DEFAULT (datetime('now')), PRIMARY KEY(profile_id,url));")?;
     Ok(())
 }
 fn text_field(map: &HashMap<String, String>, key: &str) -> String {
@@ -662,10 +664,51 @@ async fn local_only(
         .strip_prefix("127.0.0.1:")
         .or_else(|| host.strip_prefix("localhost:"))
         .is_some_and(|port| port.parse::<u16>().is_ok());
-    if !loopback_host || origin.is_some_and(|o| o != format!("http://{host}")) {
+    let path = request.uri().path();
+    let extension_origin = origin.filter(|o| {
+        o.starts_with("chrome-extension://")
+            && o.len() == "chrome-extension://".len() + 32
+            && o["chrome-extension://".len()..]
+                .chars()
+                .all(|c| ('a'..='p').contains(&c))
+    });
+    let bridge_path = matches!(
+        path,
+        "/api/bridge/poll" | "/api/bridge/result" | "/api/bridge/check"
+    );
+    if !loopback_host
+        || origin.is_some_and(|o| {
+            o != format!("http://{host}") && !(bridge_path && extension_origin.is_some())
+        })
+    {
         return (StatusCode::FORBIDDEN, "Local access only").into_response();
     }
-    next.run(request).await
+    let ext = extension_origin.map(str::to_owned);
+    if request.method() == axum::http::Method::OPTIONS && bridge_path && ext.is_some() {
+        let mut response = StatusCode::NO_CONTENT.into_response();
+        let headers = response.headers_mut();
+        headers.insert(
+            axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+            ext.unwrap().parse().unwrap(),
+        );
+        headers.insert(
+            axum::http::header::ACCESS_CONTROL_ALLOW_METHODS,
+            "GET, POST, OPTIONS".parse().unwrap(),
+        );
+        headers.insert(
+            axum::http::header::ACCESS_CONTROL_ALLOW_HEADERS,
+            "content-type, x-lifeinvader-token".parse().unwrap(),
+        );
+        return response;
+    }
+    let mut response = next.run(request).await;
+    if let Some(o) = ext {
+        response.headers_mut().insert(
+            axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+            o.parse().unwrap(),
+        );
+    }
+    response
 }
 async fn update(
     State(app): State<App>,
@@ -705,6 +748,9 @@ async fn update(
             StatusCode::CONFLICT,
             "This item is unavailable or claimed by someone else. Refresh the library.".into(),
         ));
+    }
+    if u.action == "posted" {
+        db.execute("UPDATE analytics_bridge SET next_run=unixepoch() WHERE profile_id=? AND enabled=1 AND after_post=1",[profile_id]).map_err(internal)?;
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -868,6 +914,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/categories/members", post(categories::set_members))
         .route("/api/profiles/{id}", post(edit_profile))
         .route("/api/profiles/{id}/photo", post(upload_avatar))
+        .route(
+            "/api/profiles/{id}/analytics-bridge",
+            get(bridge::config).post(bridge::save_config),
+        )
+        .route(
+            "/api/profiles/{id}/analytics-bridge/refresh",
+            post(bridge::refresh),
+        )
+        .route("/api/bridge/pair", get(bridge::pair).delete(bridge::reset))
+        .route("/api/bridge/poll", get(bridge::poll))
+        .route("/api/bridge/check", get(bridge::check))
+        .route("/api/bridge/result", post(bridge::result))
         .route(
             "/api/profiles/{id}/schedule",
             post(scheduler::save_profile_schedule),
