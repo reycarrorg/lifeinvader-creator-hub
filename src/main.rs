@@ -30,10 +30,21 @@ mod queue;
 mod scheduler;
 mod source;
 mod tools;
+mod controller;
+mod controller_store;
+mod controller_ops;
+mod controller_worker;
+mod controller_registry;
+mod controller_source;
+mod controller_proof;
+mod controller_receipt;
+
 
 type Db = Arc<Mutex<Connection>>;
 #[derive(Clone)]
 struct App {
+    controller_ops: Arc<dyn controller_ops::StatusReader>,
+    controller_worker: Arc<dyn controller_worker::Reader>,
     db: Db,
     media: PathBuf,
     log_dir: PathBuf,
@@ -982,10 +993,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .join("sync-logs");
     let db = Connection::open(db_path)?;
     init(&db)?;
+    controller_store::init(&db).map_err(|e|std::io::Error::other(e.0))?;
+    let mut db=db;
+    controller_store::recover(&mut db,chrono::Utc::now().timestamp()).map_err(|e|std::io::Error::other(e.0))?;
     db.execute("UPDATE source_date_audits SET state='interrupted',finished=datetime('now'),message='The app closed before the audit finished.' WHERE state='running'",[])?;
     db.execute("UPDATE source_sync_runs SET state='interrupted', finished=datetime('now') WHERE state='running'",[])?;
     db.execute("UPDATE source_queue SET state='interrupted',message='App closed before queued sync finished' WHERE state IN ('pending','starting','running')",[])?;
     let app = App {
+        controller_ops: Arc::new(controller_ops::Unavailable),
+        controller_worker: Arc::new(controller_worker::Unavailable),
         db: Arc::new(Mutex::new(db)),
         media: media.clone(),
         log_dir,
@@ -997,7 +1013,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .route("/", get(index))
         .route("/style.css", get(css))
         .route("/app.js", get(js))
-        .merge(transitional_controller_routes())
+        .merge(controller::routes())
         .route("/previews.js", get(previews_js))
         .route("/library.js", get(library_js))
         .route("/chart.js", get(chart_js))
@@ -1155,64 +1171,3 @@ mod tests {
         assert!(db.execute("INSERT INTO items(platform,account,post_id,source_url,posted,caption) VALUES('tiktok','b','001234567890123456789','','','')",[]).is_err());
     }
 }
-
-// Temporary, state-free Stage 2 publication surface. Removed by final main.rs.
-fn transitional_controller_routes<S: Clone + Send + Sync + 'static>() -> Router<S> {
-    Router::new()
-        .route("/controller", get(|| async {
-            (StatusCode::SERVICE_UNAVAILABLE,
-             [(axum::http::header::CACHE_CONTROL, "no-store")],
-             Html("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Controller unavailable</title><h1>Controller unavailable</h1><p>Controller integration is not active yet. Return after the update is complete.</p><a href=\"/\">Return to workspace</a></html>"))
-        }))
-        .route("/controller.js", get(|| async {
-            ([(axum::http::header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
-              (axum::http::header::CACHE_CONTROL, "no-store")],
-             "/* Controller integration is not active yet. */\n")
-        }))
-}
-
-#[cfg(test)]
-mod transition_surface_tests {
-    use super::*;
-    use axum::{body::{Body, to_bytes}, http::Request};
-    use tower::ServiceExt;
-    async fn request(method: &str, path: &str) -> axum::response::Response {
-        transitional_controller_routes::<()>().oneshot(
-            Request::builder().method(method).uri(path).body(Body::empty()).unwrap()
-        ).await.unwrap()
-    }
-    #[tokio::test]
-    async fn unavailable_page_and_inert_script() {
-        for path in ["/controller", "/controller.js"] {
-            let r=request("GET",path).await;
-            assert_eq!(r.headers()["cache-control"],"no-store");
-            assert_eq!(r.status(),if path=="/controller" {StatusCode::SERVICE_UNAVAILABLE} else {StatusCode::OK});
-            let body=to_bytes(r.into_body(),4096).await.unwrap();
-            let text=std::str::from_utf8(&body).unwrap();
-            if path=="/controller" {
-                assert!(text.contains("Controller unavailable"));
-                for absent in ["<script", "<form", "<button", "/api/"] {assert!(!text.contains(absent));}
-            } else {assert_eq!(text,"/* Controller integration is not active yet. */\n");}
-            let head=request("HEAD",path).await;
-            assert_eq!(head.headers()["cache-control"],"no-store");
-            assert!(to_bytes(head.into_body(),4096).await.unwrap().is_empty());
-        }
-    }
-    #[tokio::test]
-    async fn placeholder_rejects_all_write_methods() {
-        for path in ["/controller", "/controller.js"] {
-            for method in ["POST","PUT","PATCH","DELETE"] {
-                assert_eq!(request(method,path).await.status(),StatusCode::METHOD_NOT_ALLOWED);
-            }
-        }
-    }
-    #[tokio::test]
-    async fn controller_api_is_absent() {
-        for path in ["/api/controller","/api/controller/settings","/api/controller/jobs","/api/controller/jobs/inert","/api/controller/jobs/inert/review","/api/controller/jobs/inert/preview","/api/controller/jobs/inert/worker-evidence","/api/controller/quota"] {
-            for method in ["GET","HEAD","POST","PUT","PATCH","DELETE"] {
-                assert_eq!(request(method,path).await.status(),StatusCode::NOT_FOUND);
-            }
-        }
-    }
-}
-
