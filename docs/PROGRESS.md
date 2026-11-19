@@ -2,6 +2,8 @@
 
 ## 2026-11-18 — Source status, categories and quick edits
 
+Review: https://github.com/reycarrorg/lifeinvader-creator-hub/pull/11 (stacked on the account context-menu branch).
+
 The owner requested private visibility. The shared repository was made private again and antisolvent retained write access, verified through GitHub.
 
 - Added source 24-hour tracked download counts, explicit dead/active state, status labels and colors, and server-enforced Sync all eligibility. Existing auto-sync timers are preserved; marking dead pauses automatic work and cancels pending jobs.
