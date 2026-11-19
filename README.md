@@ -4,7 +4,7 @@ A local desktop-style content hub built with Rust, SQLite, and a browser interfa
 
 ## What works
 
-- Separate profile and source views, categories, and category dashboards. Paste a supported account link to fill its name and platform; photos and categories can be set under More options.
+- Profile and source views each include their own categories and category dashboards. Paste a supported account link to fill its name and platform; photos and categories can be set under More options.
 - Profile analytics for manual snapshots, template CSV imports and optional Brave-based refresh of visible TikTok/Instagram profile counts, with offline charts. Private platform Insights are not connected. See [analytics research and roadmap](docs/ANALYTICS_RESEARCH.md).
 - Source sync with a shared download archive, per-source Sync all exclusions, optional scheduled sync while the app is open, progress logs, local video previews, and a separate date audit.
 - Paste individual TikTok, Instagram, or YouTube post links under **Sources → Post links** to download into a separate, non-syncing Solo Posts collection. It uses the source folder and a separate archive like the existing solo-post script; original account details are shown when metadata supplies them.
@@ -37,7 +37,7 @@ Copy-Item target\release\lifeinvader_hub.exe .\Lifeinvader.exe
 .\Lifeinvader.exe
 ```
 
-Replace `YOUR-USERNAME` with the owner of your fork, or with `reycarrorg` to clone the shared repository directly. GitHub authentication is required for a private repository.
+Replace `YOUR-USERNAME` with the owner of your fork, or with `reycarrorg` to clone the shared repository directly. The shared repository is public; GitHub authentication is needed to push your own changes.
 
 The app opens its own Edge window at `127.0.0.1:3847`. Closing that window ends the local service after any running sync finishes. You can also start a development server with `cargo run -- --server-only` and open the local address in a browser.
 
