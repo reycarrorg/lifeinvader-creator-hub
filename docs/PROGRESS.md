@@ -2,6 +2,8 @@
 
 ## 2026-11-19 — Automatic queue and assistant handoff
 
+Review: https://github.com/reycarrorg/lifeinvader-creator-hub/pull/15.
+
 - Added opt-in profile rules that save picker filters, queue limit, interval and assistant instructions in SQLite. A worker adds at most one random matching local item per interval while the Hub is open. The profile tile shows a separate countdown. Missed intervals do not produce a backlog, and the queue limit includes posts awaiting review.
 - Added per-item readiness, profile guidance, a structured result input and durable claims to the handoff. A claim blocks another compliant worker from claiming the item; an interrupted claim persists across restarts and can be released only for human review. Unscheduled and due items are eligible by default; future, claimed, missing-file and review-needed items are not.
 - Isolated tests exercise filters, scanned-duration identity, limits, duplicate exclusion, due scheduling, result conflicts, claims, interruption recovery and persistence. Browser testing covered rule setup, saved guidance, countdown and claimed-post display. The release started against a disposable copy of an existing database and loaded its handoff without enabling rules. No social post or live source sync was performed. The owner will choose the assistant schedule later; the actual scheduled assistant, browser permissions and real-platform upload remain unverified.
