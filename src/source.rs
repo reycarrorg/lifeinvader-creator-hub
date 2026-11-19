@@ -64,6 +64,30 @@ pub struct SyncInput {
     pub(crate) include_photos: bool,
 }
 
+#[derive(Deserialize)]
+pub struct DurationEntry {
+    root: String,
+    profile_id: i64,
+    path: String,
+    size: u64,
+    modified: u64,
+    seconds: f64,
+}
+#[derive(Deserialize)]
+pub struct DurationInput { entries: Vec<DurationEntry> }
+pub async fn save_durations(State(app): State<App>, Json(input): Json<DurationInput>) -> ApiResult<Json<serde_json::Value>> {
+    if input.entries.len() > 10_000 { return Err(bad("Too many scanned lengths.")); }
+    let mut db=app.db.lock().map_err(internal)?;
+    let root=config(&db).map_err(internal)?.root;
+    let sources:std::collections::HashSet<i64>={let mut s=db.prepare("SELECT id FROM profiles WHERE role='source' AND archived=0").map_err(internal)?;let rows=s.query_map([],|r|r.get(0)).map_err(internal)?.collect::<Result<_,_>>().map_err(internal)?;rows};
+    let tx=db.transaction().map_err(internal)?;let mut stored=0;
+    for e in input.entries {
+        if e.root!=root || root.is_empty() || !sources.contains(&e.profile_id) || e.path.is_empty() || e.path.len()>4096 || e.size>i64::MAX as u64 || e.modified>i64::MAX as u64 || !e.seconds.is_finite() || !(0.0..=604800.0).contains(&e.seconds) { continue; }
+        tx.execute("INSERT INTO source_duration_cache(profile_id,root,path,file_size,file_modified,seconds) VALUES(?,?,?,?,?,?) ON CONFLICT(profile_id,root,path) DO UPDATE SET file_size=excluded.file_size,file_modified=excluded.file_modified,seconds=excluded.seconds",params![e.profile_id,root,e.path,e.size as i64,e.modified as i64,e.seconds]).map_err(internal)?;stored+=1;
+    }
+    tx.commit().map_err(internal)?;Ok(Json(serde_json::json!({"stored":stored})))
+}
+
 fn setting(db: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
     db.query_row("SELECT value FROM settings WHERE key=?", [key], |r| {
         r.get(0)
@@ -646,6 +670,8 @@ fn overview_for(app: App, id: i64, role: &str) -> ApiResult<Json<serde_json::Val
     let db = app.db.lock().map_err(internal)?;
     if role == "source" {
         crate::date_audit::enrich(&db, id, &root, &platform, &mut files).map_err(internal)?;
+        let mut lengths=db.prepare("SELECT seconds FROM source_duration_cache WHERE profile_id=? AND root=? AND path=? AND file_size=? AND file_modified=?").map_err(internal)?;
+        for f in &mut files { if f.kind=="video" && f.duration_seconds.is_none() && f.size<=i64::MAX as u64 && f.modified<=i64::MAX as u64 { f.duration_seconds=lengths.query_row(params![id,cfg.root,f.path,f.size as i64,f.modified as i64],|r|r.get(0)).optional().map_err(internal)?; } }
     }
     let mut stmt = db
         .prepare(

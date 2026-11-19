@@ -24,7 +24,9 @@ TikTok account-ID recovery requires a valid post belonging to the profile and ca
 
 Related work: [PR #7](https://github.com/reycarrorg/lifeinvader-creator-hub/pull/7).
 
-The queue exposes a local JSON handoff and durable activity notes. Scheduled times do not start an action, and `posted` remains a manual report rather than independent platform verification. Revision checks reject stale updates when used, but do not lock uploads; concurrent operators can still post duplicates. Add leases, provider reconciliation, durable retries, timezone-aware scheduling and end-to-end tests before unattended publishing. Older items may lack activity history from before logging was added.
+The queue exposes a local JSON handoff, durable activity notes and persistent per-item claims. An interrupted claim does not expire; a person must verify the platform and release it for review. Claims coordinate clients that use the contract but cannot prevent manual or external uploads. Scheduled times do not start publication, and `posted` remains an operator report rather than independent platform verification. The scheduled assistant, browser access, provider reconciliation, confirmation flow and real uploads have not been tested end to end. Older items may lack activity history from before logging was added.
+
+Automatic selection runs only while the Hub is open. Scanned durations are matched to the source root, path, file size and modified time; moved or changed files need to be scanned again. Videos without a known duration are excluded when a length filter is active. Unknown original dates and missing metadata still limit selection.
 
 This file tracks durable context in Git. Add reproduction steps, evidence, status, and links to GitHub issues or pull requests when available. Do not add private credentials, cookies, account exports, or personal media.
 

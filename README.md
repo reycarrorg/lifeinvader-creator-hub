@@ -19,6 +19,8 @@ A local desktop-style content hub built with Rust, SQLite, and a browser interfa
 - A manual content library with per-profile claim and posting status.
 - A local all-profile AI handoff and activity history for the posting queue, with target account, source context, planned time, file references and manually recorded outcomes. Copy or download it from a profile's queue. It does not publish posts; see [computer-use handoff](docs/COMPUTER_USE_HANDOFF.md).
 - Pick downloaded source photos and videos using source/category, media type, available duration, original date, text and ordering controls; preview the result, see its original details, and queue file references for a profile to review and manually record status. Planned times do not automatically post. See [posting research and roadmap](docs/POSTING_RESEARCH.md). A reported post is a manual record; the app does not publish posts.
+- For a profile, choose **Pick / auto queue**, set filters and expand **Auto queue using these filters**. Enable it, choose an interval and a maximum number of queued posts, and save. While the Hub is open it adds one random matching local post per interval until the limit is reached; missed intervals do not create a backlog. A blue inner tile border shows the countdown. Length filters use saved metadata or scanned durations; videos with unknown lengths are skipped. The rule is off until enabled and does not publish.
+- Add profile-specific instructions for the posting assistant in the same panel. **Copy task prompt** prepares the instructions for a scheduler. The local handoff supplies a per-item claim and result contract to prevent a second compliant worker claiming an in-progress item. Interrupted claims remain held for human review. The Hub does not run the assistant or verify provider-side publication. See [computer-use handoff](docs/COMPUTER_USE_HANDOFF.md) and the [scheduled prompt](docs/SCHEDULED_POSTING_PROMPT.md).
 
 A fresh database starts without accounts or source folders. Add your own accounts and choose your own library folder in the app. Profiles and downloaded files are local to each installation; a GitHub fork does not share the app's database or media.
 
@@ -97,6 +99,7 @@ python tests/bridge_smoke.py
 python tests/bridge_sync_smoke.py
 node tests/bridge_collector_test.js
 python tests/queue_smoke.py
+python tests/auto_queue_handoff_smoke.py
 python tests/solo_picker_smoke.py
 python tests/handoff_smoke.py
 python tests/date_audit_smoke.py
