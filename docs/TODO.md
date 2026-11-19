@@ -91,3 +91,123 @@ Detailed references: [collaboration](COLLABORATION.md), [known issues](ISSUES.md
 
 ## Adapted Stage 2 Controller integration
 Controller/review state, read-only worker evidence, and owner-authorized registry are available as isolated app functionality. Live worker/owner/OPS/publishing adapters default unavailable. Stage 1 runtime/transport/routes excluded. See STAGE2_INTEGRATION.md for dependency extraction, validation and limitations.
+
+- [ ] Qualify the main-app saved-video preview with actual playback/captions and ordinary close/reopen of the same bytes; do not rerender. See SAVED_PREVIEW.md.
+
+- [ ] Complete the normal standalone worker dispatch and receipt-to-Controller bridge after dry-run review; preparation currently does not render.
+
+- 2026-11-19: Complete new synthetic speech source and independently reviewed intake/cut/rubric before enabling one CPU-int8 ASR + NVENC smoke; no original clip reuse.
+
+- 2026-11-19: New ignored synthetic source created via installed SAPI and CPU fixture FFmpeg only; source 1e9ef1f7...02b16b0, proposed cut 2770-42430ms. Independent rubric/visual review remains HOLD (static abstract visuals do not demonstrate spoken movement). No intake/review approval, queue or target render.
+
+- 2026-11-19: Separate ignored V2 synthetic source adds observed movement/shot/exit payoff; SHA d47f1620...0652bef. Cut bounds pure check passed 2770-42430ms. Review remains independent; seven labels have no descriptive anchors locally and verifier minimum is 5/7, not authority to lower user threshold. No target worker/render.
+
+- 2026-11-19: Independent review must establish safe actual GPU UUID/telemetry before any fresh separately admitted smoke; preserve held attempt permanently. Native query execution remains unqualified.
+
+- 2026-11-19: Before HTTP render integration: durable exact Controller admission/worker mapping and independently pinned runtime/helper, supervised outside request; retain fail-closed restart.
+
+- 2026-11-19: Implement independent operator Authority/runtime verification and outside-request one-shot worker supervision bound to controller_admissions; keep HTTP real render disabled until qualified.
+
+- 2026-11-19: Implement qualified cooperative Python cancellation/descendant containment and module/config identity manifest before installing native Launcher; fresh E2E plan is disabled.
+
+- 2026-11-19: Bind full production worker/module/config/dependency inventory and cooperative bootstrap to the qualified process primitive before installing real Launcher; keep renderer disabled.
+
+- 2026-11-19: Instrument/localize native diagnostic phase/PID/exit and qualify imports/STOP; propagate manifest policy to ASR child before fresh smoke. Do not extend deadline or assume pass.
+
+- 2026-11-19: Localize dependency/native import within faster_whisper using bounded stack/subphase evidence; qualify DLL loading and ASR child. No timeout inflation or verification removal.
+
+- 2026-11-19: Before fresh approved synthetic smoke, qualify closed native DLL loader identities and actual ASR child using retained manifest leases/pinned venv; then independent fixture review and Naga launch preflight. Import stall resolved; no real dispatch enabled.
+
+- 2026-11-19: Integrate observed DLL policy into real ASR path before fresh fixture/smoke; preserve parent leases and fail-closed unknown load. No inference/lazy-load qualification or real render claimed by no-media model diagnostic.
+
+- 2026-11-19: Resolve local SAPI voice enumeration or obtain reviewed generated audio; qualify one bounded CPU inference with new DLL controls, then complete fresh hardware source/cut review and launch preflight. No new queue/render enabled.
+
+- 2026-11-19: Resolve tone inference HOLD with fixed phase/error diagnostics under separate scope; no claim decoder exercised. Bind production Launcher/reviewed-job bootstrap only after this qualification. Spoken hardware fixture still independently unavailable.
+
+- 2026-11-19: Complete strict reviewed-job Python bootstrap adapter for new native Launcher; preserve disabled startup. Qualify corrected diagnostic PCM inference under subsequent scope. Fresh spoken fixture and independent review remain required; OPS publishers separate.
+
+- 2026-11-19: APP review exact fresh flite source/cut entryc5832d9d...; then assemble immutable changed runtime/job config and isolated Controller preflight. No hardware until independent approval and unchanged GPU guards.
+
+- 2026-11-19: Before final launch approval, implement concrete explicit isolated manual entry and independently bound Authority/RuntimeAuthority; rebuild and repin. APP review/config/job/GPU identity fields pending; no automatic/startup route.
+
+- 2026-11-19: Provision final isolated source/queued Controller job/request/config+GPU UUID/expiry and get Naga plan/new-app launch binding before single hardware attempt. Run actual shutdown/restart/GET reuse acceptance; installer compiler and packaging qualification remain pending.
+
+- 2026-11-19: Await exact a7428a46...48126e launch go-ahead and Naga planSHA dbac1cc5...d96f92 review before21:12:20Z. One render then same-plan normal-window restart/GET reopen; no repeat render. Installer compiler absent; NSIS draft uncompiled.
+
+- 2026-11-19: Separately dispatch bounded same-build startup capture with retained parent session and exit status before any fresh render authorization/plan. If needed review unapplied two-site UI lifetime diagnostics; no rebuild yet. Installer DNS issue independent.
+
+- 2026-11-19: Obtain separate startup-only dispatch; capture app exit with launching shell retained, no render. Then independently review a new exact expiry/digest chain before hardware. Resolve official compiler retrieval and installed-path runtime qualification before claiming unified installer.
+
+- 2026-11-19: Review normal Edge-child lifetime/startup evidence before another run; proposed fixed diagnostic patch remains unapplied. No retry/render ticket renewal inferred from startup-only authorization.
+
+- 2026-11-19: Review/authorize new0ccf3820...cd7b0b startup-only candidate once, then real render packet renewal separately. Verify explicit UI close and zero owned descendants. Qualify relocation plan under fresh absolute pins before installer claim.
+
+- 2026-11-19: Naga to relay one combined startup/render/close/read-only-reopen ask and independently bind packet57e40ad...a279a before expiry; no separate startup/render approval churn. Installer needs license obligations, relocated runtime qualification and official compiler retrieval.
+
+- 2026-11-19: Independently bind fresh05 server-only packet before single combined render/reopen qualification. Stop Edge retries; normal Brave navigation via supported CUA only. Desktop shell and installer remain separate work.
+
+- 2026-11-19: Root to resolve supported permitted loopback execution context through platform policy before any further app launch. Do not retry TCP/Brave/Edge or change network/security. Preserve failing targeted test and historical05 evidence; visible playback separate.
+
+- 2026-11-19: Root may dispatch exact one-command loopback approval request per docs/LOOPBACK_APPROVAL_OPTION.md; stop on denial. No global access/network/Windows changes. Native shell design and packaging still require implementation/qualification.
+
+- 2026-11-19: Root to separately scope any real app execution through supported approval flow and fresh plan; successful inert loopback probe is not render authorization or expired-ticket renewal.
+
+- 2026-11-19: Root review/dispatch fresh06 via official command approval while unexpired; no silentrenewal. WebView2 SDK/bindings procurement and actual shell compile separate from current app qualification. Private runtime staging must remain disabled until relocation/license proof.
+
+- 2026-11-19: If root dispatches read-onlyGPUdiagnostic separately, qualify exactinstalledNVMLABI/identity and onebounded targetUUID snapshot; unsupported/unknown remainsHOLD. No retries/processchanges or session-only admission policy inferred.
+
+- 2026-11-19: Review docs/WDDM_QUALIFICATION_PROPOSAL.md: choose strict zero-row requirement versus separately authorized read-only telemetry qualification; no render permission implied. Resolve packaging/PREREQUISITE-REVIEW.md license/SDK/relocated-runtime gates before installer.
+
+- 2026-11-19: Nine offline WDDM qualification cases PASS; no GPU query/policy change. Relocated Python -I -S -B stdlib startup PASS with payload-confined prefix/import paths. ONNX Runtime LICENSE/ThirdPartyNotices collected create-only in runtime-license-inventory-02; three notice sets still missing. Source-only WebView2 window seam added, NOT compiled: official SDK bytes/license/checksum absent; no restore/install. Third-party relocated imports/DLLs remain unqualified.
+
+- 2026-11-19: Authorized encoder policy implemented (UUID, fresh <=10%, zero NVML count/session count, agreement, no WDDM residency gate). Five policy and four queue/race tests pass; headless configuration Rust test passes and new candidate built (955b9a01...487387), not executed. Explicit --headless-review requires pinned plan/server-only, suppresses scheduler and uses Controller-only routes. Fresh07 staged pending exact new EXE approval; no GPU query/render. See docs/HEADLESS_REVIEW_07.md. Prior GPU diagnostic proposal is superseded only by explicit operator policy, not automatic admission.
+
+- 2026-11-19: Final-folder portability acceptance now requires original checkout/venv/model/PATH fallback excluded from resolution, consumed import/DLL/model/tool paths verified, and missing copied dependencies HOLD. Recreate a venv at final path from pinned cached official wheels only if needed and complete; no reprovisioning/test performed for this refinement. See packaging/PREREQUISITE-REVIEW.md.
+
+- 2026-11-19: Fresh08 exact readonly predicate trace proves source_unavailable at shared account-profile host validation: platform youtube with lifeinvader.local URL. Prior DB/config/workspace/worker pins pass. Correct next synthetic fixture metadata/source binding only; original guards unchanged. Focused metadata correction test and durable prelaunch diagnostic test PASS, two sanitized HTTP error tests PASS. New diagnostic app compiled 938dc803...7101f4; not launched. Fresh08 held evidence untouched; no ticket renewal or worker/GPU retry.
+
+- 2026-11-19: Truthful local synthetic scheme implemented in Controller resolver; remote account/download path still rejects it, source custody and synthetic provider/ID guards retained. Old YouTube-shaped fixture label superseded. Exact Fresh09 readonly source/config/pin trace PASS with zero DB mutations/dispatch. New unsigned ca0b21f...ab16e7 compiled; packet431fe2...7861c pending new exact approval, expiry22:34:37Z. No GPU/app run. Static payload02 package-path resolution passed, not full relocation execution proof.
+
+- 2026-11-19: One scoped vendor environment A/B proved minimal worker environment reproduces NVML_UNKNOWN_ERROR exit255/hashdc7f...; inherited control succeeds exit0 with same x64 pinned tool/cwd/approval context. Specific required variable not isolated; no production environment/guard change or Fresh09 retry. Three new final-folder resolver synthetic tests pass (reject original same-byte fallback, relative paths, missing/changed files). Full relocated runtime still unqualified.
+
+## Vendor environment qualification remaining
+- Diagnose the single source-only matrix helper exit1 using fixed phase/error categories before any further invocation. Do not infer a WINDIR/PATH fix from this failed experiment.
+- Actual Rust gated_manifest bootstrap needs a reviewed vendor-only diagnostic entry to qualify any minimal candidate without invoking imports/model/job dispatch. No new executable was compiled or launched for the matrix; production guard and env unchanged.
+
+## Next vendor-only qualification (not render)
+Use existing Rust instrumented_bootstrap_once with fresh root and fresh manifest containing current native_bootstrap.py and vendor_diagnostic.py plus already-pinned runtime files. Set diagnostic-vendor mode, vendor_cases allowlist, wait_cancel=false, output exact fresh root/vendor-result.json. This bypasses neither leases nor DLL/import guard. No request/producer config is accepted. Scope one reviewed contained vendor-only command; do not reuse held matrix/Fresh09 or silently repin any live job. No production environment fix until real containment result. Historical matrix source has deterministic uppercase-dict bug; preserve it as evidence.
+Packaging final bindings now static-verified; relocated full runtime/DLL use and missing license texts remain open, not a portable/redistributable release claim.
+
+## Vendor environment candidates exhausted for this scoped test
+Contained diagnostic proves WINDIR and/or fixed System32 PATH do not resolve NVML_UNKNOWN_ERROR. Do not apply either as a production fix or repeat matrix. Exact missing environment dependency remains unknown despite prior inherited-control success. Next investigation requires evidence-driven different OS/driver requirement, scoped separately; guard stays fail-closed and render blocked.
+
+## Next scoped work
+Review docs/VENDOR_OS_DIRECTORY_PLAN.md before any new vendor call. No WINDIR/PATH repetition. Packaging requires one justified origin capture before full runtime qualification; first03 evidence remains intact. No production/render authority implied by either task.
+
+## Next exact qualification
+1. ProgramFiles/ProgramW6432 category now causally implicated. Qualify the pair alone and individual keys only in separately scoped contained vendor-only test after addressing immediate Job-exit accounting; no guessing other env keys/full inheritance. No production env patch yet.
+2. Stage1 real rendering remains blocked; all held jobs unchanged.
+3. Replace package target with official Python3.12.10 embeddable runtime/relative _pth and pinned offline --target wheels. Existing system-image policy can admit only exact reviewed OS image pins, including known signed WinSxS COMCTL32; full new-folder qualification still required. No current release/portable-pass claim.
+
+## Fresh10 ready for exact root/user approval
+See HEADLESS_PROGRAMFILES_REVIEW_10.md; new unsigned build/packet, no implicit authority. Combined single render+close/read-only reopen only if unexpired and every live gate passes. Do not reuse any held job.
+Final embedded review folder blocked on24 exact wheel artifacts (normal pip cache absent); official runtime saved/verified but unexecuted. Do not substitute copied installed site-packages/venv as completed offline wheel provisioning. Exact COMCTL pin policy available; remaining full final-folder DLL/import/OAuth exclusion and render/reopen qualifications pending.
+
+## Fresh10 held; next preparation requirement
+Do not reuse Fresh10 or extend its ticket. Source-only seed-row correction ready. Need independently scoped fresh fixture using same approved binary, exactstartup validation including both versionrows, then new pendingapproval packet as directed by root. No retry on this turn. Finish pinned offline wheelhouse acquisition separately.
+
+Pinned wheelhouse blocker cleared:24 exact wheel artifacts now local+hashverified. Next packaging step is offline --target into final embedded folder and re-pin manifest, followed by scoped final-folder/OAuth-disabled verification. No current portable-pass claim.
+
+## Held Fresh11 / next gate
+Stop current attempt; appclosedcleanly, onebootstrap/noqueue/render. Before requesting another plan, verify entire reviewed-job input closure and real adapter predicates with no dispatcher, not only Rust admission checks. Preserve Fresh10/11. Packaging can continue independently from embedded offline target; qualify zip-stdlib policy, finalpaths, exactWindowsimagepins, OAuthdisabled and licenses before delivery. No commit/push untilPhase1proven.
+
+Preworkerchain12 proof now complete withoutdispatch (docs/PREWORKER_CHAIN_12.md). Next hardwareonlyafterfreshrootpacket/expiry+independentupdatedruntimepinreview; samecdc8ea appcanbereused. Fresh11andallheldinputsuntouched. Embeddednativeimageidentity and actualbootstrapZIPloaderqualification required; no broadtrust/fallback. NoPhase2/OAuth/livepublishing.
+
+## Current priority after Fresh13 success (supersedes earlier pending-run entries)
+No further render needed for this single headless test. Finish exact embedded Windows-image pin review, ZIP-stdlib bootstrap lease policy, final-folder runtime/app qualification and licenses before portable review delivery. Preserve Fresh13 proof and all held attempts. Then source-only adapted commit/push/PR preparation; no main merge/push. Visual playback/caption quality remains unobserved for this artifact.
+
+Embedded package next gate: exact clbcatq host pin review and complete inventory via one bounded capture; no signature/directory-only trust. Then final-folder production bootstrap/ASR/tool consumption and app startup/close. See EMBEDDED_PACKAGE_QUALIFICATION.md. No source commit/push until required Phase1 package qualification; no rerender Fresh13.
+
+Package09: embedded bootstrap andCPUmodel/native inventory now PASS (no inference/GPU). Await exact new unsigned269209...bc9ffa startup/close approval and scoped test, then final source-only diff/staging/PR. See PACKAGE_09_HANDOFF.md. Do not repeat Fresh13 or claim whole-binary Metricool absence/license closure.
+
+Package09 actual startup/close now PASS: PID30676 exit0/zeroowneddescendants/zerojobs at23:38:12Z. No further launch/render needed. Complete source-only commit and adapted push/PR, no main merge. Local folder only; static FFmpeg corresponding-source closure and visual observation limitations remain explicit.

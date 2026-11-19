@@ -33,6 +33,7 @@ fn valid(r:&Review,now:i64)->bool {
     && !r.worker_root_identity.is_empty() && r.worker_root_identity.len()<=1024
     && r.binding.selection.generation>0 && !r.binding.selection.source_revision.is_empty()
     && r.binding.selection.start_ms<r.binding.selection.end_ms
+    && crate::controller_proof::canonical_recipe_base(&r.binding.selection.recipe_version)
     && Hash256::parse(&r.receipt_sha256).is_some() && Hash256::parse(&r.artifact_sha256).is_some()
     && (1..=16*1024*1024).contains(&r.artifact_bytes)
 }

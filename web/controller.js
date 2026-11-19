@@ -1,7 +1,7 @@
 /* Controller UI. Preview GET is intentionally independent from every mutation. */
 window.LVController = Object.freeze({attach(article,sourceId,file){
   if(file.kind!=='video')return;
-  const a=document.createElement('a');a.className='button outline';a.textContent='Controller review';
+  const a=document.createElement('a');a.className='button outline';a.textContent='Make a clip';
   const query=new URLSearchParams({source_id:String(sourceId),path:file.path});
   a.href='/controller?'+query;a.title='Open controller with this original video';
   article.querySelector('.source-file-info').lastElementChild?.append(a);
@@ -9,7 +9,7 @@ window.LVController = Object.freeze({attach(article,sourceId,file){
 (() => {
   if(!document.getElementById('controller-page'))return;
   const $=id=>document.getElementById(id);let snapshot,loading=false,mutating=false,previewRequest,objectUrl,previewTurn=0;
-  const reasons={stale_revision:'This item changed. Refresh and review its current state.',controller_paused:'The controller is paused.',interrupted_processing:'Processing was interrupted. The worker must reconcile it before retry.',review_rejected:'Review rejected. Resume creates a fresh attempt requiring new review.',reconciliation_required:'This job needs reconciliation before it can safely resume.',source_unavailable:'The original source is unavailable or its identity changed.',solo_provenance_unverified:'The exact original Solo post has not been independently verified.',original_source_required:'Choose the original video rather than an edited copy.',already_queued:'This video is already in the controller for this platform.',preview_unavailable:'No verified preview is available yet.',preview_integrity_failed:'Preview verification failed. This item stays on hold.',worker_failed:'The worker reported a failure.',same_origin_required:'Open this controller from its local app address.'};
+  const reasons={stale_revision:'This item changed. Refresh and review its current state.',controller_paused:'The controller is paused.',interrupted_processing:'Processing was interrupted. The worker must reconcile it before retry.',review_rejected:'Review rejected. Resume creates a fresh attempt requiring new review.',reconciliation_required:'This job needs reconciliation before it can safely resume.',source_unavailable:'The original source is unavailable or its identity changed.',solo_provenance_unverified:'The exact original Solo post has not been independently verified.',original_source_required:'Choose the original video rather than an edited copy.',already_queued:'This video is already in the controller for this platform.',preview_unavailable:'No verified preview is available yet.',preview_integrity_failed:'Preview verification failed. This item stays on hold.',worker_failed:'The worker reported a failure.',same_origin_required:'Open this controller from its local app address.',native_manual_unavailable:'Rendering is not configured for this app session.',reviewed_job_mismatch:'This clip does not match the reviewed selection.',native_attempt_already_consumed:'This reviewed render has already been admitted. Check its current result; do not retry.'};
   function explain(code){return reasons[code]||'The action could not be completed. Refresh to check the current state.';}
   function notice(message){$('notice').textContent=message;}
   async function api(path,body){
@@ -44,6 +44,9 @@ window.LVController = Object.freeze({attach(article,sourceId,file){
       if(j.state==='READY_FOR_REVIEW'&&j.review==='APPROVED')el.append(node('p','Approved for review. Posting still requires the publishing checks.','muted'));
       const buttons=node('div',undefined,'actions');const base='/api/controller/jobs/'+encodeURIComponent(j.id);
       const evidence=node('p','Worker evidence not checked.','muted');el.append(evidence);
+      if(j.state==='QUEUED'&&snapshot.manual_native_enabled)buttons.append(action('Render reviewed clip',()=>mutate(base+'/render-reviewed',{revision:j.revision}),!s.paused));
+      if(j.state==='QUEUED')buttons.append(action('Check clip preparation',async()=>{try{const v=await api(base+'/prepare',{revision:j.revision});evidence.textContent=v.state+' · Dry run only; no render started. Whisper installed: '+Boolean(v.faster_whisper_available)+'. GPU/model loading not yet verified.';}catch(e){evidence.textContent=e.message;}}));
+      if(j.state==='QUEUED')buttons.append(action('Import reviewed completion',()=>mutate(base+'/import-completed',{revision:j.revision})));
       buttons.append(action('Check worker evidence',async()=>{try{const v=await api(base+'/worker-evidence');evidence.textContent='Worker: '+v.state+' · '+v.reason+' (read-only; no approval or retry authority)';}catch(e){evidence.textContent='Worker evidence unavailable';}}));
       if(['READY_FOR_REVIEW','POSTED','BACKED_UP'].includes(j.state))buttons.append(action('Reopen preview',()=>openPreview(j)));
       if(j.state==='READY_FOR_REVIEW'&&j.review==='PENDING')for(const name of ['approve','reject'])buttons.append(action(name==='approve'?'Approve review':'Reject review',()=>mutate(base+'/review',{revision:j.revision,action:name})));
@@ -51,7 +54,25 @@ window.LVController = Object.freeze({attach(article,sourceId,file){
       el.append(buttons);return el;
     }));
   }
-  async function refresh(){if(loading)return;loading=true;try{snapshot=await api('/api/controller');render();}catch(e){notice(e.message);}finally{loading=false;}}
+  let uiTimer,uiClosing=false;
+  async function uiPulse(){
+    if(uiClosing||!snapshot?.isolated_ui_lifetime)return;
+    try{await api('/api/controller/ui-lifetime',{action:'ready'});}
+    catch(e){notice('Review UI connection lost. Rendering is held; close this window.');}
+  }
+  function enableUiLifetime(){
+    if(!snapshot.isolated_ui_lifetime||uiTimer)return;
+    const close=node('button','Close review app');close.type='button';
+    close.onclick=async()=>{
+      if(uiClosing)return;uiClosing=true;clearInterval(uiTimer);closePreview();
+      try{await api('/api/controller/ui-lifetime',{action:'close'});notice('Review app is shutting down. You can close this window.');document.querySelectorAll('button,input,select').forEach(e=>e.disabled=true);}
+      catch(e){notice('Shutdown could not be confirmed. Leave this window open and check the app status.');}
+    };
+    document.querySelector('.controls').append(close);
+    uiPulse();uiTimer=setInterval(uiPulse,5000);
+    window.addEventListener('pagehide',()=>clearInterval(uiTimer));
+  }
+  async function refresh(){if(loading)return;loading=true;try{snapshot=await api('/api/controller');render();enableUiLifetime();}catch(e){notice(e.message);}finally{loading=false;}}
   $('pause').onclick=()=>snapshot&&mutate('/api/controller/settings',{revision:snapshot.settings.revision,action:'pause'});
   $('resume').onclick=()=>snapshot&&mutate('/api/controller/settings',{revision:snapshot.settings.revision,action:'resume'});
   $('autopilot').onchange=()=>snapshot&&mutate('/api/controller/settings',{revision:snapshot.settings.revision,action:$('autopilot').checked?'autopilot_on':'autopilot_off'});

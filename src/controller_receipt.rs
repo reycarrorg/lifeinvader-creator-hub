@@ -73,7 +73,7 @@ pub fn read_native_receipt(
         || Hash256::parse(canonical_cut_key)!=Some(selection.durable_cut_key)
         || selection.start_ms>=selection.end_ms
         || selection.generation==0
-        || !identifier(&selection.recipe_version)
+        || !crate::controller_proof::canonical_recipe_base(&selection.recipe_version)
     {return Err(NativeHold::UnsafeInput);}
     connection.busy_timeout(Duration::from_millis(500)).map_err(unavailable)?;
     connection.execute_batch("PRAGMA query_only=ON;").map_err(unavailable)?;

@@ -34,7 +34,7 @@ pub fn init(db:&Connection)->Result<()> {
     let has_meta=db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='controller_meta')",[],|r|r.get::<_,bool>(0))?;
     if has_meta {
         let version=db.query_row("SELECT schema_version FROM controller_meta WHERE singleton=1",[],|r|r.get::<_,i64>(0))?;
-        return if version==1 {Ok(())} else {Err(Error("controller_schema_unknown"))};
+        return if version==1 {crate::controller_admission::init(db)} else {Err(Error("controller_schema_unknown"))};
     }
     if db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name GLOB 'controller_*')",[],|r|r.get::<_,bool>(0))?{return Err(Error("controller_schema_unknown"));}
     let tx=db.unchecked_transaction()?;
@@ -69,7 +69,7 @@ pub fn init(db:&Connection)->Result<()> {
        verified_at INTEGER NOT NULL, FOREIGN KEY(job_id) REFERENCES controller_jobs(id));")?;
     tx.execute_batch("CREATE TABLE controller_meta(singleton INTEGER PRIMARY KEY CHECK(singleton=1),schema_version INTEGER NOT NULL); INSERT INTO controller_meta VALUES(1,1);")?;
     tx.commit()?;
-    Ok(())
+    crate::controller_admission::init(db)
 }
 fn event(tx:&Transaction,id:Option<&str>,revision:i64,action:&str,state:&str,reason:&str,now:i64)->Result<()> {
     tx.execute("INSERT INTO controller_events(job_id,revision,action,state,reason,at) VALUES(?,?,?,?,?,?)",
@@ -92,6 +92,7 @@ pub fn configure(db:&mut Connection,revision:i64,action:&str,now:i64)->Result<Se
 }
 pub fn recover(db:&mut Connection,now:i64)->Result<()> {
     let tx=db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    tx.execute("UPDATE controller_admissions SET state='HELD' WHERE state='RESERVED'",[])?;
     let pending={let mut q=tx.prepare("SELECT id,revision FROM controller_jobs WHERE state='PROCESSING'")?;
         q.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?)))?.collect::<std::result::Result<Vec<_>,_>>()?};
     for (id,revision) in pending {

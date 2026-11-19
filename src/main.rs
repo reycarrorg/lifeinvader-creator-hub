@@ -38,11 +38,22 @@ mod controller_registry;
 mod controller_source;
 mod controller_proof;
 mod controller_receipt;
+mod saved_preview;
+mod controller_clip;
+mod controller_admission;
+mod controller_supervisor;
+mod controller_manual;
+mod controller_ui_lifetime;
+mod controller_headless;
+#[cfg(windows)] mod controller_native_process;
+#[cfg(windows)] mod controller_native_launcher;
 
 
 type Db = Arc<Mutex<Connection>>;
 #[derive(Clone)]
 struct App {
+    controller_ui: Arc<controller_ui_lifetime::Lifetime>,
+    controller_manual: Arc<dyn controller_manual::Manual>,
     controller_ops: Arc<dyn controller_ops::StatusReader>,
     controller_worker: Arc<dyn controller_worker::Reader>,
     db: Db,
@@ -914,6 +925,11 @@ fn show_error(message: &str) {
 
 #[cfg(windows)]
 fn launch_window() -> Result<std::process::Child, Box<dyn std::error::Error>> {
+    launch_window_at("http://127.0.0.1:3847/", "WindowProfile")
+}
+
+#[cfg(windows)]
+fn launch_window_at(url: &str, profile_leaf: &str) -> Result<std::process::Child, Box<dyn std::error::Error>> {
     let candidates = ["ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA"];
     let edge = candidates
         .iter()
@@ -926,9 +942,9 @@ fn launch_window() -> Result<std::process::Child, Box<dyn std::error::Error>> {
     let profile = PathBuf::from(
         std::env::var_os("LOCALAPPDATA").ok_or("Local app data folder was not found.")?,
     )
-    .join("LifeinvaderHub/WindowProfile");
+    .join("LifeinvaderHub").join(profile_leaf);
     Ok(std::process::Command::new(edge)
-        .arg("--app=http://127.0.0.1:3847/")
+        .arg(format!("--app={url}"))
         .arg(format!("--user-data-dir={}", profile.display()))
         .args([
             "--no-first-run",
@@ -955,6 +971,11 @@ async fn main() {
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args().any(|arg| arg == "--saved-preview") {
+        return saved_preview::run().await;
+    }
+    let package_root=controller_headless::package_root(&std::env::args().collect::<Vec<_>>()).map_err(std::io::Error::other)?;
+    let package_review=package_root.is_some();
     let server_only = std::env::args().any(|arg| arg == "--server-only");
     #[cfg(windows)]
     if !server_only {
@@ -963,7 +984,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             std::env::set_current_dir(parent)?;
         }
     }
-    let port = if server_only {
+    let isolated_requested=std::env::args().any(|arg|arg=="--isolated-review-plan");
+    let port = if server_only || isolated_requested {
         std::env::var("LIFEINVADER_PORT")
             .ok()
             .and_then(|p| p.parse::<u16>().ok())
@@ -973,11 +995,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     // Claim the local port before opening or migrating the database.
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
-    let db_path = PathBuf::from(
+    let mut db_path = PathBuf::from(
         std::env::var("LIFEINVADER_DB").unwrap_or_else(|_| "data/lifeinvader.sqlite3".into()),
     );
-    let media =
+    let mut media =
         PathBuf::from(std::env::var("LIFEINVADER_MEDIA").unwrap_or_else(|_| "media".into()));
+    if let Some(root)=&package_root {db_path=root.join("controller.sqlite");media=root.join("media");}
+    let controller_manual=controller_manual::provision(&std::env::args().collect::<Vec<_>>(),&db_path,&media).map_err(|e|std::io::Error::other(e.0))?;
+    let headless_review=controller_headless::enabled(&std::env::args().collect::<Vec<_>>(),controller_manual.configured()).map_err(std::io::Error::other)? || package_review;
     if let Some(p) = db_path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(p)?;
     }
@@ -1000,13 +1025,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     db.execute("UPDATE source_sync_runs SET state='interrupted', finished=datetime('now') WHERE state='running'",[])?;
     db.execute("UPDATE source_queue SET state='interrupted',message='App closed before queued sync finished' WHERE state IN ('pending','starting','running')",[])?;
     let app = App {
+        controller_ui: Arc::new(controller_ui_lifetime::Lifetime::new(controller_manual.configured() || package_review)),
+        controller_manual,
         controller_ops: Arc::new(controller_ops::Unavailable),
         controller_worker: Arc::new(controller_worker::Unavailable),
         db: Arc::new(Mutex::new(db)),
         media: media.clone(),
         log_dir,
     };
-    let scheduler = tokio::spawn(scheduler::worker(app.clone()));
+    let manual_shutdown=app.controller_manual.clone();
+    let ui_lifetime=app.controller_ui.clone();
+    let isolated_review=app.controller_manual.configured() || package_review;
+    let scheduler = if controller_headless::scheduler_allowed(headless_review) {Some(tokio::spawn(scheduler::worker(app.clone())))} else {None};
+    let headless_app=app.clone();
     #[cfg(windows)]
     let sync_db = app.db.clone();
     let router = Router::new()
@@ -1123,15 +1154,30 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .layer(DefaultBodyLimit::max(255 * 1024 * 1024))
         .layer(axum::middleware::from_fn(local_only))
         .with_state(app);
+    let router=if package_review {controller::package_routes().layer(axum::middleware::from_fn(local_only)).with_state(headless_app)} else if headless_review {controller::routes().layer(axum::middleware::from_fn(local_only)).with_state(headless_app)} else {router};
     println!("Lifeinvader Hub: http://127.0.0.1:{port}");
     #[cfg(windows)]
-    if !server_only {
-        let mut window = launch_window()?;
+    if !server_only || isolated_review {
+        let window = if server_only {None} else if isolated_review {
+            match launch_window_at(&format!("http://127.0.0.1:{port}/controller"),"IsolatedReviewWindow") {
+                Ok(child)=>{eprintln!("UI_BOOTSTRAP_STARTED pid={}",child.id());Some(child)},
+                Err(error)=>{eprintln!("UI_BOOTSTRAP_START_FAILED; no automatic fallback");return Err(error)}
+            }
+        }else{Some(launch_window()?)};
         let db = sync_db;
         axum::serve(listener, router)
             .with_graceful_shutdown(async move {
-                let _ = tokio::task::spawn_blocking(move || window.wait()).await;
-                scheduler.abort();
+                if isolated_review {
+                    controller_ui_lifetime::wait(&ui_lifetime,window).await;
+                } else if let Some(mut window)=window {
+                    match tokio::task::spawn_blocking(move || window.wait()).await {
+                        Ok(Ok(status))=>eprintln!("UI_CHILD_EXIT code={:?}",status.code()),
+                        Ok(Err(_))=>eprintln!("UI_CHILD_WAIT_ERROR"),
+                        Err(_)=>eprintln!("UI_CHILD_JOIN_ERROR"),
+                    }
+                }
+                if let Some(scheduler)=scheduler {scheduler.abort();}
+                let _=tokio::task::spawn_blocking(move||manual_shutdown.shutdown()).await;
                 if let Ok(db)=db.lock(){let _=db.execute("UPDATE source_queue SET state='interrupted',message='App closed before queued sync started' WHERE state IN ('pending','starting')",[]);let _=db.execute("UPDATE source_date_audits SET cancel_requested=1 WHERE state='running'",[]);}
                 // Keep the service and the archive lock alive until an active download exits.
                 loop {
@@ -1146,7 +1192,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(not(windows))]
     let _ = server_only;
     axum::serve(listener, router).await?;
-    scheduler.abort();
+    if let Some(scheduler)=scheduler {scheduler.abort();}
     Ok(())
 }
 

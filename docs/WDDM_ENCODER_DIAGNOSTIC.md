@@ -1,0 +1,23 @@
+# WDDM encoder diagnosis - source/pure tests only
+
+Captured06 at2026-11-19T15:42:33-06:00: exactGPU UUID, WDDM, encoder utilization0, ten process rows usedmemory[N/A], successful bounded queries, guardWDDM_UNKNOWN. No encoder session list/count or utilization sampling period was captured. No new GPU query in this turn.
+
+NVIDIA documents per-process GPU memory unavailable under Windows WDDM because Windows KMD owns memory management. Thus[N/A] is not evidence of ten active encoders, no-memory use, or benign/resident-only processes. Compute/process context presence and encoder session activity are separate facts. NVML encoder utilization is averaged over a reported sampling period;0 cannot imply no active sessions or overall GPU idle. Windows VidSch/VidMm manage engines/memory; engine-specific data matters. Neither framework proves exclusive ownership from one snapshot.
+References:
+https://docs.nvidia.com/deploy/nvidia-smi/
+https://docs.nvidia.com/deploy/nvml-api/latest/api/group__nvmlDeviceQueries.html
+https://devblogs.microsoft.com/directx/gpus-in-the-task-manager/
+
+Proposed supported read-only collector, NOT implemented/executed here:
+- Use official NVML APIs of installed vendor driver, fixed absolute driverDLL identity/provenance verified first (no PATH/DLL-download fallback); bind handle by exact GPU UUID using nvmlDeviceGetHandleByUUID. Reject device/UUID mismatch. No setters, process control, resets or model/encoder creation.
+- One bounded snapshot: nvmlDeviceGetEncoderStats active session count; nvmlDeviceGetEncoderSessions capped buffer1024 for IDs/PIDs; nvmlDeviceGetEncoderUtilization with percent AND samplingPeriodUs; current process-context query retained independently. Use supported exact ABI/version from installed vendor headers, not guessed ctypes structs. Installer/runtime identity must be reviewed before a live collector is authorized.
+- Outer bounded existing diagnostic process mechanism must contain a blocking vendor call. Status/return code, start/end UTC/monotonic times, exactUUID and bounded numeric metadata only; no process commandlines/names/user data. No infinite polling; insufficient buffer, unsupported, no-permission, missing DLL/function, lostGPU, timeout, truncated output or changed snapshots remain UNKNOWN/HOLD. No automatic re-query to chase a passing sample.
+- stats/session count disagreement indicates race/ambiguity, not pass. Zero complete session list reports only NO_ACTIVE_SESSION_OBSERVED at that time. Positive count/list reports ACTIVE_SESSIONS_OBSERVED even with0%utilization. Positive utilization without current sessions reports RECENT_ENCODER_ACTIVITY. Process rows lacking WDDM memory remain separate WDDM_MEMORY_UNAVAILABLE; never classify them benign/resident-only from those fields.
+
+Implemented diagnostics/wddm_evidence.py is a pure normalized-data interpreter: no imports of NVML, no subprocess/network/OS query, no connection to runtime guard. Strict bounded fields, expectedUUID, freshness5s, matching counts, numeric ranges and error handling. Six new synthetic tests pass, including active session with0%, unsupported/status failures, race, stale/target/malformed data and empty sample. All outputs authorizes_render=false/render_decision=HOLD. This is interpretation qualification, not live collector/device support qualification.
+
+What genuinely clears the CURRENT unchanged guard:
+Exact target/query success and numeric0 encoder plus ZERO reported process rows at a newly explicitly admitted preflight, then unchanged postclaim/preencode guards. If Windows desktop applications maintain rows, that requirement may be impractical; repeated[N/A] will not become a supported numeric per-process memory reading just by waiting. No additional polling, closing processes or whitelisting is authorized here.
+An encoder-session diagnostic can identify contention more accurately but cannot clear the current no-process rule. Any future admission policy would require separate explicit review of hardware/support, unrelated compute/graphics contention, resource sufficiency and races; this ticket neither proposes an automatic relaxation nor grants render permission. No claim that a zero-session observation alone is sufficient.
+
+Package/source impact: classifier lives outside helpers/clip_worker, so worker/runtime pins and packaged producer guards are unchanged. Existing relocated payload stays disabled; no installed source replacement, render retry or expired-ticket renewal.

@@ -17,17 +17,43 @@ fn denied()->Response { (StatusCode::FORBIDDEN,Json(json!({"reason":"same_origin
 pub fn routes()->Router<App>{
     Router::new().route("/controller",get(page)).route("/controller.js",get(script))
         .route("/api/controller",get(snapshot))
+        .route("/api/controller/ui-lifetime",post(ui_lifetime))
         .route("/api/controller/settings",post(configure))
         .route("/api/controller/jobs",post(enqueue))
         .route("/api/controller/jobs/{id}",get(job))
         .route("/api/controller/jobs/{id}/review",post(review))
+        .route("/api/controller/jobs/{id}/prepare",post(prepare_clip))
+        .route("/api/controller/jobs/{id}/render-reviewed",post(render_reviewed))
+        .route("/api/controller/jobs/{id}/import-completed",post(import_clip))
         .route("/api/controller/jobs/{id}/preview",get(preview))
         .route("/api/controller/jobs/{id}/worker-evidence",get(worker_evidence))
         .route("/api/controller/quota",get(quota))
         .layer(DefaultBodyLimit::max(16*1024))
 }
+/// Package qualification cannot dispatch, import, enqueue, publish or delete.
+pub fn package_routes()->Router<App>{
+    Router::new().route("/controller",get(page)).route("/controller.js",get(script))
+        .route("/api/controller",get(package_snapshot))
+        .route("/api/controller/ui-lifetime",post(ui_lifetime))
+        .route("/api/controller/jobs/{id}",get(job))
+        .route("/api/controller/jobs/{id}/preview",get(preview))
+        .route("/api/controller/jobs/{id}/worker-evidence",get(worker_evidence))
+        .layer(DefaultBodyLimit::max(16*1024))
+}
+async fn package_snapshot(State(app):State<App>)->Response{
+    let result=(||{let db=app.db.lock().map_err(|_|store::Error("storage_unavailable"))?;
+        Ok::<_,store::Error>(json!({"schema":"controller-v1","settings":store::settings(&db)?,"jobs":store::jobs(&db)?,"total_jobs":db.query_row("SELECT COUNT(*) FROM controller_jobs",[],|r|r.get::<_,i64>(0))?,"listed_limit":500,"quota":{"local_receipts":store::quota(&db,now())?,"ops":{"ok":false,"reason":"not_configured","actions_enabled":false,"cleanup_eligible":false}},"worker_connected":false,"manual_native_enabled":false,"isolated_ui_lifetime":app.controller_ui.enabled(),"publishing_connected":false,"review_required":true,"package_read_only":true}))})();
+    match result{Ok(v)=>([(header::CACHE_CONTROL,"no-store")],Json(v)).into_response(),Err(e)=>fail(e)}
+}
 async fn page()->Html<&'static str>{Html(include_str!("../web/controller.html"))}
 async fn script()->impl IntoResponse{ ([(header::CONTENT_TYPE,"text/javascript; charset=utf-8"),(header::CACHE_CONTROL,"no-store")],include_str!("../web/controller.js")) }
+#[derive(Deserialize)] #[serde(deny_unknown_fields)] struct UiSignal{action:String}
+async fn ui_lifetime(State(app):State<App>,headers:HeaderMap,Json(signal):Json<UiSignal>)->Response{
+    if !same_origin(&headers){return denied()}
+    let close=match signal.action.as_str(){"ready"=>false,"close"=>true,_=>return fail(store::Error("invalid_action"))};
+    if !app.controller_ui.signal(close){return fail(store::Error("review_ui_unavailable"))}
+    Json(json!({"ok":true,"closing":close})).into_response()
+}
 async fn ops_status(app:&App,t:i64)->crate::controller_ops::View{
     let reader=app.controller_ops.clone();
     tokio::time::timeout(std::time::Duration::from_secs(1),tokio::task::spawn_blocking(move||reader.read(t))).await
@@ -38,7 +64,7 @@ async fn snapshot(State(app):State<App>)->Response{
     let result=(||{let db=app.db.lock().map_err(|_|store::Error("storage_unavailable"))?;
         let settings=store::settings(&db)?;let jobs=store::jobs(&db)?;
         let count=db.query_row("SELECT COUNT(*) FROM controller_jobs",[],|r|r.get::<_,i64>(0))?;
-        Ok::<_,store::Error>(json!({"schema":"controller-v1","settings":settings,"jobs":jobs,"total_jobs":count,"listed_limit":500,"quota":{"local_receipts":store::quota(&db,t)?,"ops":ops},"worker_connected":false,"publishing_connected":false,"review_required":true}))})();
+        Ok::<_,store::Error>(json!({"schema":"controller-v1","settings":settings,"jobs":jobs,"total_jobs":count,"listed_limit":500,"quota":{"local_receipts":store::quota(&db,t)?,"ops":ops},"worker_connected":app.controller_manual.configured(),"manual_native_enabled":app.controller_manual.configured(),"isolated_ui_lifetime":app.controller_ui.enabled(),"publishing_connected":false,"review_required":true}))})();
     match result{Ok(v)=>([(header::CACHE_CONTROL,"no-store")],Json(v)).into_response(),Err(e)=>fail(e)}
 }
 async fn job(State(app):State<App>,Path(id):Path<String>)->Response{
@@ -52,6 +78,25 @@ async fn quota(State(app):State<App>)->Response{
 }
 #[derive(Deserialize)] #[serde(deny_unknown_fields)]
 struct Action {revision:i64,action:String}
+#[derive(Deserialize)] #[serde(deny_unknown_fields)]
+struct PrepareClip {revision:i64}
+async fn import_clip(State(app):State<App>,Path(id):Path<String>,headers:HeaderMap,Json(a):Json<PrepareClip>)->Response{
+    if !same_origin(&headers){return denied();}
+    let result=tokio::task::spawn_blocking(move||crate::controller_clip::import_completed(&app,&id,a.revision,now())).await.unwrap_or(Err(store::Error("worker_preparation_failed")));
+    match result{Ok(v)=>Json(v).into_response(),Err(e)=>fail(e)}
+}
+async fn render_reviewed(State(app):State<App>,Path(id):Path<String>,headers:HeaderMap,Json(a):Json<PrepareClip>)->Response{
+    if !same_origin(&headers){return denied();}
+    if !app.controller_ui.ready(){return fail(store::Error("review_ui_not_ready"));}
+    let result=tokio::task::spawn_blocking(move||app.controller_manual.admit(&app,&id,a.revision)).await.unwrap_or(Err(store::Error("native_admission_unavailable")));
+    match result{Ok(value)=>(StatusCode::ACCEPTED,Json(value)).into_response(),Err(error)=>fail(error)}
+}
+async fn prepare_clip(State(app):State<App>,Path(id):Path<String>,headers:HeaderMap,Json(a):Json<PrepareClip>)->Response{
+    if !same_origin(&headers){return denied();}
+    let result=tokio::task::spawn_blocking(move||crate::controller_clip::prepare(&app,&id,a.revision)).await
+        .unwrap_or(Err(store::Error("worker_preparation_failed")));
+    match result{Ok(v)=>Json(v).into_response(),Err(e)=>fail(e)}
+}
 async fn configure(State(app):State<App>,headers:HeaderMap,Json(a):Json<Action>)->Response{
     if !same_origin(&headers){return denied();}
     let result=app.db.lock().map_err(|_|store::Error("storage_unavailable")).and_then(|mut db|store::configure(&mut db,a.revision,&a.action,now()));
@@ -90,21 +135,139 @@ async fn preview(State(app):State<App>,Path(id):Path<String>)->Response{
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::sync::{Arc,Mutex};
     use rusqlite::Connection;
     use tower::ServiceExt;
     use axum::{body::{Body,to_bytes},http::Request};
     use sha2::{Digest,Sha256};
-    fn app()->App{
+    pub(crate) fn app()->App{
         let root=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("controller-test-data").join(uuid::Uuid::new_v4().to_string());
         std::fs::create_dir_all(root.join("sample-source")).unwrap();std::fs::write(root.join("sample-source/original.mp4"),b"inert source").unwrap();
         let db=Connection::open_in_memory().unwrap();crate::init(&db).unwrap();store::init(&db).unwrap();
         db.execute("INSERT INTO profiles(id,name,platform,url,role,source_folder) VALUES(1,'sample-source','tiktok','https://www.tiktok.com/@sample-source','source','sample-source')",[]).unwrap();
         db.execute("INSERT INTO settings(key,value) VALUES('source_root',?)",[root.to_str().unwrap()]).unwrap();
-        App{db:Arc::new(Mutex::new(db)),media:root.clone(),log_dir:root,controller_ops:Arc::new(crate::controller_ops::Unavailable),controller_worker:Arc::new(crate::controller_worker::Unavailable),
+        App{controller_ui:Arc::new(crate::controller_ui_lifetime::Lifetime::new(false)),controller_manual:Arc::new(crate::controller_manual::Unavailable),db:Arc::new(Mutex::new(db)),media:root.clone(),log_dir:root,controller_ops:Arc::new(crate::controller_ops::Unavailable),controller_worker:Arc::new(crate::controller_worker::Unavailable),
 }
+    }
+    #[tokio::test] async fn package_review_has_no_dispatch_or_ops(){
+        struct RefuseOps;impl crate::controller_ops::StatusReader for RefuseOps{fn read(&self,_:i64)->crate::controller_ops::View{panic!("OPS must not be consulted")}}
+        let mut a=app();a.controller_ops=Arc::new(RefuseOps);let before=a.db.lock().unwrap().total_changes();let api=package_routes().with_state(a.clone());
+        let response=api.clone().oneshot(request("GET","/api/controller","",false)).await.unwrap();assert_eq!(response.status(),StatusCode::OK);
+        let body=to_bytes(response.into_body(),65536).await.unwrap();let v:serde_json::Value=serde_json::from_slice(&body).unwrap();assert_eq!(v["manual_native_enabled"],false);assert_eq!(v["package_read_only"],true);assert!(!String::from_utf8(body.to_vec()).unwrap().contains("metricool"));
+        for path in ["/api/controller/jobs","/api/controller/settings","/api/controller/jobs/x/render-reviewed","/api/controller/jobs/x/import-completed","/api/controller/quota"]{assert_eq!(api.clone().oneshot(request("POST",path,"{}",true)).await.unwrap().status(),StatusCode::NOT_FOUND);}
+        assert_eq!(a.db.lock().unwrap().total_changes(),before);
+    }
+    #[tokio::test] async fn manual_native_route_is_default_deny_and_explicit_only(){
+        use std::sync::atomic::{AtomicUsize,Ordering};
+        struct Recording(Arc<AtomicUsize>);
+        impl crate::controller_manual::Manual for Recording {
+            fn configured(&self)->bool{true}
+            fn admit(&self,_:&App,id:&str,revision:i64)->store::Result<serde_json::Value>{
+                assert_eq!((id,revision),("reviewed-one",7));self.0.fetch_add(1,Ordering::SeqCst);
+                Ok(json!({"state":"PROCESSING","publish":false}))
+            }
+        }
+        let mut app=app();let before=app.db.lock().unwrap().total_changes();
+        let path="/api/controller/jobs/reviewed-one/render-reviewed";
+        let denied_route=routes().with_state(app.clone());
+        assert_eq!(denied_route.oneshot(request("POST",path,r#"{"revision":7}"#,true)).await.unwrap().status(),StatusCode::CONFLICT);
+        assert_eq!(before,app.db.lock().unwrap().total_changes());
+        let calls=Arc::new(AtomicUsize::new(0));app.controller_manual=Arc::new(Recording(calls.clone()));let api=routes().with_state(app);
+        assert_eq!(api.clone().oneshot(request("POST",path,r#"{"revision":7}"#,false)).await.unwrap().status(),StatusCode::FORBIDDEN);
+        assert_eq!(api.clone().oneshot(request("POST",path,r#"{"revision":7,"publish":true}"#,true)).await.unwrap().status(),StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(calls.load(Ordering::SeqCst),0);
+        assert_eq!(api.oneshot(request("POST",path,r#"{"revision":7}"#,true)).await.unwrap().status(),StatusCode::ACCEPTED);
+        assert_eq!(calls.load(Ordering::SeqCst),1);
+    }
+    #[tokio::test] async fn isolated_ui_gates_manual_dispatch_before_ready_and_after_close(){
+        use std::sync::atomic::{AtomicUsize,Ordering};
+        struct Recording(Arc<AtomicUsize>);
+        impl crate::controller_manual::Manual for Recording {
+            fn configured(&self)->bool{true}
+            fn admit(&self,_:&App,id:&str,revision:i64)->store::Result<serde_json::Value>{
+                assert_eq!((id,revision),("reviewed-only",0));
+                self.0.fetch_add(1,Ordering::SeqCst);Ok(json!({"publish":false}))
+            }
+        }
+        let mut app=app();let calls=Arc::new(AtomicUsize::new(0));
+        app.controller_manual=Arc::new(Recording(calls.clone()));
+        app.controller_ui=Arc::new(crate::controller_ui_lifetime::Lifetime::new(true));
+        let before=app.db.lock().unwrap().total_changes();
+        let api=routes().layer(axum::middleware::from_fn(crate::local_only)).with_state(app.clone());
+        let render="/api/controller/jobs/reviewed-only/render-reviewed";
+        let signal="/api/controller/ui-lifetime";
+        assert_eq!(api.clone().oneshot(request("POST",render,r#"{"revision":0}"#,true)).await.unwrap().status(),StatusCode::CONFLICT);
+        assert_eq!(calls.load(Ordering::SeqCst),0);
+        assert_eq!(api.clone().oneshot(request("POST",signal,r#"{"action":"ready"}"#,true)).await.unwrap().status(),StatusCode::OK);
+        assert_eq!(api.clone().oneshot(request("POST",render,r#"{"revision":0}"#,true)).await.unwrap().status(),StatusCode::ACCEPTED);
+        assert_eq!(calls.load(Ordering::SeqCst),1);
+        assert_eq!(api.clone().oneshot(request("POST",signal,r#"{"action":"close"}"#,true)).await.unwrap().status(),StatusCode::OK);
+        assert_eq!(api.oneshot(request("POST",render,r#"{"revision":0}"#,true)).await.unwrap().status(),StatusCode::CONFLICT);
+        assert_eq!(calls.load(Ordering::SeqCst),1);
+        assert_eq!(before,app.db.lock().unwrap().total_changes());
+        assert_eq!(app.db.lock().unwrap().query_row("SELECT COUNT(*) FROM controller_admissions",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    }
+    #[tokio::test] async fn review_ui_lifetime_origin_close_and_no_database_mutation(){
+        let mut app=app();app.controller_ui=Arc::new(crate::controller_ui_lifetime::Lifetime::new(true));
+        let before=app.db.lock().unwrap().total_changes();let api=routes().with_state(app.clone());
+        let path="/api/controller/ui-lifetime";
+        assert_eq!(api.clone().oneshot(request("POST",path,r#"{"action":"ready"}"#,false)).await.unwrap().status(),StatusCode::FORBIDDEN);
+        assert!(!app.controller_ui.ready());
+        assert_eq!(api.clone().oneshot(request("POST",path,r#"{"action":"ready","publish":true}"#,true)).await.unwrap().status(),StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(api.clone().oneshot(request("POST",path,r#"{"action":"ready"}"#,true)).await.unwrap().status(),StatusCode::OK);
+        assert!(app.controller_ui.ready());
+        assert_eq!(api.clone().oneshot(request("POST",path,r#"{"action":"close"}"#,true)).await.unwrap().status(),StatusCode::OK);
+        assert!(!app.controller_ui.ready());
+        assert_eq!(api.oneshot(request("POST",path,r#"{"action":"ready"}"#,true)).await.unwrap().status(),StatusCode::CONFLICT);
+        assert_eq!(before,app.db.lock().unwrap().total_changes());
+    }
+    #[tokio::test] async fn controller_reachability_inprocess_real_middleware(){
+        let app=app();let before=app.db.lock().unwrap().total_changes();
+        let api=routes().layer(axum::middleware::from_fn(crate::local_only)).with_state(app.clone());
+        for path in ["/controller","/controller.js","/api/controller"]{
+            let response=tokio::time::timeout(std::time::Duration::from_secs(2),api.clone().oneshot(request("GET",path,"",false))).await.unwrap().unwrap();
+            assert_eq!(response.status(),StatusCode::OK,"{path}");
+            assert!(!to_bytes(response.into_body(),256*1024).await.unwrap().is_empty());
+        }
+        let bad_origin=Request::builder().uri("/controller").header("host","127.0.0.1:43847").header("origin","https://example.invalid").body(Body::empty()).unwrap();
+        assert_eq!(api.oneshot(bad_origin).await.unwrap().status(),StatusCode::FORBIDDEN);
+        assert_eq!(before,app.db.lock().unwrap().total_changes());
+    }
+    #[tokio::test] async fn controller_reachability_same_process_loopback_no_worker(){
+        use std::io::{Read,Write};
+        use std::time::Duration;
+        let mut app=app();app.controller_ui=Arc::new(crate::controller_ui_lifetime::Lifetime::new(true));
+        let before=app.db.lock().unwrap().total_changes();
+        let listener=tokio::net::TcpListener::bind(("127.0.0.1",0)).await.unwrap();
+        let address=listener.local_addr().unwrap();
+        let ui=app.controller_ui.clone();
+        let api=routes().layer(axum::middleware::from_fn(crate::local_only)).with_state(app.clone());
+        let mut server=tokio::spawn(async move{
+            axum::serve(listener,api).with_graceful_shutdown(async move{crate::controller_ui_lifetime::wait(&ui,None).await}).await
+        });
+        // Same test process, fresh ephemeral port; never probes a held app origin.
+        let client=tokio::task::spawn_blocking(move||{
+            for (method,path,body) in [("GET","/controller",""),("GET","/controller.js",""),("GET","/api/controller",""),("POST","/api/controller/ui-lifetime",r#"{"action":"ready"}"#),("POST","/api/controller/ui-lifetime",r#"{"action":"close"}"#)]{
+                let mut socket=std::net::TcpStream::connect_timeout(&address,Duration::from_secs(2)).unwrap();
+                socket.set_read_timeout(Some(Duration::from_secs(2))).unwrap();socket.set_write_timeout(Some(Duration::from_secs(2))).unwrap();
+                write!(socket,"{method} {path} HTTP/1.1\r\nHost: {address}\r\nOrigin: http://{address}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+                let mut response=String::new();socket.take(256*1024).read_to_string(&mut response).unwrap();
+                assert!(response.starts_with("HTTP/1.1 200"),"{path}: unexpected status");
+                if path=="/controller"{assert!(response.contains("controller-page"));}
+                if path=="/api/controller"{assert!(response.contains("\"manual_native_enabled\":false"));}
+            }
+        });
+        let result=tokio::time::timeout(Duration::from_secs(12),client).await;
+        // Ensure even failed diagnostic clients stop only their in-process test server.
+        app.controller_ui.signal(true);
+        let stopped=tokio::time::timeout(Duration::from_secs(2),&mut server).await;
+        if stopped.is_err(){server.abort();}
+        result.unwrap().unwrap();stopped.unwrap().unwrap().unwrap();
+        assert_eq!(before,app.db.lock().unwrap().total_changes());
+        assert_eq!(app.db.lock().unwrap().query_row("SELECT COUNT(*) FROM controller_admissions",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        eprintln!("TEST_LOOPBACK_GET_READY_CLOSE_PASS no_worker=true");
     }
     fn ready(app:&App)->store::Job{
         let admission=crate::controller_source::controller_selection(app,1,"sample-source/original.mp4").unwrap();let mut db=app.db.lock().unwrap();
@@ -138,6 +301,14 @@ mod tests {
         assert_eq!(api.clone().oneshot(request("POST","/api/controller/settings",r#"{"revision":0,"action":"resume","publish":true}"#,true)).await.unwrap().status(),StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(api.oneshot(request("POST","/api/controller/jobs/x/posted",r#"{"receipt":"forged"}"#,true)).await.unwrap().status(),StatusCode::NOT_FOUND);
         assert!(store::settings(&app.db.lock().unwrap()).unwrap().paused);
+    }
+    #[tokio::test] async fn clip_prepare_route_rejects_untrusted_inputs_without_writes(){
+        let app=app();let api=routes().with_state(app.clone());
+        let before=app.db.lock().unwrap().total_changes();
+        assert_eq!(api.clone().oneshot(request("POST","/api/controller/jobs/x/prepare",r#"{"revision":0}"#,false)).await.unwrap().status(),StatusCode::FORBIDDEN);
+        assert_eq!(api.clone().oneshot(request("POST","/api/controller/jobs/x/prepare",r#"{"revision":0,"render":true}"#,true)).await.unwrap().status(),StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(api.oneshot(request("GET","/api/controller/jobs/x/prepare","",false)).await.unwrap().status(),StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(before,app.db.lock().unwrap().total_changes());
     }
     #[tokio::test] async fn controller_intake_keeps_original_archived_and_solo_restrictions(){
         let app=app();let root=app.media.clone();std::fs::create_dir_all(root.join("sample-source/.lifeinvader-edits")).unwrap();std::fs::write(root.join("sample-source/.lifeinvader-edits/edit.mp4"),b"edit").unwrap();
