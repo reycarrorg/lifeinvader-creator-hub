@@ -18,6 +18,7 @@ use std::{
 use tower_http::services::ServeDir;
 use uuid::Uuid;
 mod analytics;
+mod editor;
 mod recovery;
 mod handoff;
 mod solo;
@@ -186,6 +187,10 @@ fn init(db: &Connection) -> rusqlite::Result<()> {
     CREATE TABLE IF NOT EXISTS source_preferences (profile_id INTEGER PRIMARY KEY REFERENCES profiles(id), include_in_batch INTEGER NOT NULL DEFAULT 1);
     CREATE TABLE IF NOT EXISTS categories (role TEXT NOT NULL CHECK(role IN ('destination','source')), name TEXT NOT NULL COLLATE NOCASE, PRIMARY KEY(role,name));
     CREATE TABLE IF NOT EXISTS source_new_files (profile_id INTEGER NOT NULL REFERENCES profiles(id), root TEXT NOT NULL, path TEXT NOT NULL, downloaded_at INTEGER NOT NULL, seen INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(profile_id,root,path));")?;
+    let category_columns = { let mut q=db.prepare("PRAGMA table_info(categories)")?; q.query_map([],|r|r.get::<_,String>(1))?.collect::<rusqlite::Result<Vec<_>>>()? };
+    for (name,default) in [("icon", "#"),("color", "pink"),("image_path", "")] { if !category_columns.iter().any(|x|x==name) { db.execute(&format!("ALTER TABLE categories ADD COLUMN {name} TEXT NOT NULL DEFAULT '{default}'"),[])?; } }
+    let has_dead = { let mut q=db.prepare("PRAGMA table_info(source_preferences)")?; let names=q.query_map([],|r|r.get::<_,String>(1))?.collect::<rusqlite::Result<Vec<_>>>()?; names.iter().any(|x|x=="dead") };
+    if !has_dead { db.execute("ALTER TABLE source_preferences ADD COLUMN dead INTEGER NOT NULL DEFAULT 0",[])?; }
     db.execute_batch("CREATE TABLE IF NOT EXISTS source_selection(profile_id INTEGER PRIMARY KEY REFERENCES profiles(id),pending INTEGER NOT NULL,allowed TEXT NOT NULL,excluded TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'all');")?;
     let selection_has_mode = { let mut stmt=db.prepare("PRAGMA table_info(source_selection)")?; let cols=stmt.query_map([],|r|r.get::<_,String>(1))?.collect::<Result<Vec<_>,_>>()?; cols.iter().any(|c|c=="mode") };
     if !selection_has_mode { db.execute("ALTER TABLE source_selection ADD COLUMN mode TEXT NOT NULL DEFAULT 'all'",[])?; }
@@ -213,6 +218,9 @@ fn init(db: &Connection) -> rusqlite::Result<()> {
             )?;
         }
     }
+    db.execute_batch("CREATE TABLE IF NOT EXISTS media_edits (id TEXT PRIMARY KEY, profile_id INTEGER NOT NULL REFERENCES profiles(id), role TEXT NOT NULL, root TEXT NOT NULL, original_path TEXT NOT NULL, edited_path TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')));")?;
+    let has_edit_id = { let mut q=db.prepare("PRAGMA table_info(posting_queue)")?; let names=q.query_map([],|r|r.get::<_,String>(1))?.collect::<rusqlite::Result<Vec<_>>>()?; names.iter().any(|x|x=="edit_id") };
+    if !has_edit_id { db.execute("ALTER TABLE posting_queue ADD COLUMN edit_id TEXT NOT NULL DEFAULT ''",[])?; }
     let has_queue_revision = {
         let mut s = db.prepare("PRAGMA table_info(posting_queue)")?;
         let names=s.query_map([],|r|r.get::<_,String>(1))?.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -997,6 +1005,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/profiles/hidden", get(hidden_profiles))
         .route("/api/profiles/{id}/archive", post(archive_profile))
         .route("/api/categories", post(categories::create))
+        .route("/api/categories/appearance", post(categories::appearance))
+        .route("/api/categories/photo", post(categories::photo))
         .route("/api/categories/members", post(categories::set_members))
         .route("/api/profiles/{id}", post(edit_profile))
         .route("/api/profiles/{id}/photo", post(upload_avatar))
@@ -1082,7 +1092,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             post(scheduler::save_batch_setting),
         )
         .route("/api/source-schedules", get(scheduler::schedules))
+        .route("/api/editor/render", post(editor::render))
         .route("/api/source-batches", post(scheduler::enqueue_batch))
+        .route("/api/sources/{id}/dead", post(scheduler::set_dead))
         .route("/api/settings", post(settings))
         .route("/api/items/{id}/status", post(update))
         .route("/api/items/{id}/metadata", post(metadata))

@@ -13,6 +13,10 @@ pub struct Add {
     path: String,
     #[serde(default)]
     scheduled_for: String,
+    #[serde(default)]
+    edit_id: String,
+    #[serde(default)]
+    caption: String,
 }
 #[derive(Deserialize)]
 pub struct Update {
@@ -37,6 +41,7 @@ pub struct Entry {
     source_name: String,
     platform: String,
     path: String,
+    edited_path: String,
     post_id: String,
     title: String,
     description: String,
@@ -81,7 +86,7 @@ pub async fn list(State(app): State<App>, Path(id): Path<i64>) -> ApiResult<Json
         .and_then(|c| source::checked_root(&c).ok())
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let mut stmt=db.prepare("SELECT q.id,q.source_id,p.name,q.platform,q.path,q.post_id,q.title,q.description,q.posted_date,q.original_url,q.channel_url,q.state,q.caption,q.post_url,q.scheduled_for,q.root,q.posted_date_kind,q.revision FROM posting_queue q JOIN profiles p ON p.id=q.source_id WHERE q.profile_id=? ORDER BY CASE WHEN q.state='queued' THEN 0 ELSE 1 END, q.id DESC").map_err(internal)?;
+    let mut stmt=db.prepare("SELECT q.id,q.source_id,p.name,q.platform,q.path,q.post_id,q.title,q.description,q.posted_date,q.original_url,q.channel_url,q.state,q.caption,q.post_url,q.scheduled_for,q.root,q.posted_date_kind,q.revision,COALESCE(e.edited_path,'') FROM posting_queue q JOIN profiles p ON p.id=q.source_id LEFT JOIN media_edits e ON e.id=q.edit_id WHERE q.profile_id=? ORDER BY CASE WHEN q.state='queued' THEN 0 ELSE 1 END, q.id DESC").map_err(internal)?;
     let rows = stmt
         .query_map([id], |r| {
             Ok((
@@ -91,6 +96,7 @@ pub async fn list(State(app): State<App>, Path(id): Path<i64>) -> ApiResult<Json
                     source_name: r.get(2)?,
                     platform: r.get(3)?,
                     path: r.get(4)?,
+                    edited_path: r.get(18)?,
                     post_id: r.get(5)?,
                     title: r.get(6)?,
                     description: r.get(7)?,
@@ -117,7 +123,7 @@ pub async fn list(State(app): State<App>, Path(id): Path<i64>) -> ApiResult<Json
         .into_iter()
         .map(|(mut e, root)| {
             e.available = root == current_root
-                && source::resolve_file(&app, e.source_id, &e.path, "source").is_ok();
+                && source::resolve_file(&app, e.source_id, if e.edited_path.is_empty(){&e.path}else{&e.edited_path}, "source").is_ok();
             e
         })
         .collect();
@@ -129,7 +135,14 @@ pub async fn add(
     Json(input): Json<Add>,
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
     schedule(&input.scheduled_for)?;
+    if input.caption.len()>10000 { return Err(bad("Caption must be under 10000 characters.")); }
     let target = source::resolve_file(&app, input.source_id, &input.path, "source")?;
+    if !input.edit_id.is_empty() {
+        let edited={let db=app.db.lock().map_err(internal)?;let root=source::checked_root(&source::config(&db).map_err(internal)?)?;
+            db.query_row("SELECT edited_path FROM media_edits WHERE id=? AND profile_id=? AND role='source' AND root=? AND original_path=?",params![input.edit_id,input.source_id,root.to_string_lossy().as_ref(),input.path],|r|r.get::<_,String>(0)).optional().map_err(internal)?
+        }.ok_or_else(||bad("This edit does not match the original source file."))?;
+        source::resolve_file(&app,input.source_id,&edited,"source")?;
+    }
     let (mut date, mut post_id, _, title, description, url, _) =
         source::post_metadata(&target).unwrap_or_default();
     let mut db = app.db.lock().map_err(internal)?;
@@ -162,7 +175,7 @@ pub async fn add(
         format!("post:{pid}")
     };
     let tx = db.transaction().map_err(internal)?;
-    let outcome=tx.execute("INSERT OR IGNORE INTO posting_queue(profile_id,source_id,platform,identity_key,root,path,post_id,title,description,posted_date,original_url,channel_url,scheduled_for,posted_date_kind) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",params![id,input.source_id,platform,key,root,input.path,pid,title.unwrap_or_default(),description.unwrap_or_default(),date.unwrap_or_default(),url.unwrap_or_default(),channel_url,input.scheduled_for,date_kind.unwrap_or_default()]).map_err(internal)?;
+    let outcome=tx.execute("INSERT OR IGNORE INTO posting_queue(profile_id,source_id,platform,identity_key,root,path,post_id,title,description,posted_date,original_url,channel_url,scheduled_for,posted_date_kind,edit_id,caption) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",params![id,input.source_id,platform,key,root,input.path,pid,title.unwrap_or_default(),description.unwrap_or_default(),date.unwrap_or_default(),url.unwrap_or_default(),channel_url,input.scheduled_for,date_kind.unwrap_or_default(),input.edit_id,input.caption]).map_err(internal)?;
     if outcome == 0 {
         return Err((
             StatusCode::CONFLICT,

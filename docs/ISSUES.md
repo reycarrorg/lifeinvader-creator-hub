@@ -1,5 +1,11 @@
 # Known issues and planned work
 
+## Open — Quick editor coverage
+
+The first editor supports centered aspect presets, one contiguous trim, mute and one uploaded PNG/JPEG overlay at 50% opacity. It does not provide arbitrary crop positioning, multi-cut timelines, built-in branding, overlay placement, cancellation or edit-project history. Encoding depends on FFmpeg and codec support; large inputs can take time and use storage. An edited copy is separate from the original, and publishing is not automated. Validate additional formats and long or rotated media before treating this as a full editor.
+
+24-hour source counts include only files tracked by Hub sync after tracking began; they are not a complete historical import count. Original post dates may be unknown or estimated.
+
 ## Open — Profile recovery and content-library coverage
 
 Related work: [PR #8](https://github.com/reycarrorg/lifeinvader-creator-hub/pull/8).

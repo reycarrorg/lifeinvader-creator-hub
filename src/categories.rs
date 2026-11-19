@@ -5,6 +5,9 @@ use std::collections::HashSet;
 pub struct Category {
     role: String,
     name: String,
+    icon: String,
+    color: String,
+    image_url: String,
 }
 #[derive(Deserialize)]
 pub struct Input {
@@ -33,12 +36,15 @@ fn validate(role: &str, name: &str) -> ApiResult<String> {
     Ok(name.to_owned())
 }
 pub fn list(db: &Connection) -> rusqlite::Result<Vec<Category>> {
-    let mut stmt = db.prepare("SELECT role,name FROM categories ORDER BY name COLLATE NOCASE")?;
+    let mut stmt = db.prepare("SELECT role,name,icon,color,image_path FROM categories ORDER BY name COLLATE NOCASE")?;
     let rows = stmt
         .query_map([], |r| {
             Ok(Category {
                 role: r.get(0)?,
                 name: r.get(1)?,
+                icon: r.get(2)?,
+                color: r.get(3)?,
+                image_url: { let path:String=r.get(4)?; if path.is_empty(){String::new()}else{format!("/media/{path}")} },
             })
         })?
         .collect();
@@ -104,4 +110,22 @@ pub async fn set_members(
     .map_err(internal)?;
     tx.commit().map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub struct Appearance { role:String, name:String, icon:String, color:String, #[serde(default)] clear_image:bool }
+pub async fn appearance(State(app):State<App>,Json(input):Json<Appearance>)->ApiResult<StatusCode>{
+ let name=validate(&input.role,&input.name)?;
+ if !["#","★","♥","▶","♫","✦","◆","☀","☁","◉","✿","⌘"].contains(&input.icon.as_str()) || !["pink","purple","blue","teal","green","yellow","orange","gray"].contains(&input.color.as_str()) { return Err(bad("Choose an available icon and color.")); }
+ let db=app.db.lock().map_err(internal)?;
+ db.execute("INSERT INTO categories(role,name,icon,color) VALUES(?,?,?,?) ON CONFLICT(role,name) DO UPDATE SET icon=excluded.icon,color=excluded.color,image_path=CASE WHEN ? THEN '' ELSE image_path END",params![input.role,name,input.icon,input.color,input.clear_image]).map_err(internal)?;
+ Ok(StatusCode::NO_CONTENT)
+}
+pub async fn photo(State(app):State<App>,mut form:Multipart)->ApiResult<StatusCode>{
+ let mut role=String::new();let mut name=String::new();let mut photo=Vec::new();
+ while let Some(field)=form.next_field().await.map_err(bad)? { match field.name().unwrap_or("") { "role"=>role=field.text().await.map_err(bad)?, "name"=>name=field.text().await.map_err(bad)?, "photo"=>photo=field.bytes().await.map_err(bad)?.to_vec(), _=>{} } }
+ let name=validate(&role,&name)?;if photo.is_empty()||photo.len()>5*1024*1024{return Err(bad("Choose an image under 5 MB."));}
+ let ext=if photo.starts_with(b"\x89PNG\r\n\x1a\n"){"png"}else if photo.starts_with(b"\xff\xd8\xff"){"jpg"}else{return Err(bad("Choose a PNG or JPEG image."));};
+ let rel=format!("category-photos/{}.{}",Uuid::new_v4(),ext);std::fs::create_dir_all(app.media.join("category-photos")).map_err(internal)?;std::fs::write(app.media.join(&rel),photo).map_err(internal)?;
+ let db=app.db.lock().map_err(internal)?;db.execute("INSERT INTO categories(role,name,image_path) VALUES(?,?,?) ON CONFLICT(role,name) DO UPDATE SET image_path=excluded.image_path",params![role,name,rel]).map_err(internal)?;Ok(StatusCode::NO_CONTENT)
 }

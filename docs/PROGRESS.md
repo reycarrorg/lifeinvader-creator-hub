@@ -1,5 +1,16 @@
 # Project progress
 
+## 2026-11-18 — Source status, categories and quick edits
+
+Review: https://github.com/reycarrorg/lifeinvader-creator-hub/pull/11 (stacked on the account context-menu branch).
+
+The owner requested private visibility. The shared repository was made private again and antisolvent retained write access, verified through GitHub.
+
+- Added source 24-hour tracked download counts, explicit dead/active state, status labels and colors, and server-enforced Sync all eligibility. Existing auto-sync timers are preserved; marking dead pauses automatic work and cancels pending jobs.
+- Added category icon/color selection and local PNG/JPEG uploads, improved settings and sync log following, collapsible media/dashboard sections, and original-date-first media order.
+- Added FFmpeg quick edits with centered crop, trim, mute and optional 50% logo overlay. Edits are separate files and queue entries retain original post identity while their handoff points to the edited copy. Own-profile media supports editing and download; source media can also be queued for review.
+- Validated source eligibility and category images with disposable data; generated real synthetic video/audio and image edits and verified crop, trim, muted/preserved audio, output, queue and handoff. Browser checks covered the category selector and render-to-queue flow. No live sync or publishing was performed.
+
 ## 2026-11-18 — Account and category context menus
 
 Review: https://github.com/reycarrorg/lifeinvader-creator-hub/pull/10 (stacked on the category-navigation branch).

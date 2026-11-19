@@ -115,7 +115,8 @@ pub async fn get(State(app): State<App>) -> ApiResult<Json<serde_json::Value>> {
             let source_id = value["source_id"]
                 .as_i64()
                 .ok_or_else(|| bad("Queue record is invalid."))?;
-            let path = value["path"].as_str().unwrap_or("");
+            let original_path = value["path"].as_str().unwrap_or("");
+            let path = value["edited_path"].as_str().filter(|p|!p.is_empty()).unwrap_or(original_path);
             let local_file = if value["available"] == true {
                 source::resolve_file(&app, source_id, path, "source")
                     .ok()
