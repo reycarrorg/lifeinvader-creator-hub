@@ -44,7 +44,11 @@ The app currently binds to localhost and has no authenticated shared-user access
 
 ## Open — Platform and environment validation
 
-Windows builds and synthetic tests have been exercised. A bounded live YouTube test-channel download and an Instagram reel/fallback test succeeded in disposable folders; these did not validate complete channel downloads or every account. A macOS build has not been validated. Verify each target environment and report actual results.
+Windows builds and synthetic tests have been exercised. A bounded live YouTube test-channel download and an Instagram reel/fallback test succeeded in disposable folders; these did not validate complete channel downloads or every account. The Apple Silicon macOS build, isolated tests and launcher startup have been verified locally. Windows data transfer and source-path migration, full GUI use, real social downloads and publication on macOS remain unverified.
+
+## Open — Stalled cloud folder enumeration
+
+On macOS a source-summary scan was observed blocked in a directory open while other local endpoints timed out. A candidate isolates background and interactive scans into separate bounded slots; it has been tested with simulated stalls only and needs verification after a controlled restart. A stalled interactive scan still prevents opening another source until that filesystem call finishes or the app is restarted. Other filesystem operations are not covered by this bound. The Terminal-launched app and a read-only Terminal probe also stalled opening the Solo archive, while an independent Codex-shell check succeeded; the underlying launch-context/File Provider cause is not established.
 
 ## Planned — Real account connections and analytics history
 
@@ -67,3 +71,14 @@ The date audit can use existing sidecars, verify missing dates online where supp
 Related work: [PR #6](https://github.com/reycarrorg/lifeinvader-creator-hub/pull/6).
 
 Metadata-only previews depend on the provider and can fail, omit thumbnails or dates, or return a nonchronological/incomplete feed. Selection currently stops at 1,500 posts and includes the center post. Filtering preserves skipped IDs outside the downloaded archive; later unseen posts can be included for an after selection. A before selection stays limited to selected IDs. Photo sync is blocked where it could bypass the selection. Solo links use the original script's separate folder/archive, so duplicates across other source archives are not detected. Real-platform end-to-end validation, login support, retry/cancel controls, and large-account pagination remain open.
+
+
+## Mac preview cache safety and external sync
+
+The installed Mac worker manages only newly generated, registered previews in the macOS per-user cache. It preserves legacy/unregistered previews and does not evict Google Drive media. Independently review root-locality checks, including non-File-Provider third-party mirror/backup configurations and the non-atomic check/unlink race, and test real-world timer behavior with disposable media before relying on or expanding its use. Source identity uses file metadata, not a content hash; a replacement preserving those values or a stale path-only posting report may remain ambiguous. An unresolved pending path, over 500 outstanding paths, a database snapshot over 64 MiB, a database change, or inspection taking over three seconds prevents a sweep. Queue state is local and does not prove that another machine has no pending work. Browser IndexedDB previews are separate.
+
+One streamed preview was observed without a cache registration; the initial registration failure was not logged, so its exact cause is unknown. The isolated fix retries changed source metadata, avoids adopting or overwriting old unregistered previews, and reports a generic reason. Further real File Provider validation remains necessary.
+
+## Open — Parallel macOS test interference
+
+On 2026-11-19, the full Rust test suite failed seven preview-cache tests under default parallel execution; all 40 passed with `cargo test -- --test-threads=1`. Investigate shared test state before relying on parallel runs. This does not establish Windows behavior.

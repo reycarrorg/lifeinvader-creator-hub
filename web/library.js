@@ -39,7 +39,7 @@ const LVLibrary = (() => {
   ['library-category','library-source','library-type','library-min','library-max','library-sort','library-search'].forEach(id=>$(id).oninput=()=>{page=0;paint();});
   $('library-destination').onchange=async e=>{selectedTarget=Number(e.target.value);chosenDestination=selectedTarget;await loadQueueState();if(valid())paint();};
   await loadQueueState();let next=0;async function worker(){while(valid()){const i=next++;if(i>=sources.length)return;const p=sources[i];try{const result=await api(`/api/sources/${p.id}`);if(result.configured)entries.push(...pickerMediaFiles(p,result.files||[]).map(f=>({p,f:{...f,_libraryRoot:result.root}})));else failures++;}catch{failures++;}}}
-  await Promise.all(Array.from({length:4},worker));if(valid())paint();
+  await Promise.all(Array.from({length:1},worker));if(valid())paint();
  }
  return {mount,dispose,durationFor:duration,syncDurations};
 })();

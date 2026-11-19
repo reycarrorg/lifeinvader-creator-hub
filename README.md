@@ -81,6 +81,16 @@ The [TikTok ID timestamp research](https://hindsig.ht/blog/tinkering-with-tiktok
 
 The profile download view saves post IDs and file locations for a future file-referencing chooser. It is not yet connected to the manual content library: **Add content** currently copies selected files into that library. The app rejects duplicate imported platform/post ID pairs, but it does not detect identical videos uploaded under different post IDs.
 
+## macOS generated preview cache
+
+On macOS, newly generated video thumbnails use a private system cache when its location passes local-volume, ownership, symlink and known cloud-marker checks. While the Hub is open, the worker checks one minute after startup and then every six hours. It removes only registered previews that are at least 30 days old, or at least one day old when the registered cache exceeds 512 MiB (aiming for 384 MiB). Work is limited per pass. Source identity and date fingerprints are checked; queued/claimed/review aliases are protected. If a pending queue reference cannot be resolved, or there are more than 500 outstanding references, the whole pass is skipped. Unknown and unregistered entries are kept. The Hub protects the video, its metadata, photos, and existing legacy preview files. If a cache location cannot pass these checks, previews remain available without disk caching and automatic cleanup does nothing.
+
+The worker inspects a size-limited in-memory database snapshot and source paths without holding the Hub database lock. If inspection takes longer than three seconds, or the live database changes during inspection, that pass is skipped. Final identity checks and removal operate on one validated local cache file at a time. Cleanup is conservative and may leave the cache above its target while entries remain protected or their status is unknown.
+
+If a streamed source's metadata changes during preview generation, the Hub retries with a fresh identity up to three times; an unstable source is shown without registering a cached preview. Previously unregistered cache files are left untouched, and the Hub can use another bounded cache slot. Registration problems are reported with rate-limited messages that do not include media paths or account details.
+
+This manages derived local previews, not Google Drive's cache or its cloud originals. The operating system and Drive manage streamed files separately; opening a video to regenerate a preview can cause it to download again. The Mac uses the new private cache for future previews; old unregistered `media/thumbnail-cache` files are left in place and are not used or automatically removed. The local checks cannot prove that an unrelated third-party backup tool never mirrors the system cache; this needs independent verification before enabling cleanup on an unfamiliar setup.
+
 ## Data and security
 
 The SQLite database is created at `data/lifeinvader.sqlite3`; imported media, profile photos, and preview cache are stored in `media/`. Both folders are excluded from Git. Optional environment variables `LIFEINVADER_DB` and `LIFEINVADER_MEDIA` choose alternate locations; an explicitly selected media folder must already exist.

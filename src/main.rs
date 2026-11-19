@@ -31,6 +31,7 @@ mod queue;
 mod scheduler;
 mod source;
 mod tools;
+mod thumbnail_cache;
 
 type Db = Arc<Mutex<Connection>>;
 #[derive(Clone)]
@@ -38,6 +39,7 @@ struct App {
     db: Db,
     media: PathBuf,
     log_dir: PathBuf,
+    cache_scope: String,
 }
 type ApiResult<T> = Result<T, (StatusCode, String)>;
 fn bad(e: impl std::fmt::Display) -> (StatusCode, String) {
@@ -248,6 +250,8 @@ fn init(db: &Connection) -> rusqlite::Result<()> {
             [],
         )?;
     }
+    #[cfg(target_os = "macos")]
+    thumbnail_cache::init(db)?;
     Ok(())
 }
 fn text_field(map: &HashMap<String, String>, key: &str) -> String {
@@ -988,8 +992,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."))
         .join("sync-logs");
-    let db = Connection::open(db_path)?;
+    let db = Connection::open(&db_path)?;
     init(&db)?;
+    let cache_scope = {
+        use std::hash::{Hash, Hasher};
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        std::fs::canonicalize(&db_path).unwrap_or(db_path.clone()).hash(&mut hash);
+        format!("{:016x}", hash.finish())
+    };
     db.execute("UPDATE source_date_audits SET state='interrupted',finished=datetime('now'),message='The app closed before the audit finished.' WHERE state='running'",[])?;
     db.execute("UPDATE source_sync_runs SET state='interrupted', finished=datetime('now') WHERE state='running'",[])?;
     db.execute("UPDATE source_queue SET state='interrupted',message='App closed before queued sync finished' WHERE state IN ('pending','starting','running')",[])?;
@@ -997,7 +1007,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         db: Arc::new(Mutex::new(db)),
         media: media.clone(),
         log_dir,
+        cache_scope,
     };
+    #[cfg(target_os = "macos")]
+    let _cache_worker = tokio::spawn(thumbnail_cache::worker(app.clone()));
     let scheduler = tokio::spawn(scheduler::worker(app.clone()));
     let auto_scheduler = tokio::spawn(auto_queue::worker(app.clone()));
     #[cfg(windows)]
@@ -1098,6 +1111,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/date-audit/cancel", post(date_audit::cancel))
         .route("/api/sources/{id}", get(source::overview))
+        .route("/api/sources/{id}/browse", get(source::interactive_overview))
         .route("/api/sources/{id}/status", get(source::status))
         .route("/api/sources/{id}/summary", get(source::summary))
         .route("/api/sources/{id}/file", get(source::file))

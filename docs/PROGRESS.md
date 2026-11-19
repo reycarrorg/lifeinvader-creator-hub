@@ -1,5 +1,19 @@
 # Project progress
 
+## 2026-11-19 — Shared source integration
+
+- Prepared the Mac source changes alongside the auto-queue handoff for shared review. Local macOS Rust tests passed serially (40); the default parallel run failed seven tests, tracked in ISSUES. The source-folder scan can remain busy when a Drive operation stalls; Windows validation for this revision remains outstanding. Local builds, runtime data, account records, and credentials are not included.
+
+## 2026-11-19 — Local macOS preparation
+
+- Diagnosed an observed live macOS hang: a source-summary request stayed in a blocking directory open beneath `gather` while unrelated local API requests timed out. The database guard is released before the scan. The configured source root was the user's Google Drive, but the process sample did not identify the blocked child path.
+- Prepared a separate candidate that moves source/profile overview scans to blocking workers and reserves separate single slots for background scans and explicitly opened sources or picker selections. Timed-out scans keep their slots until their filesystem calls actually finish. Dashboard counts are opt-in via **Load counts**; picker and library scans are bounded, and duplicate in-flight count requests are shared. A macOS test interposing two 12-second synthetic directory opens verified that a stalled dashboard scan does not stop opening and queueing synthetic Solo media, while unrelated APIs remain responsive. No user media was touched by the test.
+- Prepared a separate Apple Silicon checkout of PR #15 at `417771ec82afcc1687dd6807f04dae1fce4e7aab`; the Windows installation and existing local project/data were not changed. macOS now invokes `python3` for the existing photo helpers, while Windows retains `python`. Two smoke-test fixtures select the Windows compiler toolchain only on Windows.
+- Added a local launcher for the release build. A first launch creates a separate empty Mac database and does not connect Google Drive or transfer Windows profiles, queues, or posting history. The local gallery-dl tools are a separate copy of the existing runtime and are excluded from Git.
+- The launcher holds a temporary macOS system-sleep assertion tied to the Hub process, effective only on AC power. On AC, an isolated test verified the assertion and cleanup after both Hub and launcher exits, with saved power settings unchanged. Battery operation and lid-closed behavior were not physically tested; the launcher does not override lid closure or keep the display awake.
+- Apple Silicon debug and release builds, nine Rust tests, the JavaScript collector test, and 13 isolated smoke tests passed. The original TikTok photo helper saved two mocked slideshow images and skipped them on repeat. The launcher was tested with a disposable database and no source schedules, auto-queue rules, posts, or Drive root. The actual Hub detected the separate local gallery-dl installation; no live social download or post was made.
+- Windows-to-Mac data transfer, root/path remapping, cross-machine queue coordination, real-platform access, and the Brave launch workflow remain unverified. Copied databases must not be assumed to coordinate claims or download archives between computers.
+
 ## 2026-11-19 — Automatic queue and assistant handoff
 
 Review: https://github.com/reycarrorg/lifeinvader-creator-hub/pull/15.
@@ -122,3 +136,11 @@ Shared review: [PR #6](https://github.com/reycarrorg/lifeinvader-creator-hub/pul
 - Added a batch link box for individual TikTok, Instagram and YouTube posts, a non-syncing Solo Posts collection, a separate archive, progress, and original-account metadata where returned. The flow adapts the existing interactive script's downloader approach rather than launching its prompts.
 - Added a metadata-only source preview and a centered cutoff strip with all/before/after choices. Excluded IDs remain separate from the real download archive and are filtered from subsequent syncs; a before selection remains limited to selected IDs. Post order is platform-supplied and the center post is included.
 - Validated in an isolated database with a fake downloader and the test browser; no new real social content was downloaded. Restrictions: at most 1,500 preview posts, missing/unreliable ordering or thumbnails, no account login in the solo flow, separate solo archive, and selective photo sync blocked where it could bypass exclusions.
+
+
+## 2026-11-19 — macOS preview cache
+
+- Prepared automatic cleanup of newly registered generated previews in the OS per-user cache, with source/queue checks, bounded passes and shared process/file locking. Existing unregistered preview files are preserved. No Google Drive file is deleted or evicted by this work.
+- Synthetic Rust tests covered generation and registration, posted Solo Posts, cutoff fingerprint checks, queued/claimed/unknown and cloud-marker/symlink/hardlink protection, bounded sweeps, inspection timeout, unlocked database access during inspection, and cancellation after same-connection or external database changes. The original candidate was then installed on the Mac and used to request two previews; one registered and one did not. It has not been validated on Windows or exercised for six real hours.
+
+- Prepared a follow-up fix for unregistered preview handling: changed source metadata triggers a bounded fresh decode, occupied unregistered files are preserved while another cache slot is used, and registration failures emit path-free rate-limited messages. Synthetic tests cover metadata changes, persistent instability, a registration error, and cache reuse. The original live registration failure had not been logged and its cause is unconfirmed.

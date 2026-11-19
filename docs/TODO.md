@@ -76,6 +76,7 @@ Evidence so far includes isolated unit/smoke tests, a bounded live YouTube test-
 
 ### 5. Make sharing and releases easier
 
+- [ ] Validate a credential-safe Windows-to-Mac transfer and path remap on disposable fixtures, coordinate a single owner for queue/download writes, then separately verify a real handoff with the owner's data.
 - [ ] Provide a repeatable Windows build/release and a friend-friendly first-run setup with no preloaded personal profiles or paths. Validate database migration, backup and recovery before replacing an installed executable. macOS support needs separate verification.
 - [ ] Decide whether the collaborators need shared remote queues/data. The current server is localhost-only and unauthenticated; a GitHub fork shares code, not app data. Design authentication, authorization, backups and private networking before exposing any shared service.
 - [ ] Improve accessibility, small-window layout and usability without forcing either collaborator's personal workflow on the other. Track different ideas in branches or issues and agree on what belongs upstream.
@@ -89,3 +90,6 @@ Evidence so far includes isolated unit/smoke tests, a bounded live YouTube test-
 5. Never commit local data, media, downloader binaries, account exports, credentials, cookies, logs or archives. Use synthetic fixtures for routine tests; keep live-account tests and publishing explicit and narrowly scoped.
 
 Detailed references: [collaboration](COLLABORATION.md), [known issues](ISSUES.md), [progress](PROGRESS.md), [analytics research](ANALYTICS_RESEARCH.md), [posting research](POSTING_RESEARCH.md), and [browser analytics and publishing](BROWSER_ANALYTICS_AND_PUBLISHING.md).
+
+
+- [ ] Independently review the installed macOS generated-preview cache integration, especially unknown third-party mirror/backup cases, cross-machine queue state, and its timed runtime behavior; validate further on disposable media before relying on or expanding its use. Do not claim Google Drive file eviction from thumbnail cleanup.
