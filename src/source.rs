@@ -1163,9 +1163,9 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
                         root.join("download-archive.txt")
                     })
                     .arg("--output")
-                    .arg(&output)
-                    .arg("--")
-                    .arg(target);
+                    .arg(&output);
+                crate::tools::configure_ytdlp(&mut command);
+                command.arg("--").arg(target);
                 #[cfg(windows)]
                 {
                     use std::os::windows::process::CommandExt;
@@ -1203,9 +1203,9 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
                         "uploader",
                         "--print",
                         "channel_id",
-                        "--",
-                    ])
-                    .arg(seed);
+                    ]);
+                crate::tools::configure_ytdlp(&mut probe);
+                probe.arg("--").arg(seed);
                 #[cfg(windows)]
                 {
                     use std::os::windows::process::CommandExt;
@@ -1280,9 +1280,9 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
                         root.join("download-archive.txt")
                     })
                     .arg("--output")
-                    .arg(&output)
-                    .arg("--")
-                    .args(&fallback_links);
+                    .arg(&output);
+                crate::tools::configure_ytdlp(&mut retry);
+                retry.arg("--").args(&fallback_links);
                 #[cfg(windows)]
                 {
                     use std::os::windows::process::CommandExt;

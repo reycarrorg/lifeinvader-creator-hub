@@ -171,9 +171,9 @@ pub async fn start(
                         "pl_thumbnail:",
                         "--output",
                     ])
-                    .arg(&output)
-                    .arg("--")
-                    .arg(url);
+                    .arg(&output);
+                    crate::tools::configure_ytdlp(&mut cmd);
+                    cmd.arg("--").arg(url);
                     ok = run(&mut cmd, &log)? && ok;
                 }
                 if !photo {
@@ -198,6 +198,7 @@ pub async fn start(
                     if is_ig || is_tiktok {
                         cmd.args(["--match-filters", "vcodec != none"]);
                     }
+                    crate::tools::configure_ytdlp(&mut cmd);
                     cmd.arg("--").arg(url);
                     ok = run(&mut cmd, &log)? && ok;
                 }

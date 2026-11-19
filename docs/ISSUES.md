@@ -1,5 +1,9 @@
 # Known issues and planned work
 
+## Open — Instagram download tool validation
+
+The app now passes its discovered FFmpeg location to yt-dlp. Offline detection and synthetic processing worked with FFmpeg and FFprobe 7.1; the owner’s next real Instagram run has not yet been verified. Archives still skip already-recorded videos, so restarting a batch does not force a higher-quality re-download. Other platform restrictions and photo support remain separate issues.
+
 ## Open — Quick editor coverage
 
 The first editor supports centered aspect presets, one contiguous trim, mute and one uploaded PNG/JPEG overlay at 50% opacity. It does not provide arbitrary crop positioning, multi-cut timelines, built-in branding, overlay placement, cancellation or edit-project history. Encoding depends on FFmpeg and codec support; large inputs can take time and use storage. An edited copy is separate from the original, and publishing is not automated. Validate additional formats and long or rotated media before treating this as a full editor.

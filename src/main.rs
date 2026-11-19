@@ -29,6 +29,7 @@ mod date_audit;
 mod queue;
 mod scheduler;
 mod source;
+mod tools;
 
 type Db = Arc<Mutex<Connection>>;
 #[derive(Clone)]
