@@ -69,9 +69,9 @@ pub async fn preview(
             "0",
             "--playlist-end",
             "1501",
-            "--",
-        ])
-        .arg(url);
+        ]);
+        crate::tools::configure_ytdlp(&mut cmd);
+        cmd.arg("--").arg(url);
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;

@@ -362,11 +362,9 @@ fn lookup(app: &App, run: i64, tool: &Path, url: &str, id: &str) -> Option<Strin
         "0",
         "--print",
         "%(id)s\t%(upload_date)s\t%(timestamp)s",
-        "--",
-        url,
-    ])
-    .stdout(Stdio::from(out))
-    .stderr(Stdio::null());
+    ]);
+    crate::tools::configure_ytdlp(&mut cmd);
+    cmd.args(["--",url]).stdout(Stdio::from(out)).stderr(Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

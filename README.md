@@ -49,7 +49,7 @@ The app opens its own Edge window at `127.0.0.1:3847`. Closing that window ends 
 Downloaded utilities and media are intentionally excluded from the repository. To enable sync and thumbnails:
 
 1. Download the Windows executable for [yt-dlp](https://github.com/yt-dlp/yt-dlp/releases) from its official releases and save it as `tools/yt-dlp.exe`, or select its full path under **Sources → Source folders**.
-2. Download an FFmpeg build from a source listed on the [FFmpeg download page](https://ffmpeg.org/download.html) and save its executable as `tools/ffmpeg.exe`. It creates thumbnail images from local videos. The browser may provide a fallback when FFmpeg is unavailable.
+2. Download an FFmpeg build from a source listed on the [FFmpeg download page](https://ffmpeg.org/download.html) and save both `ffmpeg.exe` and `ffprobe.exe` in `tools/`. Lifeinvader passes the discovered FFmpeg path to yt-dlp for source and individual-post downloads; it also uses FFmpeg for local thumbnails and edits. `LIFEINVADER_FFMPEG` can point to a different executable or containing folder.
 3. For TikTok photo posts, install Python 3. The included `helpers/tiktok_photos.py` is detected automatically when started from the project folder; its path can also be selected in **Source folders**.
 4. For Instagram photo posts, install the helper into the project folder:
 
