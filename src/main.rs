@@ -1008,6 +1008,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/categories/appearance", post(categories::appearance))
         .route("/api/categories/photo", post(categories::photo))
         .route("/api/categories/members", post(categories::set_members))
+        .route("/api/categories/update", post(categories::update))
         .route("/api/profiles/{id}", post(edit_profile))
         .route("/api/profiles/{id}/photo", post(upload_avatar))
         .route(
@@ -1095,6 +1096,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/editor/render", post(editor::render))
         .route("/api/source-batches", post(scheduler::enqueue_batch))
         .route("/api/sources/{id}/dead", post(scheduler::set_dead))
+        .route("/api/sources/{id}/folder", get(source::source_folder_location).post(source::open_source_folder))
+        .route("/api/profiles/{id}/folder", get(source::profile_folder_location).post(source::open_profile_folder))
         .route("/api/settings", post(settings))
         .route("/api/items/{id}/status", post(update))
         .route("/api/items/{id}/metadata", post(metadata))

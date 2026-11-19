@@ -597,6 +597,20 @@ fn mark_seen_for(app: App, id: i64, role: &str) -> ApiResult<StatusCode> {
     .map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
+fn account_folders(app:&App,id:i64,role:&str)->ApiResult<Vec<PathBuf>> {
+ let db=app.db.lock().map_err(internal)?;let (_,_,folder)=account_profile(&db,id,role)?;let root=checked_root(&config(&db).map_err(internal)?)?;Ok(allowed_dirs(&root,&folder))
+}
+fn display_folder(path:&Path)->String {let text=path.to_string_lossy();if let Some(rest)=text.strip_prefix(r"\\?\UNC\"){format!(r"\\{}",rest)}else{text.strip_prefix(r"\\?\").unwrap_or(&text).to_string()}}
+fn folder_response(app:&App,id:i64,role:&str)->ApiResult<Json<serde_json::Value>> {let paths=account_folders(app,id,role)?;Ok(Json(serde_json::json!({"paths":paths.iter().map(|p|display_folder(p)).collect::<Vec<_>>() }))) }
+pub async fn source_folder_location(State(app):State<App>,AxumPath(id):AxumPath<i64>)->ApiResult<Json<serde_json::Value>>{folder_response(&app,id,"source")}
+pub async fn profile_folder_location(State(app):State<App>,AxumPath(id):AxumPath<i64>)->ApiResult<Json<serde_json::Value>>{folder_response(&app,id,"destination")}
+fn show_folder(app:&App,id:i64,role:&str)->ApiResult<StatusCode>{let paths=account_folders(app,id,role)?;let path=paths.first().ok_or_else(||(StatusCode::NOT_FOUND,"This account folder does not exist yet. Check Folder settings or sync it first.".into()))?;
+ #[cfg(windows)] let mut command=std::process::Command::new("explorer.exe");
+ #[cfg(target_os="macos")] let mut command=std::process::Command::new("open");
+ #[cfg(all(not(windows),not(target_os="macos")))] let mut command=std::process::Command::new("xdg-open");
+ command.arg(display_folder(path)).spawn().map_err(|_|bad("Could not open the folder in your file manager."))?;Ok(StatusCode::NO_CONTENT)}
+pub async fn open_source_folder(State(app):State<App>,AxumPath(id):AxumPath<i64>)->ApiResult<StatusCode>{show_folder(&app,id,"source")}
+pub async fn open_profile_folder(State(app):State<App>,AxumPath(id):AxumPath<i64>)->ApiResult<StatusCode>{show_folder(&app,id,"destination")}
 pub async fn overview(
     State(app): State<App>,
     AxumPath(id): AxumPath<i64>,
@@ -652,7 +666,8 @@ fn overview_for(app: App, id: i64, role: &str) -> ApiResult<Json<serde_json::Val
     for f in &mut files {
         if let Some((downloaded, seen)) = records.get(&f.path) {
             f.downloaded_at = Some(*downloaded);
-            f.is_new = !*seen;
+            let now=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
+            f.is_new = !*seen && *downloaded > now-3600;
         }
     }
     files.sort_by(|a, b| {
