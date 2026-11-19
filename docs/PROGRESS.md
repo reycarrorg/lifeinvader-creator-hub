@@ -2,6 +2,8 @@
 
 ## 2026-11-18 — Account and category context menus
 
+Review: https://github.com/reycarrorg/lifeinvader-creator-hub/pull/10 (stacked on the category-navigation branch).
+
 - Profile and source tiles offer right-click and keyboard menus; category tiles offer open and member management. Account pages also have an options button.
 - Removing an account archives it from the workspace without deleting files, archives, categories, queues or history. Active syncs prevent removal; pending sync jobs are cancelled. Scheduled sync and Brave refresh are disabled and remain off after restoration. Removed accounts can be restored in their own section.
 - Tested with disposable data in the browser and a dedicated archive smoke test, including queue references, category membership and in-progress sync guards. No real account or media was removed.
