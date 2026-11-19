@@ -27,6 +27,9 @@ Evidence so far includes isolated unit/smoke tests, a bounded live YouTube test-
 
 ### 1. Make the existing experience dependable
 
+- [x] Allow category renaming while preserving membership and category appearance, improve the multi-category layout, show a one-hour new-media countdown, and open linked account folders.
+- [x] Provide a clearer source picker with filtering, original details and playable previews before queueing; validate real-platform coverage separately.
+
 - [x] Show source sync states and 24-hour tracked additions, add user-set dead status, restrict Sync all to auto-enabled active sources, and expose category icon/color/image settings. Validate behavior against disposable data.
 - [ ] Validate the new quick editor with a wider range of formats, portrait/landscape videos and audio on collaborators’ machines; add interactive crop positioning, richer trimming and saved logo presets if needed. The current editor uses centered crop presets and an uploaded overlay.
 

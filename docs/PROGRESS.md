@@ -1,5 +1,12 @@
 # Project progress
 
+## 2026-11-18 — Category management and source picker preview
+
+- Category Manage now updates the name and membership together, preserves appearance and archived members, and rejects duplicate names. Category cards wrap into readable rows.
+- New-media highlights expire one hour after the Hub recorded the download, unless marked seen earlier; the tile border and label show the remaining time. The separate 24-hour activity count is unchanged. Account views show and can open their existing linked folders.
+- Reworked the post picker with concise primary and optional filters, source-aware choices, original details, and video/photo preview before queueing. Already queued or recorded items are excluded for the current posting profile.
+- Checked renaming, hidden membership and appearance, expiration and folder path discovery with disposable data. Browser checks covered multi-category layout, renaming, highlight countdown, media preview and queueing. No live sync or publication was performed.
+
 ## 2026-11-18 — Source status, categories and quick edits
 
 Review: https://github.com/reycarrorg/lifeinvader-creator-hub/pull/11 (stacked on the account context-menu branch).

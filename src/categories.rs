@@ -60,6 +60,24 @@ pub async fn create(State(app): State<App>, Json(input): Json<Input>) -> ApiResu
     .map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
+#[derive(Deserialize)]
+pub struct UpdateCategory { role:String, name:String, new_name:String, profile_ids:Vec<i64> }
+pub async fn update(State(app):State<App>,Json(input):Json<UpdateCategory>)->ApiResult<StatusCode>{
+ let old=validate(&input.role,&input.name)?;let new=validate(&input.role,&input.new_name)?;
+ let selected:HashSet<i64>=input.profile_ids.iter().copied().collect();if selected.len()>1000{return Err(bad("Too many profiles."));}
+ let mut db=app.db.lock().map_err(internal)?;let tx=db.transaction().map_err(internal)?;
+ let explicit:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM categories WHERE role=? AND name=?)",params![input.role,old],|r|r.get(0)).map_err(internal)?;
+ let rows:Vec<(i64,bool,Vec<String>)>={let mut stmt=tx.prepare("SELECT id,archived,tags FROM profiles WHERE role=?").map_err(internal)?;let raw=stmt.query_map([&input.role],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,bool>(1)?,r.get::<_,String>(2)?))).map_err(internal)?.collect::<rusqlite::Result<Vec<_>>>().map_err(internal)?;raw.into_iter().map(|(id,hidden,tags)|Ok((id,hidden,serde_json::from_str::<Vec<String>>(&tags).map_err(internal)?))).collect::<ApiResult<Vec<_>>>()?};
+ if selected.iter().any(|id|!rows.iter().any(|r|r.0==*id&&!r.1)){return Err(bad("A selected account is not in this section."));}
+ let implicit=rows.iter().any(|r|r.2.iter().any(|t|t.eq_ignore_ascii_case(&old)));
+ if !explicit&&!implicit{return Err((StatusCode::NOT_FOUND,"Category no longer exists.".into()));}
+ if !old.eq_ignore_ascii_case(&new){let other:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM categories WHERE role=? AND name=?)",params![input.role,new],|r|r.get(0)).map_err(internal)?;if other||rows.iter().any(|r|r.2.iter().any(|t|t.eq_ignore_ascii_case(&new))){return Err((StatusCode::CONFLICT,"A category with that name already exists in this section.".into()));}}
+ for (id,hidden,mut tags) in rows {let mut changed=false;for tag in &mut tags {if tag.eq_ignore_ascii_case(&old){*tag=new.clone();changed=true;}}
+  if !hidden {let has=tags.iter().any(|t|t.eq_ignore_ascii_case(&new));if selected.contains(&id)&&!has{if tags.len()>=20{return Err(bad("An account already has 20 categories."));}tags.push(new.clone());changed=true;}else if !selected.contains(&id)&&has{tags.retain(|t|!t.eq_ignore_ascii_case(&new));changed=true;}}
+  if changed {tx.execute("UPDATE profiles SET tags=? WHERE id=?",params![serde_json::to_string(&tags).map_err(internal)?,id]).map_err(internal)?;}}
+ if explicit {tx.execute("UPDATE categories SET name=? WHERE role=? AND name=?",params![new,input.role,old]).map_err(internal)?;}else{tx.execute("INSERT INTO categories(role,name) VALUES(?,?)",params![input.role,new]).map_err(internal)?;}
+ tx.commit().map_err(internal)?;Ok(StatusCode::NO_CONTENT)
+}
 pub async fn set_members(
     State(app): State<App>,
     Json(input): Json<Membership>,
