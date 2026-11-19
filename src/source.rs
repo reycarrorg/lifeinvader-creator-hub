@@ -40,6 +40,7 @@ pub(crate) struct SourceFile {
     pub(crate) original_url: Option<String>,
     pub(crate) original_account: Option<String>,
     pub(crate) original_channel_url: Option<String>,
+    pub(crate) original_platform: Option<String>,
     pub(crate) duration_seconds: Option<f64>,
     asset_id: Option<String>,
     downloaded_at: Option<i64>,
@@ -503,7 +504,7 @@ pub(crate) fn gather(
         };
         let (posted_date, post_id, asset_id, title, description, original_url, duration_seconds) =
             post_metadata(&path).unwrap_or_default();
-        let (original_account, original_channel_url, _) = original_account(&path);
+        let (original_account, original_channel_url, original_platform) = original_account(&path);
         files.push(SourceFile {
             path: relative.replace('\\', "/"),
             name: name.to_string(),
@@ -528,6 +529,7 @@ pub(crate) fn gather(
             original_url,
             original_account,
             original_channel_url,
+            original_platform,
             duration_seconds,
             asset_id,
             downloaded_at: None,

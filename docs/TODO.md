@@ -27,6 +27,8 @@ Evidence so far includes isolated unit/smoke tests, a bounded live YouTube test-
 
 ### 1. Make the existing experience dependable
 
+- [x] Include Solo Posts in the source picker and library with original account/platform where available, and make quick-edit controls optional. Verify remaining missing metadata and carousel behavior separately.
+
 - [x] Resolve the bundled or configured FFmpeg executable for yt-dlp calls, including Instagram individual posts and source sync; test discovery and arguments using disposable data. Live platform retry remains to be confirmed.
 
 - [x] Allow category renaming while preserving membership and category appearance, improve the multi-category layout, show a one-hour new-media countdown, and open linked account folders.

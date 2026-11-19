@@ -9,10 +9,12 @@ A local desktop-style content hub built with Rust, SQLite, and a browser interfa
 - New-download highlights expire one hour after the Hub records a download, with a visible countdown; marking media seen clears them earlier. Source and profile views offer **Open folder** as well as folder settings.
 - Source sync with a shared download archive, optional scheduled sync while the app is open, progress logs, local previews, and a separate date audit. Sync all includes only sources with auto sync enabled that have not been marked dead. Right-click a source to mark it dead or active. Tile counts show tracked downloads from the last 24 hours, even after marking them seen.
 - Paste individual TikTok, Instagram, or YouTube post links under **Sources → Post links** to download into a separate, non-syncing Solo Posts collection. It uses the source folder and a separate archive like the existing solo-post script; original account details are shown when metadata supplies them.
+- Choose **Solo Posts · individual links** in the source or category filter of the source picker or content library. Matching video thumbnails are omitted from those choices, while standalone photos remain available. Original account, platform and post details depend on saved metadata; queue entries refer to the local files.
 - When adding a source, preview up to 1,500 posts and choose all, or one side of a selected post. The center post is included. Skipped post IDs are recorded separately from the real archive and excluded from later video syncs; the earlier-side selection remains limited to the selected IDs. **Choose posts** on the source lets you revisit the selection.
 - Profile sync for accessible TikTok, Instagram and YouTube videos and, when the optional photo tools are installed, photo posts. Profile downloads have their own folders and archives.
 - Category dashboards let you choose an icon and color or upload a PNG/JPEG for the category. The picture stays in local media storage.
 - Edit source media or your own downloaded media with centered crop presets, start/end trims, optional mute, and an optional uploaded PNG/JPEG logo at 50% opacity. FFmpeg creates a separate file under the source folder. Source edits can be queued for review; the queue keeps the original post identity and description and references the edited copy. Nothing is published automatically. The editor needs FFmpeg (`tools/ffmpeg.exe` on Windows, `LIFEINVADER_FFMPEG`, or a system PATH installation).
+- Quick editing is optional. In **Settings**, turn off **Show quick editor** to hide media edit buttons; original media can still be previewed and queued. The preference is stored in the app browser and can be changed again at any time.
 - Profile dashboards browse downloaded media across source accounts, with category, source, type, search and length filters and direct queueing. Older local videos can be scanned for length from the library; the scan reads the existing files and does not download them again.
 - A manual content library with per-profile claim and posting status.
 - A local all-profile AI handoff and activity history for the posting queue, with target account, source context, planned time, file references and manually recorded outcomes. Copy or download it from a profile's queue. It does not publish posts; see [computer-use handoff](docs/COMPUTER_USE_HANDOFF.md).
@@ -95,6 +97,7 @@ python tests/bridge_smoke.py
 python tests/bridge_sync_smoke.py
 node tests/bridge_collector_test.js
 python tests/queue_smoke.py
+python tests/solo_picker_smoke.py
 python tests/handoff_smoke.py
 python tests/date_audit_smoke.py
 python tests/smoke.py
