@@ -86,7 +86,7 @@ fn display_path(path: &std::path::Path) -> String {
 pub async fn get(State(app): State<App>) -> ApiResult<Json<serde_json::Value>> {
     let profiles = {
         let db = app.db.lock().map_err(internal)?;
-        let mut stmt=db.prepare("SELECT id,name,platform,url,tags FROM profiles WHERE role='destination' ORDER BY id").map_err(internal)?;
+        let mut stmt=db.prepare("SELECT id,name,platform,url,tags FROM profiles WHERE role='destination' AND archived=0 ORDER BY id").map_err(internal)?;
         let rows = stmt
             .query_map([], |r| {
                 Ok((

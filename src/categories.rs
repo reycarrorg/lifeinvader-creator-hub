@@ -67,7 +67,7 @@ pub async fn set_members(
     let tx = db.transaction().map_err(internal)?;
     let rows: Vec<(i64, String)> = {
         let mut stmt = tx
-            .prepare("SELECT id,tags FROM profiles WHERE role=?")
+            .prepare("SELECT id,tags FROM profiles WHERE role=? AND archived=0")
             .map_err(internal)?;
         let rows = stmt
             .query_map([&input.role], |r| Ok((r.get(0)?, r.get(1)?)))

@@ -174,6 +174,12 @@ fn init(db: &Connection) -> rusqlite::Result<()> {
             [],
         )?;
     }
+    let has_archived = {
+        let mut columns = db.prepare("PRAGMA table_info(profiles)")?;
+        let names = columns.query_map([], |r| r.get::<_, String>(1))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        names.iter().any(|name| name == "archived")
+    };
+    if !has_archived { db.execute("ALTER TABLE profiles ADD COLUMN archived INTEGER NOT NULL DEFAULT 0", [])?; }
     db.execute_batch("CREATE TABLE IF NOT EXISTS source_sync_runs (id INTEGER PRIMARY KEY, profile_id INTEGER NOT NULL REFERENCES profiles(id), started TEXT NOT NULL DEFAULT (datetime('now')), finished TEXT, state TEXT NOT NULL, log_file TEXT NOT NULL, exit_code INTEGER);")?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS source_schedules (profile_id INTEGER PRIMARY KEY REFERENCES profiles(id), interval_seconds INTEGER NOT NULL, enabled INTEGER NOT NULL, next_run INTEGER);
     CREATE TABLE IF NOT EXISTS source_queue (id INTEGER PRIMARY KEY, batch_id TEXT NOT NULL, profile_id INTEGER NOT NULL REFERENCES profiles(id), origin TEXT NOT NULL, state TEXT NOT NULL, run_id INTEGER, message TEXT NOT NULL DEFAULT '', created INTEGER NOT NULL);
@@ -313,11 +319,12 @@ fn items(db: &Connection, cutoff: &str) -> rusqlite::Result<Vec<Media>> {
     }
     Ok(all)
 }
-fn profiles(db: &Connection) -> rusqlite::Result<Vec<Profile>> {
+fn profiles(db: &Connection) -> rusqlite::Result<Vec<Profile>> { profiles_by_visibility(db, false) }
+fn profiles_by_visibility(db: &Connection, archived: bool) -> rusqlite::Result<Vec<Profile>> {
     let mut stmt = db.prepare(
-        "SELECT id,name,platform,url,role,tags,avatar_path,source_folder FROM profiles ORDER BY id",
+        "SELECT id,name,platform,url,role,tags,avatar_path,source_folder FROM profiles WHERE archived=? ORDER BY id",
     )?;
-    stmt.query_map([], |r| {
+    stmt.query_map([archived], |r| {
         let raw: String = r.get(5)?;
         Ok(Profile {
             id: r.get(0)?,
@@ -338,6 +345,28 @@ fn profiles(db: &Connection) -> rusqlite::Result<Vec<Profile>> {
         })
     })?
     .collect()
+}
+#[derive(Deserialize)]
+struct ArchiveInput { archived: bool }
+async fn hidden_profiles(State(app): State<App>) -> ApiResult<Json<Vec<Profile>>> {
+    let db = app.db.lock().map_err(internal)?;
+    Ok(Json(profiles_by_visibility(&db, true).map_err(internal)?))
+}
+async fn archive_profile(State(app): State<App>, AxumPath(id): AxumPath<i64>, Json(input): Json<ArchiveInput>) -> ApiResult<StatusCode> {
+    let mut db = app.db.lock().map_err(internal)?;
+    let tx = db.transaction().map_err(internal)?;
+    let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?)", [id], |r| r.get(0)).map_err(internal)?;
+    if !exists { return Err((StatusCode::NOT_FOUND, "Account not found.".into())); }
+    if input.archived {
+        let busy: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM source_sync_runs WHERE profile_id=? AND state='running') OR EXISTS(SELECT 1 FROM source_queue WHERE profile_id=? AND state IN ('starting','running')) OR EXISTS(SELECT 1 FROM analytics_bridge WHERE profile_id=? AND lease_until>unixepoch())", params![id,id,id], |r| r.get(0)).map_err(internal)?;
+        if busy { return Err((StatusCode::CONFLICT, "This account has a sync or refresh in progress. Try again after it finishes.".into())); }
+        tx.execute("UPDATE source_schedules SET enabled=0,next_run=NULL WHERE profile_id=?", [id]).map_err(internal)?;
+        tx.execute("UPDATE analytics_bridge SET enabled=0,next_run=NULL WHERE profile_id=?", [id]).map_err(internal)?;
+        tx.execute("UPDATE source_queue SET state='cancelled',message='Account removed from workspace' WHERE profile_id=? AND state='pending'", [id]).map_err(internal)?;
+    }
+    tx.execute("UPDATE profiles SET archived=? WHERE id=?", params![input.archived,id]).map_err(internal)?;
+    tx.commit().map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 async fn upload_avatar(
     State(app): State<App>,
@@ -443,7 +472,7 @@ async fn add_profile(
     {
         return Err((
             StatusCode::CONFLICT,
-            "That profile link is already added.".into(),
+            "That profile link is already added. Check Removed accounts if you previously removed it.".into(),
         ));
     }
     let tx = db.transaction().map_err(internal)?;
@@ -965,6 +994,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/items", get(list).post(import))
         .route("/api/posting-handoff", get(handoff::get))
         .route("/api/profiles", post(add_profile))
+        .route("/api/profiles/hidden", get(hidden_profiles))
+        .route("/api/profiles/{id}/archive", post(archive_profile))
         .route("/api/categories", post(categories::create))
         .route("/api/categories/members", post(categories::set_members))
         .route("/api/profiles/{id}", post(edit_profile))

@@ -4,7 +4,7 @@ A local desktop-style content hub built with Rust, SQLite, and a browser interfa
 
 ## What works
 
-- Profile and source views each include their own categories and category dashboards. Paste a supported account link to fill its name and platform; photos and categories can be set under More options.
+- Profile and source views each include their own categories and category dashboards. Right-click a tile for account or category options; account removal is reversible from Removed accounts and keeps files and history. Paste a supported account link to fill its name and platform; photos and categories can be set under More options.
 - Profile analytics for manual snapshots, template CSV imports and optional Brave-based refresh of visible TikTok/Instagram profile counts, with offline charts. Private platform Insights are not connected. See [analytics research and roadmap](docs/ANALYTICS_RESEARCH.md).
 - Source sync with a shared download archive, per-source Sync all exclusions, optional scheduled sync while the app is open, progress logs, local video previews, and a separate date audit.
 - Paste individual TikTok, Instagram, or YouTube post links under **Sources → Post links** to download into a separate, non-syncing Solo Posts collection. It uses the source folder and a separate archive like the existing solo-post script; original account details are shown when metadata supplies them.
