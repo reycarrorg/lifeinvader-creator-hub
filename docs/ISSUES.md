@@ -1,5 +1,9 @@
 # Known issues and planned work
 
+## Open — Solo Post metadata and picker coverage
+
+The picker and library hide an image only when its filename stem and post ID match a Solo video; other image files remain selectable, including possible unmatched thumbnails. Original account, platform and dates depend on the saved metadata; missing fields can remain unknown. Solo downloads use a separate archive and can duplicate downloads from other source archives. Multi-asset carousels are not yet represented as one post. The quick-editor visibility setting is stored in browser-local storage, so it may differ between browsers.
+
 ## Open — Instagram download tool validation
 
 The app now passes its discovered FFmpeg location to yt-dlp. Offline detection and synthetic processing worked with FFmpeg and FFprobe 7.1; the owner’s next real Instagram run has not yet been verified. Archives still skip already-recorded videos, so restarting a batch does not force a higher-quality re-download. Other platform restrictions and photo support remain separate issues.

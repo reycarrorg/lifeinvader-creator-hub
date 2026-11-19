@@ -40,5 +40,3 @@ pub async fn render(State(app):State<App>,mut form:Multipart)->ApiResult<Json<se
  let db=app.db.lock().map_err(internal)?;db.execute("INSERT INTO media_edits(id,profile_id,role,root,original_path,edited_path) VALUES(?,?,?,?,?,?)",params![id,input.profile_id,input.role,root.to_string_lossy().as_ref(),input.path,relative]).map_err(internal)?;
  Ok(Json(serde_json::json!({"id":id,"path":relative,"role":input.role,"profile_id":input.profile_id})))
 }
-
-

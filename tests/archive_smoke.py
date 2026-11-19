@@ -41,4 +41,3 @@ with tempfile.TemporaryDirectory(prefix='lifeinvader-remove-') as tmp:
         print('PASS: removable and restorable accounts, schedules disabled, category, queue and media preserved, running sync guarded')
     finally:
         proc.terminate();proc.wait(timeout=5)
-

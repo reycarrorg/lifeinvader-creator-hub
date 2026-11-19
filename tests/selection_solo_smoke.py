@@ -50,6 +50,6 @@ with tempfile.TemporaryDirectory(prefix='lifeinvader-selection-') as tmp:
   assert json_post(f"/api/sources/{solo['id']}/sync",{'include_photos':False})[0]==400
   assert json_post(f"/api/sources/{solo['id']}/schedule",{'enabled':True,'interval_seconds':3600})[0]==400
   data=json.loads(request(f"/api/sources/{solo['id']}")[1]);assert data['files'],data
-  assert data['files'][0]['original_account']=='creator'
+  assert data['files'][0]['original_account']=='creator' and data['files'][0]['original_platform']=='tiktok'
   print('PASS: selection guards, archive exclusions across syncs, separate solo posts and metadata')
  finally:p.terminate();p.wait(timeout=5)

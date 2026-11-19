@@ -1,5 +1,13 @@
 # Project progress
 
+## 2026-11-18 — Solo Posts picker and optional editor
+
+Review: https://github.com/reycarrorg/lifeinvader-creator-hub/pull/14 (stacked on the FFmpeg fix branch).
+
+- Added explicit Solo Posts choices to source and category filters in both the picker and content library. Where sidecar metadata is available, show the original platform and account and use the platform in queue duplicate checks. Suppress a Solo image from these choices when its filename stem and post ID match a video; standalone images remain available and no files are removed.
+- Added a browser-local setting to hide quick-edit controls. Users can continue previewing and queueing original media, and may re-enable editing later.
+- An isolated browser walkthrough verified both Solo filters, video and photo previews, exclusion of a matching video thumbnail, direct queueing and the editor setting. Before merging the stacked PRs, all nine Rust unit tests, the browser collector test, and 20 isolated Python smoke tests passed. The release also started against a disposable copy of an existing database and listed its Solo media. No live downloads or posts were made.
+
 ## 2026-11-18 — FFmpeg discovery for downloads
 
 Review: https://github.com/reycarrorg/lifeinvader-creator-hub/pull/13 (stacked on the category/picker branch).
