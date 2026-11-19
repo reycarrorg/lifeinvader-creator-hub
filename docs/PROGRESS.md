@@ -114,3 +114,7 @@ Shared review: [PR #6](https://github.com/reycarrorg/lifeinvader-creator-hub/pul
 - Added a batch link box for individual TikTok, Instagram and YouTube posts, a non-syncing Solo Posts collection, a separate archive, progress, and original-account metadata where returned. The flow adapts the existing interactive script's downloader approach rather than launching its prompts.
 - Added a metadata-only source preview and a centered cutoff strip with all/before/after choices. Excluded IDs remain separate from the real download archive and are filtered from subsequent syncs; a before selection remains limited to selected IDs. Post order is platform-supplied and the center post is included.
 - Validated in an isolated database with a fake downloader and the test browser; no new real social content was downloaded. Restrictions: at most 1,500 preview posts, missing/unreliable ordering or thumbnails, no account login in the solo flow, separate solo archive, and selective photo sync blocked where it could bypass exclusions.
+
+
+## Adapted Stage 2 Controller integration
+Controller/review state, read-only worker evidence, and owner-authorized registry are available as isolated app functionality. Live worker/owner/OPS/publishing adapters default unavailable. Stage 1 runtime/transport/routes excluded. See STAGE2_INTEGRATION.md for dependency extraction, validation and limitations.

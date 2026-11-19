@@ -65,3 +65,7 @@ The date audit can use existing sidecars, verify missing dates online where supp
 Related work: [PR #6](https://github.com/reycarrorg/lifeinvader-creator-hub/pull/6).
 
 Metadata-only previews depend on the provider and can fail, omit thumbnails or dates, or return a nonchronological/incomplete feed. Selection currently stops at 1,500 posts and includes the center post. Filtering preserves skipped IDs outside the downloaded archive; later unseen posts can be included for an after selection. A before selection stays limited to selected IDs. Photo sync is blocked where it could bypass the selection. Solo links use the original script's separate folder/archive, so duplicates across other source archives are not detected. Real-platform end-to-end validation, login support, retry/cancel controls, and large-account pagination remain open.
+
+
+## Adapted Stage 2 Controller integration
+Controller/review state, read-only worker evidence, and owner-authorized registry are available as isolated app functionality. Live worker/owner/OPS/publishing adapters default unavailable. Stage 1 runtime/transport/routes excluded. See STAGE2_INTEGRATION.md for dependency extraction, validation and limitations.

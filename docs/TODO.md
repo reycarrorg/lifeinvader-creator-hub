@@ -87,3 +87,7 @@ Evidence so far includes isolated unit/smoke tests, a bounded live YouTube test-
 5. Never commit local data, media, downloader binaries, account exports, credentials, cookies, logs or archives. Use synthetic fixtures for routine tests; keep live-account tests and publishing explicit and narrowly scoped.
 
 Detailed references: [collaboration](COLLABORATION.md), [known issues](ISSUES.md), [progress](PROGRESS.md), [analytics research](ANALYTICS_RESEARCH.md), [posting research](POSTING_RESEARCH.md), and [browser analytics and publishing](BROWSER_ANALYTICS_AND_PUBLISHING.md).
+
+
+## Adapted Stage 2 Controller integration
+Controller/review state, read-only worker evidence, and owner-authorized registry are available as isolated app functionality. Live worker/owner/OPS/publishing adapters default unavailable. Stage 1 runtime/transport/routes excluded. See STAGE2_INTEGRATION.md for dependency extraction, validation and limitations.
