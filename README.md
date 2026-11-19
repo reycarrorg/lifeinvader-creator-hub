@@ -11,6 +11,7 @@ A local desktop-style content hub built with Rust, SQLite, and a browser interfa
 - When adding a source, preview up to 1,500 posts and choose all, or one side of a selected post. The center post is included. Skipped post IDs are recorded separately from the real archive and excluded from later video syncs; the earlier-side selection remains limited to the selected IDs. **Choose posts** on the source lets you revisit the selection.
 - Profile sync for accessible TikTok, Instagram and YouTube videos and, when the optional photo tools are installed, photo posts. Profile downloads have their own folders and archives.
 - A manual content library with per-profile claim and posting status.
+- A local all-profile AI handoff and activity history for the posting queue, with target account, source context, planned time, file references and manually recorded outcomes. Copy or download it from a profile's queue. It does not publish posts; see [computer-use handoff](docs/COMPUTER_USE_HANDOFF.md).
 - Shuffle downloaded source photos and videos using source/category, media type, available duration, original date and text filters; queue original file references for a profile and manually record status. Planned times do not automatically post. See [posting research and roadmap](docs/POSTING_RESEARCH.md). A reported post is a manual record; the app does not publish posts.
 
 A fresh database starts without accounts or source folders. Add your own accounts and choose your own library folder in the app. Profiles and downloaded files are local to each installation; a GitHub fork does not share the app's database or media.
@@ -88,6 +89,7 @@ python tests/bridge_smoke.py
 python tests/bridge_sync_smoke.py
 node tests/bridge_collector_test.js
 python tests/queue_smoke.py
+python tests/handoff_smoke.py
 python tests/date_audit_smoke.py
 python tests/smoke.py
 python tests/categories_smoke.py

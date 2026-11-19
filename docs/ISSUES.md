@@ -1,5 +1,11 @@
 # Known issues and planned work
 
+## Open — Computer-use posting and concurrency
+
+Related work: [PR #7](https://github.com/reycarrorg/lifeinvader-creator-hub/pull/7).
+
+The queue exposes a local JSON handoff and durable activity notes. Scheduled times do not start an action, and `posted` remains a manual report rather than independent platform verification. Revision checks reject stale updates when used, but do not lock uploads; concurrent operators can still post duplicates. Add leases, provider reconciliation, durable retries, timezone-aware scheduling and end-to-end tests before unattended publishing. Older items may lack activity history from before logging was added.
+
 This file tracks durable context in Git. Add reproduction steps, evidence, status, and links to GitHub issues or pull requests when available. Do not add private credentials, cookies, account exports, or personal media.
 
 ## Open — Social platform access

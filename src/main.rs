@@ -18,6 +18,7 @@ use std::{
 use tower_http::services::ServeDir;
 use uuid::Uuid;
 mod analytics;
+mod handoff;
 mod solo;
 mod selection;
 mod bridge;
@@ -185,6 +186,7 @@ fn init(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS profile_download_files (profile_id INTEGER NOT NULL REFERENCES profiles(id), root TEXT NOT NULL, platform TEXT NOT NULL, post_id TEXT NOT NULL, asset_id TEXT NOT NULL, path TEXT NOT NULL, PRIMARY KEY(profile_id,root,platform,asset_id));")?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS analytics_snapshots (profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, date TEXT NOT NULL, post_id TEXT NOT NULL DEFAULT '', followers INTEGER, following INTEGER, views INTEGER, likes INTEGER, comments INTEGER, shares INTEGER, source TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(profile_id,date,post_id));")?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS posting_queue (id INTEGER PRIMARY KEY, profile_id INTEGER NOT NULL REFERENCES profiles(id), source_id INTEGER NOT NULL REFERENCES profiles(id), platform TEXT NOT NULL, identity_key TEXT NOT NULL, root TEXT NOT NULL, path TEXT NOT NULL, post_id TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', posted_date TEXT NOT NULL DEFAULT '', original_url TEXT NOT NULL DEFAULT '', channel_url TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'queued' CHECK(state IN ('queued','posted','checked')), caption TEXT NOT NULL DEFAULT '', post_url TEXT NOT NULL DEFAULT '', scheduled_for TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')), UNIQUE(profile_id,platform,identity_key));")?;
+    db.execute_batch("CREATE TABLE IF NOT EXISTS posting_queue_events (id INTEGER PRIMARY KEY, queue_id INTEGER NOT NULL REFERENCES posting_queue(id) ON DELETE CASCADE, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), event_type TEXT NOT NULL, previous_state TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, caption TEXT NOT NULL DEFAULT '', post_url TEXT NOT NULL DEFAULT '', scheduled_for TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT ''); CREATE INDEX IF NOT EXISTS posting_queue_events_queue_id ON posting_queue_events(queue_id,id);")?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS analytics_bridge(profile_id INTEGER PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,enabled INTEGER NOT NULL DEFAULT 0,interval_seconds INTEGER NOT NULL DEFAULT 14400,after_post INTEGER NOT NULL DEFAULT 0,next_run INTEGER,last_attempt INTEGER,last_success INTEGER,last_error TEXT NOT NULL DEFAULT '',job_id TEXT,lease_until INTEGER); CREATE TABLE IF NOT EXISTS analytics_bridge_snapshots(id INTEGER PRIMARY KEY,profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,observed_at TEXT NOT NULL,followers INTEGER,following INTEGER,likes INTEGER,followers_approx INTEGER NOT NULL DEFAULT 0,following_approx INTEGER NOT NULL DEFAULT 0,likes_approx INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS analytics_bridge_links(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, url TEXT NOT NULL, captured_at TEXT NOT NULL DEFAULT (datetime('now')), PRIMARY KEY(profile_id,url));")?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS source_date_results(profile_id INTEGER NOT NULL REFERENCES profiles(id),root TEXT NOT NULL,path TEXT NOT NULL,post_id TEXT NOT NULL DEFAULT '',posted_date TEXT NOT NULL DEFAULT '',date_kind TEXT NOT NULL DEFAULT '',title TEXT NOT NULL DEFAULT '',description TEXT NOT NULL DEFAULT '',original_url TEXT NOT NULL DEFAULT '',file_size INTEGER NOT NULL DEFAULT -1,file_modified INTEGER NOT NULL DEFAULT -1,checked_at TEXT NOT NULL DEFAULT (datetime('now')),PRIMARY KEY(profile_id,root,path)); CREATE TABLE IF NOT EXISTS source_date_audits(id INTEGER PRIMARY KEY,state TEXT NOT NULL,online INTEGER NOT NULL,processed INTEGER NOT NULL DEFAULT 0,total INTEGER NOT NULL DEFAULT 0,verified INTEGER NOT NULL DEFAULT 0,estimated INTEGER NOT NULL DEFAULT 0,unknown INTEGER NOT NULL DEFAULT 0,failed INTEGER NOT NULL DEFAULT 0,cancel_requested INTEGER NOT NULL DEFAULT 0,message TEXT NOT NULL DEFAULT '',started TEXT NOT NULL DEFAULT (datetime('now')),finished TEXT);")?;
     let result_columns = {
@@ -204,6 +206,12 @@ fn init(db: &Connection) -> rusqlite::Result<()> {
             )?;
         }
     }
+    let has_queue_revision = {
+        let mut s = db.prepare("PRAGMA table_info(posting_queue)")?;
+        let names=s.query_map([],|r|r.get::<_,String>(1))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        names.iter().any(|x|x=="revision")
+    };
+    if !has_queue_revision { db.execute("ALTER TABLE posting_queue ADD COLUMN revision INTEGER NOT NULL DEFAULT 0",[])?; }
     let has_date_kind = {
         let mut s = db.prepare("PRAGMA table_info(posting_queue)")?;
         let names = s
@@ -950,6 +958,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .route("/previews.js", get(previews_js))
         .route("/chart.js", get(chart_js))
         .route("/api/items", get(list).post(import))
+        .route("/api/posting-handoff", get(handoff::get))
         .route("/api/profiles", post(add_profile))
         .route("/api/categories", post(categories::create))
         .route("/api/categories/members", post(categories::set_members))
@@ -984,6 +993,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             get(queue::list).post(queue::add),
         )
         .route("/api/profiles/{id}/queue/{qid}", post(queue::update))
+        .route("/api/profiles/{id}/queue/{qid}/events", get(handoff::events))
         .route(
             "/api/profiles/{id}/downloads",
             get(source::profile_overview),
