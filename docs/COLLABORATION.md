@@ -4,7 +4,7 @@ The shared upstream is `reycarrorg/lifeinvader-creator-hub`. This repository is 
 
 ## Choose where to work
 
-After accepting the invitation, a collaborator can use a private fork if GitHub allows forking for this repository, or create a separate branch directly in the shared repository. Both approaches use pull requests back into the upstream `main` branch. A fork is a separate repository; a branch is a line of work within a repository. You do not need to repeatedly fork each other's forks.
+The public repository can be forked, or collaborators with write access can create a separate branch directly in the shared repository. Both approaches use pull requests back into the upstream `main` branch. A fork is a separate repository; a branch is a line of work within a repository. You do not need to repeatedly fork each other's forks.
 
 ### Fork workflow
 
