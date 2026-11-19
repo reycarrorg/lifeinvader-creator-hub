@@ -579,4 +579,310 @@ mod evidence_tests {
         f.selection.as_mut().unwrap().generation = 0;
         assert_eq!(f.check(), Outcome::Hold(HoldReason::VerificationUnavailable));
     }
+
+    // Test-only adapter for the standalone controller v1 handoff.
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct PreviewRequestV1 {
+        schema: PreviewSchema,
+        source_revision: String,
+        cut_key: Sha256,
+    }
+
+    #[derive(Deserialize)]
+    enum PreviewSchema {
+        #[serde(rename = "controller-preview-v1")]
+        V1,
+    }
+
+    #[derive(Deserialize)]
+    enum StatusSchema {
+        #[serde(rename = "controller-status-v1")]
+        V1,
+    }
+
+    #[derive(Deserialize)]
+    enum ProofSchema {
+        #[serde(rename = "controller-proof-v1")]
+        V1,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ControllerProofV1 {
+        schema: ProofSchema,
+        source_revision: String,
+        sha256: Sha256,
+        bytes: u64,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(tag = "state", deny_unknown_fields)]
+    enum ControllerStatusV1 {
+        #[serde(rename = "PREVIEW_READY")]
+        Ready {
+            schema: StatusSchema,
+            publish: bool,
+            cut_key: Sha256,
+            proof: ControllerProofV1,
+        },
+        #[serde(rename = "HOLD")]
+        Hold {
+            schema: StatusSchema,
+            publish: bool,
+            reason: String,
+        },
+    }
+
+    struct ControllerEvidence<'a> {
+        source_revision: &'a str,
+        selection: &'a Selection,
+        receiver_generation: u64,
+        ledger: Option<&'a Ledger>,
+        artifact: Option<&'a Observation>,
+    }
+
+    fn bounded<T: serde::de::DeserializeOwned>(raw: &[u8]) -> Result<T, HoldReason> {
+        if raw.len() > MAX_RECORD_BYTES {
+            return Err(HoldReason::VerificationUnavailable);
+        }
+        serde_json::from_slice(raw).map_err(|_| HoldReason::VerificationUnavailable)
+    }
+
+    fn revision_valid(value: &str) -> bool {
+        !value.is_empty() && value.len() <= 256
+            && value.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':'))
+    }
+
+    fn closed_controller_hold(raw: &str) -> HoldReason {
+        // Closed result vocabulary. Unknown or free-form strings are never returned.
+        match raw {
+            "pending" => HoldReason::Pending,
+            "failed" => HoldReason::Failed,
+            "evidence_mismatch" => HoldReason::EvidenceMismatch,
+            "artifact_mismatch" => HoldReason::ArtifactMismatch,
+            "artifact_unavailable" => HoldReason::ArtifactUnavailable,
+            "unsafe_artifact" => HoldReason::UnsafeArtifact,
+            _ => HoldReason::VerificationUnavailable,
+        }
+    }
+
+    fn parse_controller(
+        request_raw: &[u8],
+        status_raw: &[u8],
+        evidence: &ControllerEvidence<'_>,
+    ) -> Result<WorkerReply, HoldReason> {
+        let expected = &evidence.selection;
+        if evidence.receiver_generation != expected.generation {
+            return Err(HoldReason::Stale);
+        }
+        if expected.generation == 0 || !expected.cut.valid() || !revision_valid(evidence.source_revision) {
+            return Err(HoldReason::VerificationUnavailable);
+        }
+
+        let PreviewRequestV1 { schema: PreviewSchema::V1, source_revision, cut_key } =
+            bounded(request_raw)?;
+        if source_revision != evidence.source_revision || cut_key != expected.cut_key {
+            return Err(HoldReason::EvidenceMismatch);
+        }
+
+        let ready = match bounded(status_raw)? {
+            ControllerStatusV1::Hold { schema: StatusSchema::V1, publish: false, reason } => {
+                return Err(closed_controller_hold(&reason));
+            }
+            ControllerStatusV1::Ready {
+                schema: StatusSchema::V1, publish: false, cut_key,
+                proof: ControllerProofV1 { schema: ProofSchema::V1, source_revision, sha256, bytes },
+            } => {
+                if source_revision != evidence.source_revision || cut_key != expected.cut_key {
+                    return Err(HoldReason::EvidenceMismatch);
+                }
+                if bytes == 0 {
+                    return Err(HoldReason::VerificationUnavailable);
+                }
+                ReadyClaim {
+                    schema_version: expected.version,
+                    cut_key,
+                    // Provider, source identity/digest, bounds, and recipe come only from the
+                    // independently selected job, and are rechecked against separate evidence.
+                    cut: expected.cut.clone(),
+                    receipt: Receipt { artifact_sha256: sha256, byte_count: bytes },
+                }
+            }
+            _ => return Err(HoldReason::VerificationUnavailable),
+        };
+        Ok(WorkerReply {
+            request_generation: evidence.receiver_generation,
+            response: UntrustedResponse(WireResponse::PreviewReady(ready)),
+        })
+    }
+
+    fn evaluate_controller(
+        request_raw: &[u8],
+        status_raw: &[u8],
+        evidence: &ControllerEvidence<'_>,
+    ) -> Outcome {
+        match parse_controller(request_raw,status_raw,evidence) {
+            Ok(reply) => evaluate(Some(evidence.selection),Some(&reply),evidence.ledger,evidence.artifact),
+            Err(reason) => Outcome::Hold(reason),
+        }
+    }
+
+    fn controller_wire() -> (String,String) {
+        let request = serde_json::json!({
+            "schema":"controller-preview-v1", "source_revision":"revision-fixture",
+            "cut_key":"a".repeat(64),
+        });
+        let status = serde_json::json!({
+            "schema":"controller-status-v1", "state":"PREVIEW_READY", "publish":false,
+            "cut_key":"a".repeat(64), "proof":{
+                "schema":"controller-proof-v1","source_revision":"revision-fixture",
+                "sha256":"c".repeat(64),"bytes":4,
+            }
+        });
+        (request.to_string(),status.to_string())
+    }
+
+    fn controller_test_evidence(f: &Fixture) -> ControllerEvidence<'_> {
+        ControllerEvidence {
+            source_revision:"revision-fixture", selection:f.selection.as_ref().unwrap(),
+            receiver_generation:7, ledger:f.ledger.as_ref(), artifact:f.artifact.as_ref(),
+        }
+    }
+
+    #[test]
+    fn controller_accepts_only_with_independent_commit_and_observation() {
+        let f=Fixture::new();
+        let (req,status)=controller_wire();
+        let mut e=controller_test_evidence(&f);
+        assert_eq!(evaluate_controller(req.as_bytes(),status.as_bytes(),&e),Outcome::EvidenceMatches);
+        e.artifact=None;
+        assert_eq!(evaluate_controller(req.as_bytes(),status.as_bytes(),&e),Outcome::Hold(HoldReason::MissingEvidence));
+        e.ledger=None;
+        assert_eq!(evaluate_controller(req.as_bytes(),status.as_bytes(),&e),Outcome::Hold(HoldReason::MissingEvidence));
+    }
+
+    #[test]
+    fn controller_refuses_publish_true_duplicates_and_unknown_shapes() {
+        let f=Fixture::new();
+        let (req,status)=controller_wire();
+        let e=controller_test_evidence(&f);
+        for changed in [
+            status.replace("\"publish\":false","\"publish\":true"),
+            status.replace("\"publish\":false","\"publish\":0"),
+            status.replace("\"publish\":false","\"publish\":false,\"publish\":false"),
+            status.replace("\"state\":\"PREVIEW_READY\"","\"state\":\"HOLD\",\"state\":\"PREVIEW_READY\""),
+            status.replace("PREVIEW_READY","MALFORMED"),
+            status.replace("\"bytes\":4","\"bytes\":4,\"bytes\":4"),
+            status.replace("\"bytes\":4","\"bytes\":4,\"private_path\":\"ignore-this\""),
+            status.replace("controller-proof-v1","controller-proof-v2"),
+            status.replace("controller-status-v1","controller-status-v2"),
+            status.replace("\"bytes\":4","\"bytes\":0"),
+            status.replace(&"c".repeat(64), &"C".repeat(64)),
+            format!("{status}{{}}"),
+            " ".repeat(MAX_RECORD_BYTES+1),
+        ] {
+            assert_ne!(status,changed);
+            assert_eq!(evaluate_controller(req.as_bytes(),changed.as_bytes(),&e),Outcome::Hold(HoldReason::VerificationUnavailable));
+        }
+        for changed in [
+            req.replace("controller-preview-v1","controller-preview-v2"),
+            req.replace("\"source_revision\":","\"source_revision\":\"other\",\"source_revision\":"),
+        ] {
+            assert_ne!(req,changed);
+            assert_eq!(evaluate_controller(changed.as_bytes(),status.as_bytes(),&e),Outcome::Hold(HoldReason::VerificationUnavailable));
+        }
+    }
+
+    #[test]
+    fn controller_refuses_replay_and_nonmatching_source_job_or_proof() {
+        let f=Fixture::new();
+        let (req,status)=controller_wire();
+        let mut e=controller_test_evidence(&f);
+        for changed in [
+            status.replace("revision-fixture","other-source"),
+            status.replace(&"a".repeat(64),&"b".repeat(64)),
+            status.replace(&"c".repeat(64),&"d".repeat(64)),
+            status.replace("\"bytes\":4","\"bytes\":5"),
+        ] {
+            assert_ne!(status,changed);
+            assert_eq!(evaluate_controller(req.as_bytes(),changed.as_bytes(),&e),Outcome::Hold(HoldReason::EvidenceMismatch));
+        }
+        assert_eq!(evaluate_controller(req.replace("revision-fixture","other-source").as_bytes(),status.as_bytes(),&e),Outcome::Hold(HoldReason::EvidenceMismatch));
+        e.receiver_generation=6;
+        assert_eq!(evaluate_controller(req.as_bytes(),status.as_bytes(),&e),Outcome::Hold(HoldReason::Stale));
+    }
+
+    #[test]
+    fn controller_hold_remains_closed_and_cannot_carry_proof() {
+        let f=Fixture::new();
+        let (req,_)=controller_wire();
+        let e=controller_test_evidence(&f);
+        for (raw,reason) in [
+            (br#"{"schema":"controller-status-v1","state":"HOLD","publish":false,"reason":"pending"}"#.as_slice(),HoldReason::Pending),
+            (br#"{"schema":"controller-status-v1","state":"HOLD","publish":false,"reason":"unknown private detail"}"#.as_slice(),HoldReason::VerificationUnavailable),
+            (br#"{"schema":"controller-status-v1","state":"HOLD","publish":false,"reason":"pending","proof":{}}"#.as_slice(),HoldReason::VerificationUnavailable),
+        ] {
+            assert_eq!(evaluate_controller(req.as_bytes(),raw,&e),Outcome::Hold(reason));
+        }
+    }
+
+    // Sanitized semantic shape emitted by the inert Windows standalone controller.
+    // Neither the transport byte sequence nor production provider provenance was exported.
+    #[test]
+    fn controller_accepts_windows_emitted_semantic_pair_with_independent_fixture_inputs() {
+        let request = br#"{"cut_key":"386a41e4daebebf35c050e548633ea5994404816eb05ac4f7ea9576e8f02c0cc","schema":"controller-preview-v1","source_revision":"b38bf650754ca833870ea6c24d03c2f3ca01caffd734029dd29bcf0a2967ffe3"}"#;
+        let status = br#"{"cut_key":"386a41e4daebebf35c050e548633ea5994404816eb05ac4f7ea9576e8f02c0cc","proof":{"bytes":29,"schema":"controller-proof-v1","sha256":"1a1ed7970ddeddd03ac580d524cd4567882a5767e7248b534712f8f56109e54a","source_revision":"b38bf650754ca833870ea6c24d03c2f3ca01caffd734029dd29bcf0a2967ffe3"},"publish":false,"schema":"controller-status-v1","state":"PREVIEW_READY"}"#;
+        let hash = |s: &str| Sha256::try_from(s.to_owned()).unwrap();
+        let selection = Selection {
+            generation: 11,
+            version: Version,
+            cut_key: hash("386a41e4daebebf35c050e548633ea5994404816eb05ac4f7ea9576e8f02c0cc"),
+            cut: Cut {
+                provider: "synthetic-fixture".into(),
+                provider_id: "inert-request-a".into(),
+                source_sha256: hash("97eef4696ea22705661811e01ab34bc196ca6f0f2c4418d6cd88813afe8399ed"),
+                start_ms: 650,
+                end_ms: 21600,
+                recipe_version: "testsrc2-640x360-30fps-1080x1920-h264_nvenc-aac48-stereo-faststart-v2".into(),
+            },
+        };
+
+        // Copied from the separate worker receipt and committed proof-join observation,
+        // not from the untrusted status above. This is not a real ledger adapter.
+        let receipt = Receipt {
+            byte_count: 29,
+            artifact_sha256: hash("1a1ed7970ddeddd03ac580d524cd4567882a5767e7248b534712f8f56109e54a"),
+        };
+        let ledger = Ledger {
+            selection: selection.clone(),
+            state: State::Committed,
+            receipt: Some(receipt),
+        };
+        // These are test inputs: the production adapter must independently observe
+        // the complete bytes and establish selection/provenance at the trust boundary.
+        // When provided, HARNESS_OBS_* were separately computed from the inert bytes.
+        let modeled_digest = "1a1ed7970ddeddd03ac580d524cd4567882a5767e7248b534712f8f56109e54a";
+        let actual_digest = std::env::var("HARNESS_OBS_SHA256").unwrap_or_else(|_| modeled_digest.into());
+        let actual_bytes = std::env::var("HARNESS_OBS_BYTES").map(|s| s.parse::<u64>().unwrap()).unwrap_or(29);
+        assert_eq!(actual_digest, modeled_digest);
+        assert_eq!(actual_bytes, 29);
+        let observation = Observation::Verified {
+            selection: selection.clone(),
+            observed: Receipt { byte_count: actual_bytes, artifact_sha256: hash(&actual_digest) },
+        };
+        let mut evidence = ControllerEvidence {
+            source_revision: "b38bf650754ca833870ea6c24d03c2f3ca01caffd734029dd29bcf0a2967ffe3",
+            selection: &selection,
+            receiver_generation: 11,
+            ledger: Some(&ledger),
+            artifact: Some(&observation),
+        };
+        assert_eq!(evaluate_controller(request,status,&evidence),Outcome::EvidenceMatches);
+        evidence.receiver_generation = 10;
+        assert_eq!(evaluate_controller(request,status,&evidence),Outcome::Hold(HoldReason::Stale));
+        evidence.receiver_generation = 11;
+        evidence.artifact = None;
+        assert_eq!(evaluate_controller(request,status,&evidence),Outcome::Hold(HoldReason::MissingEvidence));
+    }
 }
