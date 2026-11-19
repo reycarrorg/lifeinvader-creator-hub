@@ -911,6 +911,8 @@ pub(crate) fn ensure_folder(root: &Path, folder: &str) -> std::io::Result<PathBu
 pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) -> ApiResult<i64> {
     let mut db = app.db.lock().map_err(internal)?;
     let (platform, url, folder) = account_profile(&db, id, role)?;
+    let archived: bool = db.query_row("SELECT archived FROM profiles WHERE id=?", [id], |r| r.get(0)).map_err(internal)?;
+    if archived { return Err(bad("Restore this account before syncing it.")); }
     if url == crate::solo::SOLO_URL {
         return Err(bad(
             "Solo posts cannot be synced. Add individual links instead.",

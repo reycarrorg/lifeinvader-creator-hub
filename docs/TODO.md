@@ -27,6 +27,8 @@ Evidence so far includes isolated unit/smoke tests, a bounded live YouTube test-
 
 ### 1. Make the existing experience dependable
 
+- [x] Add profile/source and category context menus with reversible account removal, including preservation of local files, history and category membership. Automatic sync and Brave refresh stay off on restore.
+
 - [x] Bring each role’s categories into its Profiles or Sources view, with a profile category dashboard and a clearer source cutoff selector. Validate using disposable data; real-platform feed order may differ.
 
 - [ ] Verify the Brave extension end to end on an authorized test installation: installation, pairing, initial refresh, schedule, restart, disconnect/revoke, rounded counts, errors and after-post refresh. Keep cookies and platform credentials out of logs and Git; the current extension does not extract them.

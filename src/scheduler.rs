@@ -35,7 +35,7 @@ pub async fn schedules(State(app): State<App>) -> ApiResult<Json<serde_json::Val
         .and_then(|c| source::checked_root(&c).ok())
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let mut stmt=db.prepare("SELECT p.id,COALESCE(s.enabled,0),COALESCE(s.interval_seconds,3600),s.next_run, (SELECT state FROM source_queue q WHERE q.profile_id=p.id AND q.state IN ('pending','starting','running') ORDER BY q.id LIMIT 1), (SELECT state FROM source_sync_runs r WHERE r.profile_id=p.id ORDER BY r.id DESC LIMIT 1), (SELECT finished FROM source_sync_runs r WHERE r.profile_id=p.id ORDER BY r.id DESC LIMIT 1), (SELECT COUNT(*) FROM source_new_files f WHERE f.profile_id=p.id AND f.seen=0 AND f.root=?), (SELECT CASE WHEN state='error' THEN message END FROM source_queue q WHERE q.profile_id=p.id ORDER BY q.id DESC LIMIT 1), COALESCE(pref.include_in_batch,1) FROM profiles p LEFT JOIN source_schedules s ON s.profile_id=p.id LEFT JOIN source_preferences pref ON pref.profile_id=p.id WHERE p.role IN ('source','destination') ORDER BY p.id").map_err(internal)?;
+    let mut stmt=db.prepare("SELECT p.id,COALESCE(s.enabled,0),COALESCE(s.interval_seconds,3600),s.next_run, (SELECT state FROM source_queue q WHERE q.profile_id=p.id AND q.state IN ('pending','starting','running') ORDER BY q.id LIMIT 1), (SELECT state FROM source_sync_runs r WHERE r.profile_id=p.id ORDER BY r.id DESC LIMIT 1), (SELECT finished FROM source_sync_runs r WHERE r.profile_id=p.id ORDER BY r.id DESC LIMIT 1), (SELECT COUNT(*) FROM source_new_files f WHERE f.profile_id=p.id AND f.seen=0 AND f.root=?), (SELECT CASE WHEN state='error' THEN message END FROM source_queue q WHERE q.profile_id=p.id ORDER BY q.id DESC LIMIT 1), COALESCE(pref.include_in_batch,1) FROM profiles p LEFT JOIN source_schedules s ON s.profile_id=p.id LEFT JOIN source_preferences pref ON pref.profile_id=p.id WHERE p.archived=0 AND p.role IN ('source','destination') ORDER BY p.id").map_err(internal)?;
     let records=stmt.query_map([root],|r|Ok(serde_json::json!({"profile_id":r.get::<_,i64>(0)?,"enabled":r.get::<_,bool>(1)?,"interval_seconds":r.get::<_,i64>(2)?,"next_run":r.get::<_,Option<i64>>(3)?,"queue_state":r.get::<_,Option<String>>(4)?,"last_state":r.get::<_,Option<String>>(5)?,"last_finished":r.get::<_,Option<String>>(6)?,"new_count":r.get::<_,i64>(7)?,"last_queue_error":r.get::<_,Option<String>>(8)?,"include_in_batch":r.get::<_,bool>(9)?}))).map_err(internal)?.collect::<Result<Vec<_>,_>>().map_err(internal)?;
     let mut s=db.prepare("SELECT batch_id, COUNT(*), SUM(state='pending' OR state='starting' OR state='running'), SUM(state='finished'), SUM(state='error' OR state='interrupted') FROM source_queue WHERE origin='batch' GROUP BY batch_id ORDER BY MIN(id) DESC LIMIT 1").map_err(internal)?;
     let batch:Option<serde_json::Value>=s.query_row([],|r|Ok(serde_json::json!({"id":r.get::<_,String>(0)?,"total":r.get::<_,i64>(1)?,"remaining":r.get::<_,i64>(2)?,"finished":r.get::<_,i64>(3)?,"errors":r.get::<_,i64>(4)?}))).optional().map_err(internal)?;
@@ -67,6 +67,8 @@ fn save_schedule_for(app: App, id: i64, input: ScheduleInput, role: &str) -> Api
     }
     let mut db = app.db.lock().map_err(internal)?;
     let (_, url, _) = source::account_profile(&db, id, role)?;
+    let archived: bool = db.query_row("SELECT archived FROM profiles WHERE id=?", [id], |r| r.get(0)).map_err(internal)?;
+    if archived { return Err(bad("Restore this account before changing its schedule.")); }
     if url == crate::solo::SOLO_URL { return Err(bad("Solo posts cannot be scheduled.")); }
     let tx = db.transaction().map_err(internal)?;
     let seconds = if input.enabled {
@@ -96,6 +98,8 @@ pub async fn enqueue_batch(
             continue;
         }
         let (platform, _, _) = source::source_profile(&db, *id)?;
+        let archived: bool = db.query_row("SELECT archived FROM profiles WHERE id=?", [id], |r| r.get(0)).map_err(internal)?;
+        if archived { return Err(bad("Restore this source before syncing it.")); }
         if input.include_photos && platform != "tiktok" {
             return Err(bad("Photo sync is available only for TikTok sources."));
         }
@@ -133,13 +137,13 @@ fn tick(app: &App) -> rusqlite::Result<()> {
         let mut db = app.db.lock().map_err(|_| rusqlite::Error::InvalidQuery)?;
         let tx = db.transaction()?;
         tx.execute("UPDATE source_queue SET state=COALESCE((SELECT CASE WHEN r.state='finished' THEN 'finished' WHEN r.state='running' THEN 'running' ELSE 'error' END FROM source_sync_runs r WHERE r.id=source_queue.run_id),'error') WHERE state='running' AND (NOT EXISTS(SELECT 1 FROM source_sync_runs r WHERE r.id=source_queue.run_id) OR EXISTS(SELECT 1 FROM source_sync_runs r WHERE r.id=source_queue.run_id AND r.state!='running'))",[])?;
-        tx.execute("INSERT INTO source_queue(batch_id,profile_id,origin,state,message,created) SELECT 'auto',s.profile_id,'auto','pending','videos',unixepoch() FROM source_schedules s WHERE s.enabled=1 AND s.next_run IS NOT NULL AND s.next_run<=unixepoch() AND NOT EXISTS(SELECT 1 FROM source_queue q WHERE q.profile_id=s.profile_id AND q.state IN ('pending','starting','running')) AND NOT EXISTS(SELECT 1 FROM source_sync_runs r WHERE r.profile_id=s.profile_id AND r.state='running')",[])?;
+        tx.execute("INSERT INTO source_queue(batch_id,profile_id,origin,state,message,created) SELECT 'auto',s.profile_id,'auto','pending','videos',unixepoch() FROM source_schedules s JOIN profiles p ON p.id=s.profile_id WHERE p.archived=0 AND s.enabled=1 AND s.next_run IS NOT NULL AND s.next_run<=unixepoch() AND NOT EXISTS(SELECT 1 FROM source_queue q WHERE q.profile_id=s.profile_id AND q.state IN ('pending','starting','running')) AND NOT EXISTS(SELECT 1 FROM source_sync_runs r WHERE r.profile_id=s.profile_id AND r.state='running')",[])?;
         tx.execute("UPDATE source_schedules SET next_run=NULL WHERE profile_id IN (SELECT profile_id FROM source_queue WHERE origin='auto' AND state='pending') AND enabled=1",[])?;
         let busy:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM source_sync_runs WHERE state='running') OR EXISTS(SELECT 1 FROM source_date_audits WHERE state='running') OR EXISTS(SELECT 1 FROM source_queue WHERE state='starting')",[],|r|r.get(0))?;
         let job: Option<(i64, i64, String, String)> = if busy {
             None
         } else {
-            tx.query_row("SELECT q.id,q.profile_id,q.message,p.role FROM source_queue q JOIN profiles p ON p.id=q.profile_id WHERE q.state='pending' ORDER BY q.id LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?
+            tx.query_row("SELECT q.id,q.profile_id,q.message,p.role FROM source_queue q JOIN profiles p ON p.id=q.profile_id WHERE q.state='pending' AND p.archived=0 ORDER BY q.id LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?
         };
         if let Some((id, _, _, _)) = &job {
             tx.execute("UPDATE source_queue SET state='starting' WHERE id=?", [id])?;
