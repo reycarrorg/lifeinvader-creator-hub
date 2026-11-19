@@ -19,6 +19,8 @@ A local desktop-style content hub built with Rust, SQLite, and a browser interfa
 - A manual content library with per-profile claim and posting status.
 - A local all-profile AI handoff and activity history for the posting queue, with target account, source context, planned time, file references and manually recorded outcomes. Copy or download it from a profile's queue. It does not publish posts; see [computer-use handoff](docs/COMPUTER_USE_HANDOFF.md).
 - Pick downloaded source photos and videos using source/category, media type, available duration, original date, text and ordering controls; preview the result, see its original details, and queue file references for a profile to review and manually record status. Planned times do not automatically post. See [posting research and roadmap](docs/POSTING_RESEARCH.md). A reported post is a manual record; the app does not publish posts.
+- For a profile, choose **Pick / auto queue**, set filters and expand **Auto queue using these filters**. Enable it, choose an interval and a maximum number of queued posts, and save. While the Hub is open it adds one random matching local post per interval until the limit is reached; missed intervals do not create a backlog. A blue inner tile border shows the countdown. Length filters use saved metadata or scanned durations; videos with unknown lengths are skipped. The rule is off until enabled and does not publish.
+- Add profile-specific instructions for the posting assistant in the same panel. **Copy task prompt** prepares the instructions for a scheduler. The local handoff supplies a per-item claim and result contract to prevent a second compliant worker claiming an in-progress item. Interrupted claims remain held for human review. The Hub does not run the assistant or verify provider-side publication. See [computer-use handoff](docs/COMPUTER_USE_HANDOFF.md) and the [scheduled prompt](docs/SCHEDULED_POSTING_PROMPT.md).
 
 A fresh database starts without accounts or source folders. Add your own accounts and choose your own library folder in the app. Profiles and downloaded files are local to each installation; a GitHub fork does not share the app's database or media.
 
@@ -79,6 +81,16 @@ The [TikTok ID timestamp research](https://hindsig.ht/blog/tinkering-with-tiktok
 
 The profile download view saves post IDs and file locations for a future file-referencing chooser. It is not yet connected to the manual content library: **Add content** currently copies selected files into that library. The app rejects duplicate imported platform/post ID pairs, but it does not detect identical videos uploaded under different post IDs.
 
+## macOS generated preview cache
+
+On macOS, newly generated video thumbnails use a private system cache when its location passes local-volume, ownership, symlink and known cloud-marker checks. While the Hub is open, the worker checks one minute after startup and then every six hours. It removes only registered previews that are at least 30 days old, or at least one day old when the registered cache exceeds 512 MiB (aiming for 384 MiB). Work is limited per pass. Source identity and date fingerprints are checked; queued/claimed/review aliases are protected. If a pending queue reference cannot be resolved, or there are more than 500 outstanding references, the whole pass is skipped. Unknown and unregistered entries are kept. The Hub protects the video, its metadata, photos, and existing legacy preview files. If a cache location cannot pass these checks, previews remain available without disk caching and automatic cleanup does nothing.
+
+The worker inspects a size-limited in-memory database snapshot and source paths without holding the Hub database lock. If inspection takes longer than three seconds, or the live database changes during inspection, that pass is skipped. Final identity checks and removal operate on one validated local cache file at a time. Cleanup is conservative and may leave the cache above its target while entries remain protected or their status is unknown.
+
+If a streamed source's metadata changes during preview generation, the Hub retries with a fresh identity up to three times; an unstable source is shown without registering a cached preview. Previously unregistered cache files are left untouched, and the Hub can use another bounded cache slot. Registration problems are reported with rate-limited messages that do not include media paths or account details.
+
+This manages derived local previews, not Google Drive's cache or its cloud originals. The operating system and Drive manage streamed files separately; opening a video to regenerate a preview can cause it to download again. The Mac uses the new private cache for future previews; old unregistered `media/thumbnail-cache` files are left in place and are not used or automatically removed. The local checks cannot prove that an unrelated third-party backup tool never mirrors the system cache; this needs independent verification before enabling cleanup on an unfamiliar setup.
+
 ## Data and security
 
 The SQLite database is created at `data/lifeinvader.sqlite3`; imported media, profile photos, and preview cache are stored in `media/`. Both folders are excluded from Git. Optional environment variables `LIFEINVADER_DB` and `LIFEINVADER_MEDIA` choose alternate locations; an explicitly selected media folder must already exist.
@@ -97,6 +109,7 @@ python tests/bridge_smoke.py
 python tests/bridge_sync_smoke.py
 node tests/bridge_collector_test.js
 python tests/queue_smoke.py
+python tests/auto_queue_handoff_smoke.py
 python tests/solo_picker_smoke.py
 python tests/handoff_smoke.py
 python tests/date_audit_smoke.py

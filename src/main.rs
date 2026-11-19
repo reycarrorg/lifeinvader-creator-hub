@@ -18,6 +18,7 @@ use std::{
 use tower_http::services::ServeDir;
 use uuid::Uuid;
 mod analytics;
+mod auto_queue;
 mod editor;
 mod recovery;
 mod handoff;
@@ -47,7 +48,7 @@ mod controller_ui_lifetime;
 mod controller_headless;
 #[cfg(windows)] mod controller_native_process;
 #[cfg(windows)] mod controller_native_launcher;
-
+mod thumbnail_cache;
 
 type Db = Arc<Mutex<Connection>>;
 #[derive(Clone)]
@@ -59,6 +60,7 @@ struct App {
     db: Db,
     media: PathBuf,
     log_dir: PathBuf,
+    cache_scope: String,
 }
 type ApiResult<T> = Result<T, (StatusCode, String)>;
 fn bad(e: impl std::fmt::Display) -> (StatusCode, String) {
@@ -215,6 +217,7 @@ fn init(db: &Connection) -> rusqlite::Result<()> {
     let has_dead = { let mut q=db.prepare("PRAGMA table_info(source_preferences)")?; let names=q.query_map([],|r|r.get::<_,String>(1))?.collect::<rusqlite::Result<Vec<_>>>()?; names.iter().any(|x|x=="dead") };
     if !has_dead { db.execute("ALTER TABLE source_preferences ADD COLUMN dead INTEGER NOT NULL DEFAULT 0",[])?; }
     db.execute_batch("CREATE TABLE IF NOT EXISTS source_selection(profile_id INTEGER PRIMARY KEY REFERENCES profiles(id),pending INTEGER NOT NULL,allowed TEXT NOT NULL,excluded TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'all');")?;
+    db.execute_batch("CREATE TABLE IF NOT EXISTS source_duration_cache(profile_id INTEGER NOT NULL REFERENCES profiles(id),root TEXT NOT NULL,path TEXT NOT NULL,file_size INTEGER NOT NULL,file_modified INTEGER NOT NULL,seconds REAL NOT NULL,PRIMARY KEY(profile_id,root,path));")?;
     let selection_has_mode = { let mut stmt=db.prepare("PRAGMA table_info(source_selection)")?; let cols=stmt.query_map([],|r|r.get::<_,String>(1))?.collect::<Result<Vec<_>,_>>()?; cols.iter().any(|c|c=="mode") };
     if !selection_has_mode { db.execute("ALTER TABLE source_selection ADD COLUMN mode TEXT NOT NULL DEFAULT 'all'",[])?; }
     db.execute_batch("CREATE TABLE IF NOT EXISTS profile_downloads (profile_id INTEGER NOT NULL REFERENCES profiles(id), root TEXT NOT NULL, platform TEXT NOT NULL, post_id TEXT NOT NULL, path TEXT NOT NULL, posted_date TEXT, PRIMARY KEY(profile_id,root,platform,post_id));")?;
@@ -222,6 +225,11 @@ fn init(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS analytics_snapshots (profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, date TEXT NOT NULL, post_id TEXT NOT NULL DEFAULT '', followers INTEGER, following INTEGER, views INTEGER, likes INTEGER, comments INTEGER, shares INTEGER, source TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(profile_id,date,post_id));")?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS posting_queue (id INTEGER PRIMARY KEY, profile_id INTEGER NOT NULL REFERENCES profiles(id), source_id INTEGER NOT NULL REFERENCES profiles(id), platform TEXT NOT NULL, identity_key TEXT NOT NULL, root TEXT NOT NULL, path TEXT NOT NULL, post_id TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', posted_date TEXT NOT NULL DEFAULT '', original_url TEXT NOT NULL DEFAULT '', channel_url TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'queued' CHECK(state IN ('queued','posted','checked')), caption TEXT NOT NULL DEFAULT '', post_url TEXT NOT NULL DEFAULT '', scheduled_for TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')), UNIQUE(profile_id,platform,identity_key));")?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS posting_queue_events (id INTEGER PRIMARY KEY, queue_id INTEGER NOT NULL REFERENCES posting_queue(id) ON DELETE CASCADE, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), event_type TEXT NOT NULL, previous_state TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, caption TEXT NOT NULL DEFAULT '', post_url TEXT NOT NULL DEFAULT '', scheduled_for TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT ''); CREATE INDEX IF NOT EXISTS posting_queue_events_queue_id ON posting_queue_events(queue_id,id);")?;
+    db.execute_batch("CREATE TABLE IF NOT EXISTS posting_queue_claims (queue_id INTEGER PRIMARY KEY REFERENCES posting_queue(id) ON DELETE CASCADE, profile_id INTEGER NOT NULL REFERENCES profiles(id), token TEXT NOT NULL, claimed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));")?;
+    db.execute_batch("CREATE TABLE IF NOT EXISTS auto_queue_rules (profile_id INTEGER PRIMARY KEY REFERENCES profiles(id), enabled INTEGER NOT NULL DEFAULT 0, interval_seconds INTEGER NOT NULL, max_pending INTEGER NOT NULL, filters TEXT NOT NULL, next_run INTEGER, last_result TEXT NOT NULL DEFAULT '', instructions TEXT NOT NULL DEFAULT '', generation INTEGER NOT NULL DEFAULT 0);")?;
+    let auto_columns = { let mut q=db.prepare("PRAGMA table_info(auto_queue_rules)")?; q.query_map([],|r|r.get::<_,String>(1))?.collect::<rusqlite::Result<Vec<_>>>()? };
+    if !auto_columns.iter().any(|name|name=="instructions") { db.execute("ALTER TABLE auto_queue_rules ADD COLUMN instructions TEXT NOT NULL DEFAULT ''",[])?; }
+    if !auto_columns.iter().any(|name|name=="generation") { db.execute("ALTER TABLE auto_queue_rules ADD COLUMN generation INTEGER NOT NULL DEFAULT 0",[])?; }
     db.execute_batch("CREATE TABLE IF NOT EXISTS analytics_bridge(profile_id INTEGER PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,enabled INTEGER NOT NULL DEFAULT 0,interval_seconds INTEGER NOT NULL DEFAULT 14400,after_post INTEGER NOT NULL DEFAULT 0,next_run INTEGER,last_attempt INTEGER,last_success INTEGER,last_error TEXT NOT NULL DEFAULT '',job_id TEXT,lease_until INTEGER); CREATE TABLE IF NOT EXISTS analytics_bridge_snapshots(id INTEGER PRIMARY KEY,profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,observed_at TEXT NOT NULL,followers INTEGER,following INTEGER,likes INTEGER,followers_approx INTEGER NOT NULL DEFAULT 0,following_approx INTEGER NOT NULL DEFAULT 0,likes_approx INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS analytics_bridge_links(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, url TEXT NOT NULL, captured_at TEXT NOT NULL DEFAULT (datetime('now')), PRIMARY KEY(profile_id,url));")?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS source_date_results(profile_id INTEGER NOT NULL REFERENCES profiles(id),root TEXT NOT NULL,path TEXT NOT NULL,post_id TEXT NOT NULL DEFAULT '',posted_date TEXT NOT NULL DEFAULT '',date_kind TEXT NOT NULL DEFAULT '',title TEXT NOT NULL DEFAULT '',description TEXT NOT NULL DEFAULT '',original_url TEXT NOT NULL DEFAULT '',file_size INTEGER NOT NULL DEFAULT -1,file_modified INTEGER NOT NULL DEFAULT -1,checked_at TEXT NOT NULL DEFAULT (datetime('now')),PRIMARY KEY(profile_id,root,path)); CREATE TABLE IF NOT EXISTS source_date_audits(id INTEGER PRIMARY KEY,state TEXT NOT NULL,online INTEGER NOT NULL,processed INTEGER NOT NULL DEFAULT 0,total INTEGER NOT NULL DEFAULT 0,verified INTEGER NOT NULL DEFAULT 0,estimated INTEGER NOT NULL DEFAULT 0,unknown INTEGER NOT NULL DEFAULT 0,failed INTEGER NOT NULL DEFAULT 0,cancel_requested INTEGER NOT NULL DEFAULT 0,message TEXT NOT NULL DEFAULT '',started TEXT NOT NULL DEFAULT (datetime('now')),finished TEXT);")?;
     let result_columns = {
@@ -263,6 +271,8 @@ fn init(db: &Connection) -> rusqlite::Result<()> {
             [],
         )?;
     }
+    #[cfg(target_os = "macos")]
+    thumbnail_cache::init(db)?;
     Ok(())
 }
 fn text_field(map: &HashMap<String, String>, key: &str) -> String {
@@ -389,11 +399,12 @@ async fn archive_profile(State(app): State<App>, AxumPath(id): AxumPath<i64>, Js
     let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?)", [id], |r| r.get(0)).map_err(internal)?;
     if !exists { return Err((StatusCode::NOT_FOUND, "Account not found.".into())); }
     if input.archived {
-        let busy: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM source_sync_runs WHERE profile_id=? AND state='running') OR EXISTS(SELECT 1 FROM source_queue WHERE profile_id=? AND state IN ('starting','running')) OR EXISTS(SELECT 1 FROM analytics_bridge WHERE profile_id=? AND lease_until>unixepoch())", params![id,id,id], |r| r.get(0)).map_err(internal)?;
-        if busy { return Err((StatusCode::CONFLICT, "This account has a sync or refresh in progress. Try again after it finishes.".into())); }
+        let busy: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM source_sync_runs WHERE profile_id=? AND state='running') OR EXISTS(SELECT 1 FROM source_queue WHERE profile_id=? AND state IN ('starting','running')) OR EXISTS(SELECT 1 FROM analytics_bridge WHERE profile_id=? AND lease_until>unixepoch()) OR EXISTS(SELECT 1 FROM posting_queue_claims c JOIN posting_queue q ON q.id=c.queue_id WHERE q.profile_id=? OR q.source_id=?)", params![id,id,id,id,id], |r| r.get(0)).map_err(internal)?;
+        if busy { return Err((StatusCode::CONFLICT, "This account has a sync, refresh or posting claim in progress. Resolve it before removing the account.".into())); }
         tx.execute("UPDATE source_schedules SET enabled=0,next_run=NULL WHERE profile_id=?", [id]).map_err(internal)?;
         tx.execute("UPDATE analytics_bridge SET enabled=0,next_run=NULL WHERE profile_id=?", [id]).map_err(internal)?;
         tx.execute("UPDATE source_queue SET state='cancelled',message='Account removed from workspace' WHERE profile_id=? AND state='pending'", [id]).map_err(internal)?;
+        tx.execute("UPDATE auto_queue_rules SET enabled=0,next_run=NULL WHERE profile_id=?", [id]).map_err(internal)?;
     }
     tx.execute("UPDATE profiles SET archived=? WHERE id=?", params![input.archived,id]).map_err(internal)?;
     tx.commit().map_err(internal)?;
@@ -1016,11 +1027,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."))
         .join("sync-logs");
-    let db = Connection::open(db_path)?;
+    let db = Connection::open(&db_path)?;
     init(&db)?;
     controller_store::init(&db).map_err(|e|std::io::Error::other(e.0))?;
     let mut db=db;
     controller_store::recover(&mut db,chrono::Utc::now().timestamp()).map_err(|e|std::io::Error::other(e.0))?;
+    let cache_scope = {
+        use std::hash::{Hash, Hasher};
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        std::fs::canonicalize(&db_path).unwrap_or(db_path.clone()).hash(&mut hash);
+        format!("{:016x}", hash.finish())
+    };
     db.execute("UPDATE source_date_audits SET state='interrupted',finished=datetime('now'),message='The app closed before the audit finished.' WHERE state='running'",[])?;
     db.execute("UPDATE source_sync_runs SET state='interrupted', finished=datetime('now') WHERE state='running'",[])?;
     db.execute("UPDATE source_queue SET state='interrupted',message='App closed before queued sync finished' WHERE state IN ('pending','starting','running')",[])?;
@@ -1032,12 +1049,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         db: Arc::new(Mutex::new(db)),
         media: media.clone(),
         log_dir,
+        cache_scope,
     };
     let manual_shutdown=app.controller_manual.clone();
     let ui_lifetime=app.controller_ui.clone();
     let isolated_review=app.controller_manual.configured() || package_review;
-    let scheduler = if controller_headless::scheduler_allowed(headless_review) {Some(tokio::spawn(scheduler::worker(app.clone())))} else {None};
+    let background=controller_headless::background_policy(headless_review);
+    // Review modes never start source or posting-queue timers. Cache deletion is OFF on every OS.
+    let scheduler = if background.source_scheduler {Some(tokio::spawn(scheduler::worker(app.clone())))} else {None};
     let headless_app=app.clone();
+    let auto_scheduler = if background.auto_queue {Some(tokio::spawn(auto_queue::worker(app.clone())))} else {None};
     #[cfg(windows)]
     let sync_db = app.db.clone();
     let router = Router::new()
@@ -1050,6 +1071,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .route("/chart.js", get(chart_js))
         .route("/api/items", get(list).post(import))
         .route("/api/posting-handoff", get(handoff::get))
+        .route("/api/posting-handoff/prompt", get(handoff::prompt))
+        .route("/api/posting-handoff/results", post(handoff::results))
+        .route("/api/posting-handoff/claim", post(handoff::claim))
+        .route("/api/auto-queue", get(auto_queue::list))
+        .route("/api/profiles/{id}/auto-queue", post(auto_queue::save))
         .route("/api/profiles", post(add_profile))
         .route("/api/profiles/hidden", get(hidden_profiles))
         .route("/api/profiles/{id}/archive", post(archive_profile))
@@ -1090,6 +1116,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/profiles/{id}/queue/{qid}", post(queue::update))
         .route("/api/profiles/{id}/queue/{qid}/events", get(handoff::events))
+        .route("/api/profiles/{id}/queue/{qid}/release", post(handoff::release))
         .route("/api/profiles/{id}/sync-recovery", get(recovery::get).post(recovery::save))
         .route(
             "/api/profiles/{id}/downloads",
@@ -1120,6 +1147,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             get(source::get_config).post(source::save_config),
         )
         .route("/api/source-settings/browse", post(source::browse_folder))
+        .route("/api/source-durations", post(source::save_durations))
         .route("/api/solo-posts", post(solo::start))
         .route("/api/sources/{id}/preview", post(selection::preview))
         .route("/api/sources/{id}/selection", post(selection::choose))
@@ -1130,6 +1158,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/date-audit/cancel", post(date_audit::cancel))
         .route("/api/sources/{id}", get(source::overview))
+        .route("/api/sources/{id}/browse", get(source::interactive_overview))
         .route("/api/sources/{id}/status", get(source::status))
         .route("/api/sources/{id}/summary", get(source::summary))
         .route("/api/sources/{id}/file", get(source::file))
@@ -1177,6 +1206,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 if let Some(scheduler)=scheduler {scheduler.abort();}
+                if let Some(auto_scheduler)=auto_scheduler {auto_scheduler.abort();}
                 let _=tokio::task::spawn_blocking(move||manual_shutdown.shutdown()).await;
                 if let Ok(db)=db.lock(){let _=db.execute("UPDATE source_queue SET state='interrupted',message='App closed before queued sync started' WHERE state IN ('pending','starting')",[]);let _=db.execute("UPDATE source_date_audits SET cancel_requested=1 WHERE state='running'",[]);}
                 // Keep the service and the archive lock alive until an active download exits.
@@ -1193,6 +1223,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let _ = server_only;
     axum::serve(listener, router).await?;
     if let Some(scheduler)=scheduler {scheduler.abort();}
+    if let Some(auto_scheduler)=auto_scheduler {auto_scheduler.abort();}
     Ok(())
 }
 

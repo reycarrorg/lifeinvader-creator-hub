@@ -168,7 +168,7 @@ pub fn start(app:App,id:String,files:Files,authority:Arc<dyn admission::Authorit
         let files=Files{executable:v["executable"].as_str().unwrap().into(),helper:v["helper"].as_str().unwrap().into(),approval:v["approval"].as_str().unwrap().into()};
         let _pins=pins(&r,&files).unwrap();println!("READONLY_STAGE PINS Ok");
         let j=store::job(&db,&r.job_id).unwrap();
-        let app=App{controller_ui:Arc::new(crate::controller_ui_lifetime::Lifetime::new(false)),controller_manual:Arc::new(crate::controller_manual::Unavailable),controller_ops:Arc::new(crate::controller_ops::Unavailable),controller_worker:Arc::new(crate::controller_worker::Unavailable),db:Arc::new(Mutex::new(db)),media:media.clone(),log_dir:media};
+        let app=App{cache_scope:"adapted-isolated-test".into(),controller_ui:Arc::new(crate::controller_ui_lifetime::Lifetime::new(false)),controller_manual:Arc::new(crate::controller_manual::Unavailable),controller_ops:Arc::new(crate::controller_ops::Unavailable),controller_worker:Arc::new(crate::controller_worker::Unavailable),db:Arc::new(Mutex::new(db)),media:media.clone(),log_dir:media};
         let resolved=crate::controller_source::controller_file(&app,j.source_id,&j.source_ref);
         if resolved==Err("source_unavailable") {
             let db=app.db.lock().unwrap();

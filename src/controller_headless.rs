@@ -7,7 +7,14 @@ pub fn enabled(args:&[String],configured:bool)->Result<bool,&'static str>{
     }
     Ok(true)
 }
-pub fn scheduler_allowed(headless:bool)->bool{!headless}
+#[derive(Debug,PartialEq,Eq)]
+pub struct BackgroundPolicy {pub source_scheduler:bool,pub auto_queue:bool,pub cache_deletion:bool}
+pub fn background_policy(headless:bool)->BackgroundPolicy{
+    BackgroundPolicy{source_scheduler:!headless,auto_queue:!headless,cache_deletion:false}
+}
+pub fn scheduler_allowed(headless:bool)->bool{background_policy(headless).source_scheduler}
+/// Permanent adapted-delivery prohibition; no environment/config switch enables deletion.
+pub fn cache_deletion_allowed()->bool{false}
 /// No-authority package check: explicit existing root, server-only, no render plan.
 pub fn package_root(args:&[String])->Result<Option<std::path::PathBuf>, &'static str>{
     let count=args.iter().filter(|s|s.as_str()=="--package-review-root").count();
@@ -25,6 +32,11 @@ pub fn package_root(args:&[String])->Result<Option<std::path::PathBuf>, &'static
 #[cfg(test)] mod tests{
     use super::*;
     fn args(v:&[&str])->Vec<String>{v.iter().map(|s|s.to_string()).collect()}
+    #[test] fn background_policy_disables_both_timers_and_all_cache_deletion(){
+        assert_eq!(background_policy(true),BackgroundPolicy{source_scheduler:false,auto_queue:false,cache_deletion:false});
+        assert_eq!(background_policy(false),BackgroundPolicy{source_scheduler:true,auto_queue:true,cache_deletion:false});
+        assert!(!cache_deletion_allowed());
+    }
     #[test] fn package_review_root_is_explicit_and_authority_free(){
         let root=env!("CARGO_MANIFEST_DIR").to_owned();
         let good=vec!["--server-only".to_owned(),"--package-review-root".to_owned(),root.clone()];

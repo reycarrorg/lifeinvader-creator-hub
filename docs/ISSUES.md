@@ -24,7 +24,9 @@ TikTok account-ID recovery requires a valid post belonging to the profile and ca
 
 Related work: [PR #7](https://github.com/reycarrorg/lifeinvader-creator-hub/pull/7).
 
-The queue exposes a local JSON handoff and durable activity notes. Scheduled times do not start an action, and `posted` remains a manual report rather than independent platform verification. Revision checks reject stale updates when used, but do not lock uploads; concurrent operators can still post duplicates. Add leases, provider reconciliation, durable retries, timezone-aware scheduling and end-to-end tests before unattended publishing. Older items may lack activity history from before logging was added.
+The queue exposes a local JSON handoff, durable activity notes and persistent per-item claims. An interrupted claim does not expire; a person must verify the platform and release it for review. Claims coordinate clients that use the contract but cannot prevent manual or external uploads. Scheduled times do not start publication, and `posted` remains an operator report rather than independent platform verification. The scheduled assistant, browser access, provider reconciliation, confirmation flow and real uploads have not been tested end to end. Older items may lack activity history from before logging was added.
+
+Automatic selection runs only while the Hub is open. Scanned durations are matched to the source root, path, file size and modified time; moved or changed files need to be scanned again. Videos without a known duration are excluded when a length filter is active. Unknown original dates and missing metadata still limit selection.
 
 This file tracks durable context in Git. Add reproduction steps, evidence, status, and links to GitHub issues or pull requests when available. Do not add private credentials, cookies, account exports, or personal media.
 
@@ -42,7 +44,11 @@ The app currently binds to localhost and has no authenticated shared-user access
 
 ## Open — Platform and environment validation
 
-Windows builds and synthetic tests have been exercised. A bounded live YouTube test-channel download and an Instagram reel/fallback test succeeded in disposable folders; these did not validate complete channel downloads or every account. A macOS build has not been validated. Verify each target environment and report actual results.
+Windows builds and synthetic tests have been exercised. A bounded live YouTube test-channel download and an Instagram reel/fallback test succeeded in disposable folders; these did not validate complete channel downloads or every account. The Apple Silicon macOS build, isolated tests and launcher startup have been verified locally. Windows data transfer and source-path migration, full GUI use, real social downloads and publication on macOS remain unverified.
+
+## Open — Stalled cloud folder enumeration
+
+On macOS a source-summary scan was observed blocked in a directory open while other local endpoints timed out. A candidate isolates background and interactive scans into separate bounded slots; it has been tested with simulated stalls only and needs verification after a controlled restart. A stalled interactive scan still prevents opening another source until that filesystem call finishes or the app is restarted. Other filesystem operations are not covered by this bound. The Terminal-launched app and a read-only Terminal probe also stalled opening the Solo archive, while an independent Codex-shell check succeeded; the underlying launch-context/File Provider cause is not established.
 
 ## Planned — Real account connections and analytics history
 
@@ -188,3 +194,15 @@ Embedded package05 correctly HOLDs at signed host clbcatq.dll after ZIP/import c
 Prior embedded host-image blocker resolved by complete exact14image signed batch, realbootstrap+CPUmodelpassed142nativepins. No broadtrust. Remaininggate is new no-authority package app269209...bc9ffa exact launch qualification; compiled/tested only. Corresponding-source redistribution limit unchanged. AAC futuretarget128k nowexplicit/tested, historicalFresh13 stays124k.
 
 Package09 pending executable gate cleared by exact approved scoped run: no-authority startup/read-only writer-refusal/ordinary close PASS, no worker or OPS consultation. Network and publication remain out of scope. No installer/redistribution or128k-render proof inferred.
+
+## Mac preview cache safety and external sync
+
+The installed Mac worker manages only newly generated, registered previews in the macOS per-user cache. It preserves legacy/unregistered previews and does not evict Google Drive media. Independently review root-locality checks, including non-File-Provider third-party mirror/backup configurations and the non-atomic check/unlink race, and test real-world timer behavior with disposable media before relying on or expanding its use. Source identity uses file metadata, not a content hash; a replacement preserving those values or a stale path-only posting report may remain ambiguous. An unresolved pending path, over 500 outstanding paths, a database snapshot over 64 MiB, a database change, or inspection taking over three seconds prevents a sweep. Queue state is local and does not prove that another machine has no pending work. Browser IndexedDB previews are separate.
+
+One streamed preview was observed without a cache registration; the initial registration failure was not logged, so its exact cause is unknown. The isolated fix retries changed source metadata, avoids adopting or overwriting old unregistered previews, and reports a generic reason. Further real File Provider validation remains necessary.
+
+## Open — Parallel macOS test interference
+
+On 2026-11-19, the full Rust test suite failed seven preview-cache tests under default parallel execution; all 40 passed with `cargo test -- --test-threads=1`. Investigate shared test state before relying on parallel runs. This does not establish Windows behavior.
+
+PR16 semantic conflict safeguards: upstream unconditional auto_queue startup is not accepted in review modes; upstream Mac cache cleanup worker is not activated on adapted. Added policy/no-effect tests, fixed cross-branch App constructors. macOS-specific runtime remains unverified; existing upstream cautionary history is retained and does not describe enabled cleanup in this adapted candidate.

@@ -204,7 +204,7 @@ pub async fn start(
                 }
                 if is_tiktok {
                     if Path::new(&cfg.photo_helper).is_file() {
-                        let mut cmd = Command::new("python");
+                        let mut cmd = Command::new(crate::tools::python_command());
                         cmd.arg(&cfg.photo_helper)
                             .arg(url)
                             .arg("--destination")

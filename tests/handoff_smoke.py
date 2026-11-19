@@ -21,6 +21,7 @@ with tempfile.TemporaryDirectory(prefix='lifeinvader-handoff-') as tmp:
   assert [x['id'] for x in handoff['work_items']]==[due,unscheduled,future]
   byid={x['id']:x for x in handoff['work_items']};a=byid[due]
   assert a['timing']=='due' and byid[future]['timing']=='upcoming' and byid[unscheduled]['timing']=='unscheduled'
+  assert a['ready_for_scheduled_run'] and byid[unscheduled]['ready_for_scheduled_run'] and not byid[future]['ready_for_scheduled_run']
   assert a['target']['profile_id']==target and a['title']=='Title one' and a['description']=='Original context'
   assert Path(a['local_file']).resolve()==(folder/'one.mp4').resolve()
   assert a['record_template']['expected_revision']==0 and a['record_status_path']==f'/api/profiles/{target}/queue/{due}'

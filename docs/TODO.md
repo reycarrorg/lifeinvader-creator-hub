@@ -17,7 +17,7 @@ The full vision is **not finished**. In particular, a scheduled item does not po
 | Accounts and categories | Separate profile and source views, categories, link-based name/platform detection, optional local profile pictures. | Reliable automatic profile-picture retrieval and actual account authentication. Platform access and link recognition can fail. |
 | Downloading | Source and profile sync use external tools and download archives; TikTok profiles can retry with an owner-verified account ID from a saved post, and Instagram can retry previously captured links with partial coverage. A separate Solo Posts hub accepts individual links. New sources can preview posts and select a cutoff. | Complete live account sync remains unverified. Captured Instagram links can become stale, and previews can be incomplete. Selection is capped at 1,500 posts. Solo posts have a separate archive; photo sync is limited for selective sources. |
 | Dates and metadata | Source listings read sidecars; date audit can check locally or request missing dates online without re-downloading media. Unambiguous TikTok IDs can yield labeled UTC estimates. | Full metadata recovery for every file; estimated dates are not confirmed publishing dates and can differ around day/timezone boundaries. |
-| Selection and queue | Picker shuffles source photos/videos with source, category, type, date, text and available-duration controls. Queue stores file references, planned times, status and activity, and exposes an all-profile handoff with revision-checked updates. | Automatic posting, automatic success verification, a full carousel as one selection, or complete detection of duplicate content across different post IDs. Manual library import still copies files. |
+| Selection and queue | Picker shuffles source photos/videos with source, category, type, date, text and available-duration controls. Optional per-profile rules queue random matching files on a timer while the Hub is open. The handoff provides revision-checked results and persistent claims. | A working scheduled assistant and actual posting are not yet validated. Automatic success verification, a full carousel as one selection, and duplicate detection across different post IDs remain unfinished. Manual library import still copies files. |
 | Analytics | Manual snapshots, template CSV import, charts, and an optional paired Brave extension for visible profile counts. | Installed-extension end-to-end verification, private Insights, full account connection/OAuth, universal platform exports and automatic metrics for all posts. |
 | Collaboration | Private GitHub upstream, branch/fork and PR workflow, issue/progress notes and research documents. | A GitHub clone does not include either person's local database, profiles, Drive folders, downloader executables or media. Access/invitation state can change and should be verified. |
 
@@ -51,11 +51,13 @@ Evidence so far includes isolated unit/smoke tests, a bounded live YouTube test-
 
 ### 2. Make the content picker and queue a complete workflow
 
+- [x] Add opt-in per-profile auto queue rules with saved filters, interval and queue limit; show the countdown and supply per-profile assistant instructions. Automatic and manual length filtering use metadata or matching scanned durations. Validate live social posting separately.
+- [x] Add a structured handoff result input and persistent per-post claim with review recovery after interruption. Validate the complete scheduler, browser session and real upload before relying on unattended operation.
 - [ ] Connect source downloads, the manual library, and own posted content using stable platform/account/post/asset identities and **references to existing files** where possible. Do not silently duplicate video files or claim that different post IDs are the same video. Handle moved or unavailable files.
 - [ ] Represent a multi-photo carousel as one post with its ordered assets; make photo and video selection, preview, duration and date filters work with incomplete metadata. Keep filtering and shuffle straightforward.
 - [ ] Improve the queue manager: edit/remove/reorder or reschedule safely, distinguish draft/queued/posted/failed/needs review, show original title/description and source/post links, copy useful text, and preserve history. Items remain active until their status is recorded or checked off.
 - [ ] Make the launch cutoff and date/timezone handling explicit and configurable. Do not assume the example cutoff is the actual GTA launch time, and do not treat date-only or estimated timestamps as exact.
-- [ ] Build and validate an AI-assisted workflow that inspects media, drafts captions and operates an authorized posting flow. The local handoff and activity log do not themselves publish or verify anything. Add upload leases and recovery before allowing concurrent operators.
+- [ ] Build and validate an AI-assisted workflow that inspects media, drafts captions and operates an authorized posting flow. The local handoff and activity log do not themselves publish or verify anything. Persistent claims coordinate compliant operators; they do not prevent manual or external posting and require human recovery if interrupted.
 
 ### 3. Build real analytics and secure connections
 
@@ -74,6 +76,7 @@ Evidence so far includes isolated unit/smoke tests, a bounded live YouTube test-
 
 ### 5. Make sharing and releases easier
 
+- [ ] Validate a credential-safe Windows-to-Mac transfer and path remap on disposable fixtures, coordinate a single owner for queue/download writes, then separately verify a real handoff with the owner's data.
 - [ ] Provide a repeatable Windows build/release and a friend-friendly first-run setup with no preloaded personal profiles or paths. Validate database migration, backup and recovery before replacing an installed executable. macOS support needs separate verification.
 - [ ] Decide whether the collaborators need shared remote queues/data. The current server is localhost-only and unauthenticated; a GitHub fork shares code, not app data. Design authentication, authorization, backups and private networking before exposing any shared service.
 - [ ] Improve accessibility, small-window layout and usability without forcing either collaborator's personal workflow on the other. Track different ideas in branches or issues and agree on what belongs upstream.
@@ -211,3 +214,7 @@ Embedded package next gate: exact clbcatq host pin review and complete inventory
 Package09: embedded bootstrap andCPUmodel/native inventory now PASS (no inference/GPU). Await exact new unsigned269209...bc9ffa startup/close approval and scoped test, then final source-only diff/staging/PR. See PACKAGE_09_HANDOFF.md. Do not repeat Fresh13 or claim whole-binary Metricool absence/license closure.
 
 Package09 actual startup/close now PASS: PID30676 exit0/zeroowneddescendants/zerojobs at23:38:12Z. No further launch/render needed. Complete source-only commit and adapted push/PR, no main merge. Local folder only; static FFmpeg corresponding-source closure and visual observation limitations remain explicit.
+
+- [ ] Independently review the installed macOS generated-preview cache integration, especially unknown third-party mirror/backup cases, cross-machine queue state, and its timed runtime behavior; validate further on disposable media before relying on or expanding its use. Do not claim Google Drive file eviction from thumbnail cleanup.
+
+PR16 candidate: review detached normal merge commit before any fast-forward of adapted. Windows offline compile and16focusedtests passed; no macOSruntimeclaim. Keep cachedeletion permanentlyOFF and source/autoqueue timersOFF inreview. Preserve existingpackage/heldjobs; no rerender. Update PR16 only after promotion, no mainpush/PRmerge.

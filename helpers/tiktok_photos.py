@@ -3,6 +3,7 @@ import argparse
 import json
 import re
 import sqlite3
+import ssl
 import subprocess
 import sys
 import time
@@ -15,10 +16,13 @@ POST = re.compile(r'https?://(?:www\.)?tiktok\.com/@([\w.-]+)/(?:photo|video)/(\
 SCRIPT = re.compile(r'<script[^>]+id=["\']__UNIVERSAL_DATA_FOR_REHYDRATION__["\'][^>]*>(.*?)</script>', re.S)
 
 def get_url(url, referer=None):
+    context = ssl.create_default_context()
+    if sys.platform == "darwin" and not context.get_ca_certs():
+        context.load_verify_locations(cafile="/etc/ssl/cert.pem")
     headers = {'User-Agent': UA, 'Accept-Language': 'en-US,en;q=0.9'}
     if referer:
         headers['Referer'] = referer
-    with urlopen(Request(url, headers=headers), timeout=30) as response:
+    with urlopen(Request(url, headers=headers), timeout=30, context=context) as response:
         return response.read(), response.headers.get_content_type()
 
 def get_item(username, post_id):

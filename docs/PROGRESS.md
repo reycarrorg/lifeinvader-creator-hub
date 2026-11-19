@@ -1,5 +1,27 @@
 # Project progress
 
+## 2026-11-19 — Shared source integration
+
+- Prepared the Mac source changes alongside the auto-queue handoff for shared review. Local macOS Rust tests passed serially (40); the default parallel run failed seven tests, tracked in ISSUES. The source-folder scan can remain busy when a Drive operation stalls; Windows validation for this revision remains outstanding. Local builds, runtime data, account records, and credentials are not included.
+
+## 2026-11-19 — Local macOS preparation
+
+- Diagnosed an observed live macOS hang: a source-summary request stayed in a blocking directory open beneath `gather` while unrelated local API requests timed out. The database guard is released before the scan. The configured source root was the user's Google Drive, but the process sample did not identify the blocked child path.
+- Prepared a separate candidate that moves source/profile overview scans to blocking workers and reserves separate single slots for background scans and explicitly opened sources or picker selections. Timed-out scans keep their slots until their filesystem calls actually finish. Dashboard counts are opt-in via **Load counts**; picker and library scans are bounded, and duplicate in-flight count requests are shared. A macOS test interposing two 12-second synthetic directory opens verified that a stalled dashboard scan does not stop opening and queueing synthetic Solo media, while unrelated APIs remain responsive. No user media was touched by the test.
+- Prepared a separate Apple Silicon checkout of PR #15 at `417771ec82afcc1687dd6807f04dae1fce4e7aab`; the Windows installation and existing local project/data were not changed. macOS now invokes `python3` for the existing photo helpers, while Windows retains `python`. Two smoke-test fixtures select the Windows compiler toolchain only on Windows.
+- Added a local launcher for the release build. A first launch creates a separate empty Mac database and does not connect Google Drive or transfer Windows profiles, queues, or posting history. The local gallery-dl tools are a separate copy of the existing runtime and are excluded from Git.
+- The launcher holds a temporary macOS system-sleep assertion tied to the Hub process, effective only on AC power. On AC, an isolated test verified the assertion and cleanup after both Hub and launcher exits, with saved power settings unchanged. Battery operation and lid-closed behavior were not physically tested; the launcher does not override lid closure or keep the display awake.
+- Apple Silicon debug and release builds, nine Rust tests, the JavaScript collector test, and 13 isolated smoke tests passed. The original TikTok photo helper saved two mocked slideshow images and skipped them on repeat. The launcher was tested with a disposable database and no source schedules, auto-queue rules, posts, or Drive root. The actual Hub detected the separate local gallery-dl installation; no live social download or post was made.
+- Windows-to-Mac data transfer, root/path remapping, cross-machine queue coordination, real-platform access, and the Brave launch workflow remain unverified. Copied databases must not be assumed to coordinate claims or download archives between computers.
+
+## 2026-11-19 — Automatic queue and assistant handoff
+
+Review: https://github.com/reycarrorg/lifeinvader-creator-hub/pull/15.
+
+- Added opt-in profile rules that save picker filters, queue limit, interval and assistant instructions in SQLite. A worker adds at most one random matching local item per interval while the Hub is open. The profile tile shows a separate countdown. Missed intervals do not produce a backlog, and the queue limit includes posts awaiting review.
+- Added per-item readiness, profile guidance, a structured result input and durable claims to the handoff. A claim blocks another compliant worker from claiming the item; an interrupted claim persists across restarts and can be released only for human review. Unscheduled and due items are eligible by default; future, claimed, missing-file and review-needed items are not.
+- Isolated tests exercise filters, scanned-duration identity, limits, duplicate exclusion, due scheduling, result conflicts, claims, interruption recovery and persistence. Browser testing covered rule setup, saved guidance, countdown and claimed-post display. The release started against a disposable copy of an existing database and loaded its handoff without enabling rules. No social post or live source sync was performed. The owner will choose the assistant schedule later; the actual scheduled assistant, browser permissions and real-platform upload remain unverified.
+
 ## 2026-11-18 — Solo Posts picker and optional editor
 
 Review: https://github.com/reycarrorg/lifeinvader-creator-hub/pull/14 (stacked on the FFmpeg fix branch).
@@ -335,3 +357,13 @@ Compiled new main-app package-only no-authority mode, noOPS or writer routes/sch
 
 ## 2026-11-19 23:38:12Z /17:38:12CT - exact package app lifecycle PASS
 Andre approved exact269209c125a668d304389464420df215e8b5b78ffa4cbc9677bbe88ad4bc9ffa. One official scoped package-only startup/close check with planb00caf94bea185031e06112bf615b7f832c7aaf9c72eb4db2a191de1b8997fa6 and finalmanifest90dbfde1df0c4c84fd929854ae2444c297d2b7a337c8b756f8f6a1fbbda1fad9. PID30676 exit0, ordinary UI_CLOSE_REQUESTED, zeroowneddescendants/zerojobs, writer-route refusals, noMetricool/OPS, browser,render,GPU,accounts,deletion. Evidence tools/package-startup-close-09/result.json. This qualifies local folder bootstrap/model + no-authority app lifecycle, not a redistributable installer or visual-caption gate. Source-only review/commit next; all runtime/media/database/credential artifacts excluded.
+
+## 2026-11-19 — macOS preview cache
+
+- Prepared automatic cleanup of newly registered generated previews in the OS per-user cache, with source/queue checks, bounded passes and shared process/file locking. Existing unregistered preview files are preserved. No Google Drive file is deleted or evicted by this work.
+- Synthetic Rust tests covered generation and registration, posted Solo Posts, cutoff fingerprint checks, queued/claimed/unknown and cloud-marker/symlink/hardlink protection, bounded sweeps, inspection timeout, unlocked database access during inspection, and cancellation after same-connection or external database changes. The original candidate was then installed on the Mac and used to request two previews; one registered and one did not. It has not been validated on Windows or exercised for six real hours.
+
+- Prepared a follow-up fix for unregistered preview handling: changed source metadata triggers a bounded fresh decode, occupied unregistered files are preserved while another cache slot is used, and registration failures emit path-free rate-limited messages. Synthetic tests cover metadata changes, persistent instability, a registration error, and cache reuse. The original live registration failure had not been logged and its cause is unconfirmed.
+
+## PR16 isolated integration candidate
+Reconciled pinned main5eb2461 with adapted d1d0296 in detached worktree only. Both dependency/migration/module sets retained. Both source and auto-queue timers OFF in review modes; cache-deletion worker never spawned and worker/sweep entry guarded OFF on all platforms.16focusedRust tests + source-scan JS passed offline; noapp/GPU/realqueue/deletion. macOS runtime not qualified. See PR16_INTEGRATION.md. Verified branch/package remain untouched pending candidate review.

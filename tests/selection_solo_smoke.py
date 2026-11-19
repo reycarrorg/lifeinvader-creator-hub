@@ -11,7 +11,7 @@ def wait_run(sid):
  raise AssertionError('download timed out')
 with tempfile.TemporaryDirectory(prefix='lifeinvader-selection-') as tmp:
  base=Path(tmp); drive=base/'drive';drive.mkdir();media=base/'media';media.mkdir();fake=base/'fake.exe'
- subprocess.run(['rustc','+stable-x86_64-pc-windows-msvc',str(ROOT/'tests/fake_selection_ytdlp.rs'),'-o',str(fake)],check=True)
+ subprocess.run(['rustc']+(['+stable-x86_64-pc-windows-msvc'] if os.name=='nt' else [])+[str(ROOT/'tests/fake_selection_ytdlp.rs'),'-o',str(fake)],check=True)
  env=os.environ.copy();env.update(LIFEINVADER_DB=str(base/'db.sqlite3'),LIFEINVADER_MEDIA=str(media),LIFEINVADER_PORT='3859')
  p=start(env,seed=False)
  try:

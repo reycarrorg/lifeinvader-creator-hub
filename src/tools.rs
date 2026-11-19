@@ -1,5 +1,10 @@
 use std::{path::PathBuf,process::Command};
 
+/// Python's executable is named `python3` on macOS and other Unix systems.
+pub(crate) fn python_command() -> &'static str {
+ if cfg!(windows) { "python" } else { "python3" }
+}
+
 /// Resolve the actual executable so child tools do not depend on the system PATH.
 pub(crate) fn ffmpeg_path() -> Option<PathBuf> {
  let name=if cfg!(windows){"ffmpeg.exe"}else{"ffmpeg"};

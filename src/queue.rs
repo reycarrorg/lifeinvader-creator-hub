@@ -9,14 +9,16 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
 pub struct Add {
-    source_id: i64,
-    path: String,
+    pub(crate) source_id: i64,
+    pub(crate) path: String,
     #[serde(default)]
-    scheduled_for: String,
+    pub(crate) scheduled_for: String,
     #[serde(default)]
-    edit_id: String,
+    pub(crate) edit_id: String,
     #[serde(default)]
-    caption: String,
+    pub(crate) caption: String,
+    #[serde(skip)]
+    pub(crate) auto_guard: Option<(String, i64, i64, i64)>,
 }
 #[derive(Deserialize)]
 pub struct Update {
@@ -33,28 +35,32 @@ pub struct Update {
     note_kind: String,
     #[serde(default)]
     expected_revision: Option<i64>,
+    #[serde(default)]
+    claim_token: String,
 }
 #[derive(Serialize)]
 pub struct Entry {
     id: i64,
-    source_id: i64,
+    pub(crate) source_id: i64,
     source_name: String,
-    platform: String,
-    path: String,
+    pub(crate) platform: String,
+    pub(crate) path: String,
     edited_path: String,
-    post_id: String,
+    pub(crate) post_id: String,
     title: String,
     description: String,
     posted_date: String,
     posted_date_kind: String,
     original_url: String,
     channel_url: String,
-    state: String,
+    pub(crate) state: String,
     caption: String,
     post_url: String,
     scheduled_for: String,
     available: bool,
     revision: i64,
+    claimed: bool,
+    needs_review: bool,
 }
 fn schedule(s: &str) -> ApiResult<()> {
     if !s.is_empty()
@@ -86,7 +92,7 @@ pub async fn list(State(app): State<App>, Path(id): Path<i64>) -> ApiResult<Json
         .and_then(|c| source::checked_root(&c).ok())
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let mut stmt=db.prepare("SELECT q.id,q.source_id,p.name,q.platform,q.path,q.post_id,q.title,q.description,q.posted_date,q.original_url,q.channel_url,q.state,q.caption,q.post_url,q.scheduled_for,q.root,q.posted_date_kind,q.revision,COALESCE(e.edited_path,'') FROM posting_queue q JOIN profiles p ON p.id=q.source_id LEFT JOIN media_edits e ON e.id=q.edit_id WHERE q.profile_id=? ORDER BY CASE WHEN q.state='queued' THEN 0 ELSE 1 END, q.id DESC").map_err(internal)?;
+    let mut stmt=db.prepare("SELECT q.id,q.source_id,p.name,q.platform,q.path,q.post_id,q.title,q.description,q.posted_date,q.original_url,q.channel_url,q.state,q.caption,q.post_url,q.scheduled_for,q.root,q.posted_date_kind,q.revision,COALESCE(e.edited_path,''),EXISTS(SELECT 1 FROM posting_queue_claims c WHERE c.queue_id=q.id),COALESCE((SELECT event_type FROM posting_queue_events ev WHERE ev.queue_id=q.id ORDER BY ev.id DESC LIMIT 1),'') IN ('needs_review','failed_attempt') FROM posting_queue q JOIN profiles p ON p.id=q.source_id LEFT JOIN media_edits e ON e.id=q.edit_id WHERE q.profile_id=? ORDER BY CASE WHEN q.state='queued' THEN 0 ELSE 1 END, q.id DESC").map_err(internal)?;
     let rows = stmt
         .query_map([id], |r| {
             Ok((
@@ -110,6 +116,8 @@ pub async fn list(State(app): State<App>, Path(id): Path<i64>) -> ApiResult<Json
                     scheduled_for: r.get(14)?,
                     available: false,
                     revision: r.get(17)?,
+                    claimed: r.get(19)?,
+                    needs_review: r.get(20)?,
                 },
                 r.get::<_, String>(15)?,
             ))
@@ -147,6 +155,10 @@ pub async fn add(
         source::post_metadata(&target).unwrap_or_default();
     let mut db = app.db.lock().map_err(internal)?;
     destination(&db, id)?;
+    if let Some((filters, next_run, max_pending, generation)) = &input.auto_guard {
+        let allowed:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM auto_queue_rules r JOIN profiles p ON p.id=r.profile_id WHERE r.profile_id=? AND r.enabled=1 AND p.archived=0 AND r.filters=? AND r.next_run=? AND r.max_pending=? AND r.generation=?) AND (SELECT COUNT(*) FROM posting_queue WHERE profile_id=? AND state='queued') < ?",params![id,filters,next_run,max_pending,generation,id,max_pending],|r|r.get(0)).map_err(internal)?;
+        if !allowed { return Err((StatusCode::PRECONDITION_FAILED,"Auto queue settings or queue changed; this pick was skipped.".into())); }
+    }
     let (mut platform, mut channel_url, _) = source::source_profile(&db, input.source_id)?;
     if channel_url == crate::solo::SOLO_URL {
         let (_, original_channel, original_platform) = source::original_account(&target);
@@ -229,10 +241,15 @@ pub async fn update(
             "This queue item changed. Reload it before recording anything.".into(),
         ));
     }
+    let claim:Option<String>=tx.query_row("SELECT token FROM posting_queue_claims WHERE queue_id=? AND profile_id=?",params![qid,id],|r|r.get(0)).optional().map_err(internal)?;
+    if claim.as_deref() != if input.claim_token.is_empty(){None}else{Some(input.claim_token.as_str())} {
+        return Err((StatusCode::CONFLICT,"This item is claimed by a posting run; resolve it before updating.".into()));
+    }
     let changed = old_state != input.state
         || old_caption != input.caption
         || old_url != input.post_url
         || old_schedule != input.scheduled_for;
+    if claim.is_some() && input.state == "queued" && (input.note.trim().is_empty() || !["needs_review","failed_attempt"].contains(&input.note_kind.as_str())) { return Err(bad("A claimed post left queued needs a failed attempt or review note.")); }
     if changed || !input.note.trim().is_empty() {
         tx.execute("UPDATE posting_queue SET state=?,caption=?,post_url=?,scheduled_for=?,updated_at=datetime('now'),revision=revision+1 WHERE id=? AND profile_id=?",params![input.state,input.caption,input.post_url,input.scheduled_for,qid,id]).map_err(internal)?;
     }
@@ -251,6 +268,7 @@ pub async fn update(
     if changed && input.state == "posted" && old_state != "posted" {
         tx.execute("UPDATE analytics_bridge SET next_run=unixepoch() WHERE profile_id=? AND enabled=1 AND after_post=1",[id]).map_err(internal)?;
     }
+    if claim.is_some() { tx.execute("DELETE FROM posting_queue_claims WHERE queue_id=?",[qid]).map_err(internal)?; }
     tx.commit().map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }

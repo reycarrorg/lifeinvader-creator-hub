@@ -148,7 +148,7 @@ pub(crate) mod tests {
         let db=Connection::open_in_memory().unwrap();crate::init(&db).unwrap();store::init(&db).unwrap();
         db.execute("INSERT INTO profiles(id,name,platform,url,role,source_folder) VALUES(1,'sample-source','tiktok','https://www.tiktok.com/@sample-source','source','sample-source')",[]).unwrap();
         db.execute("INSERT INTO settings(key,value) VALUES('source_root',?)",[root.to_str().unwrap()]).unwrap();
-        App{controller_ui:Arc::new(crate::controller_ui_lifetime::Lifetime::new(false)),controller_manual:Arc::new(crate::controller_manual::Unavailable),db:Arc::new(Mutex::new(db)),media:root.clone(),log_dir:root,controller_ops:Arc::new(crate::controller_ops::Unavailable),controller_worker:Arc::new(crate::controller_worker::Unavailable),
+        App{cache_scope:"adapted-isolated-test".into(),controller_ui:Arc::new(crate::controller_ui_lifetime::Lifetime::new(false)),controller_manual:Arc::new(crate::controller_manual::Unavailable),db:Arc::new(Mutex::new(db)),media:root.clone(),log_dir:root,controller_ops:Arc::new(crate::controller_ops::Unavailable),controller_worker:Arc::new(crate::controller_worker::Unavailable),
 }
     }
     #[tokio::test] async fn package_review_has_no_dispatch_or_ops(){

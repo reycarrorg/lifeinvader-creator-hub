@@ -13,7 +13,7 @@ def wait(pid):
  raise AssertionError('timeout')
 with tempfile.TemporaryDirectory(prefix='lifeinvader-recovery-') as temp:
  root=Path(temp);drive=root/'drive';drive.mkdir();media=root/'media';media.mkdir();fake=root/'fake.exe'
- subprocess.run(['rustc','+stable-x86_64-pc-windows-msvc',str(ROOT/'tests/fake_recovery_ytdlp.rs'),'-o',str(fake)],check=True)
+ subprocess.run(['rustc']+(['+stable-x86_64-pc-windows-msvc'] if os.name=='nt' else [])+[str(ROOT/'tests/fake_recovery_ytdlp.rs'),'-o',str(fake)],check=True)
  env=os.environ.copy();env.update(LIFEINVADER_DB=str(root/'db.sqlite3'),LIFEINVADER_MEDIA=str(media),LIFEINVADER_PORT='3859')
  p=start(env)
  try:
