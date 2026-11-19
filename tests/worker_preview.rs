@@ -244,3 +244,339 @@ mod tests {
         assert_eq!(parse_response(&first).unwrap(), parsed);
     }
 }
+
+// Synthetic evidence validation only. None of these types is wired to runtime code.
+#[cfg(test)]
+mod evidence_tests {
+    use super::*;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct Selection {
+        generation: u64,
+        version: Version,
+        cut_key: Sha256,
+        cut: Cut,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum State {
+        Unknown,
+        Pending,
+        Failed,
+        Revoked,
+        Ambiguous,
+        Committed,
+    }
+
+    // Receiver-side request association; the generation must not be supplied by JSON.
+    struct WorkerReply {
+        request_generation: u64,
+        response: UntrustedResponse,
+    }
+
+    #[derive(Debug, Clone)]
+    struct Ledger {
+        selection: Selection,
+        state: State,
+        receipt: Option<Receipt>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum Observation {
+        Unsafe,
+        Unavailable,
+        Unverified,
+        Verified { selection: Selection, observed: Receipt },
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum Outcome {
+        Hold(HoldReason),
+        EvidenceMatches,
+    }
+
+    fn compare_selection(
+        expected: &Selection,
+        found: &Selection,
+    ) -> Result<(), HoldReason> {
+        if found.generation != expected.generation {
+            return Err(HoldReason::Stale);
+        }
+        if found != expected {
+            return Err(HoldReason::EvidenceMismatch);
+        }
+        Ok(())
+    }
+
+    fn check(
+        selection: Option<&Selection>,
+        response: Option<&WorkerReply>,
+        ledger: Option<&Ledger>,
+        artifact: Option<&Observation>,
+    ) -> Result<(), HoldReason> {
+        let selection = selection.ok_or(HoldReason::MissingEvidence)?;
+        if selection.generation == 0 || !selection.cut.valid() {
+            return Err(HoldReason::VerificationUnavailable);
+        }
+        let ledger = ledger.ok_or(HoldReason::MissingEvidence)?;
+        compare_selection(selection, &ledger.selection)?;
+        match ledger.state {
+            State::Unknown => return Err(HoldReason::VerificationUnavailable),
+            State::Pending => return Err(HoldReason::Pending),
+            State::Failed => return Err(HoldReason::Failed),
+            State::Revoked => return Err(HoldReason::Revoked),
+            State::Ambiguous => return Err(HoldReason::Ambiguous),
+            State::Committed => {}
+        }
+        let receipt = ledger.receipt.as_ref().ok_or(HoldReason::MissingEvidence)?;
+        if receipt.byte_count == 0 {
+            return Err(HoldReason::VerificationUnavailable);
+        }
+        let response = response.ok_or(HoldReason::MissingEvidence)?;
+        if response.request_generation != selection.generation {
+            return Err(HoldReason::Stale);
+        }
+        let ready = match &response.response.0 {
+            WireResponse::Hold(hold) => return Err(hold.reason.clone()),
+            WireResponse::PreviewReady(ready) => ready,
+        };
+        if ready.schema_version != selection.version
+            || ready.cut_key != selection.cut_key
+            || ready.cut != selection.cut
+            || ready.receipt != *receipt
+        {
+            return Err(HoldReason::EvidenceMismatch);
+        }
+        match artifact.ok_or(HoldReason::MissingEvidence)? {
+            Observation::Unsafe => Err(HoldReason::UnsafeArtifact),
+            Observation::Unavailable => Err(HoldReason::ArtifactUnavailable),
+            Observation::Unverified => Err(HoldReason::VerificationUnavailable),
+            Observation::Verified { selection: observed_selection, observed } => {
+                compare_selection(selection, observed_selection)?;
+                if observed != receipt {
+                    return Err(HoldReason::ArtifactMismatch);
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn evaluate(
+        selection: Option<&Selection>,
+        response: Option<&WorkerReply>,
+        ledger: Option<&Ledger>,
+        artifact: Option<&Observation>,
+    ) -> Outcome {
+        match check(selection, response, ledger, artifact) {
+            Ok(()) => Outcome::EvidenceMatches,
+            Err(reason) => Outcome::Hold(reason),
+        }
+    }
+
+    struct Fixture {
+        selection: Option<Selection>,
+        claim: Option<WorkerReply>,
+        ledger: Option<Ledger>,
+        artifact: Option<Observation>,
+    }
+
+    fn hash(byte: char) -> Sha256 {
+        Sha256::try_from(byte.to_string().repeat(64)).unwrap()
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            // Each evidence channel has its own fixture, not a value copied from a wire claim.
+            fn selection() -> Selection {
+                Selection {
+                    generation: 7,
+                    version: Version,
+                    cut_key: hash('a'),
+                    cut: Cut {
+                        provider: "fixture".into(),
+                        provider_id: "synthetic-item".into(),
+                        source_sha256: hash('b'),
+                        start_ms: 1000,
+                        end_ms: 22000,
+                        recipe_version: "fixture-v1".into(),
+                    },
+                }
+            }
+            fn receipt() -> Receipt {
+                Receipt { artifact_sha256: hash('c'), byte_count: 4 }
+            }
+            let encoded = format!(
+                r#"{{"preview_ready":{{"schema_version":1,"cut_key":"{a}","cut":{{"provider":"fixture","provider_id":"synthetic-item","source_sha256":"{b}","start_ms":1000,"end_ms":22000,"recipe_version":"fixture-v1"}},"receipt":{{"artifact_sha256":"{c}","byte_count":4}}}}}}"#,
+                a = "a".repeat(64), b = "b".repeat(64), c = "c".repeat(64),
+            );
+            Self {
+                selection: Some(selection()),
+                claim: Some(WorkerReply {
+                    request_generation: 7,
+                    response: parse_response(encoded.as_bytes()).unwrap(),
+                }),
+                ledger: Some(Ledger {
+                    selection: selection(),
+                    state: State::Committed,
+                    receipt: Some(receipt()),
+                }),
+                artifact: Some(Observation::Verified {
+                    selection: selection(),
+                    observed: receipt(),
+                }),
+            }
+        }
+        fn check(&self) -> Outcome {
+            evaluate(
+                self.selection.as_ref(), self.claim.as_ref(),
+                self.ledger.as_ref(), self.artifact.as_ref(),
+            )
+        }
+        fn ready_claim(&mut self) -> &mut ReadyClaim {
+            match &mut self.claim.as_mut().unwrap().response.0 {
+                WireResponse::PreviewReady(ready) => ready,
+                _ => panic!("expected ready fixture"),
+            }
+        }
+        fn observation(&mut self) -> (&mut Selection, &mut Receipt) {
+            match self.artifact.as_mut().unwrap() {
+                Observation::Verified { selection, observed } => (selection, observed),
+                _ => panic!("expected verified fixture"),
+            }
+        }
+    }
+
+    #[test]
+    fn exact_match_is_repeatable() {
+        let f = Fixture::new();
+        assert_eq!(f.check(), Outcome::EvidenceMatches);
+        assert_eq!(f.check(), Outcome::EvidenceMatches);
+    }
+
+    #[test]
+    fn no_channel_can_be_omitted() {
+        for drop in [
+            (|f: &mut Fixture| f.selection = None) as fn(&mut Fixture),
+            |f| f.claim = None,
+            |f| f.ledger = None,
+            |f| f.artifact = None,
+            |f| f.ledger.as_mut().unwrap().receipt = None,
+        ] {
+            let mut f = Fixture::new();
+            drop(&mut f);
+            assert_eq!(f.check(), Outcome::Hold(HoldReason::MissingEvidence));
+        }
+    }
+
+    #[test]
+    fn ready_claim_cannot_override_ledger_state() {
+        for (state, reason) in [
+            (State::Unknown, HoldReason::VerificationUnavailable),
+            (State::Pending, HoldReason::Pending),
+            (State::Failed, HoldReason::Failed),
+            (State::Revoked, HoldReason::Revoked),
+            (State::Ambiguous, HoldReason::Ambiguous),
+        ] {
+            let mut f = Fixture::new();
+            f.ledger.as_mut().unwrap().state = state;
+            assert_eq!(f.check(), Outcome::Hold(reason));
+        }
+    }
+
+    #[test]
+    fn old_and_future_generations_hold_even_when_same_cut() {
+        for generation in [6, 8] {
+            let mut f = Fixture::new();
+            f.claim.as_mut().unwrap().request_generation = generation;
+            assert_eq!(f.check(), Outcome::Hold(HoldReason::Stale));
+            let mut f = Fixture::new();
+            f.ledger.as_mut().unwrap().selection.generation = generation;
+            assert_eq!(f.check(), Outcome::Hold(HoldReason::Stale));
+            let mut f = Fixture::new();
+            f.observation().0.generation = generation;
+            assert_eq!(f.check(), Outcome::Hold(HoldReason::Stale));
+        }
+    }
+
+    #[test]
+    fn each_canonical_cut_field_and_key_must_match() {
+        for mutate in [
+            (|c: &mut Cut| c.provider = "other".into()) as fn(&mut Cut),
+            |c| c.provider_id = "other".into(),
+            |c| c.source_sha256 = hash('d'),
+            |c| c.start_ms += 1,
+            |c| c.end_ms += 1,
+            |c| c.recipe_version = "fixture-v2".into(),
+        ] {
+            let mut f = Fixture::new();
+            mutate(&mut f.ready_claim().cut);
+            assert_eq!(f.check(), Outcome::Hold(HoldReason::EvidenceMismatch));
+            let mut f = Fixture::new();
+            mutate(&mut f.ledger.as_mut().unwrap().selection.cut);
+            assert_eq!(f.check(), Outcome::Hold(HoldReason::EvidenceMismatch));
+            let mut f = Fixture::new();
+            mutate(&mut f.observation().0.cut);
+            assert_eq!(f.check(), Outcome::Hold(HoldReason::EvidenceMismatch));
+        }
+        let mut f = Fixture::new();
+        f.ready_claim().cut_key = hash('d');
+        assert_eq!(f.check(), Outcome::Hold(HoldReason::EvidenceMismatch));
+        let mut f = Fixture::new();
+        f.ledger.as_mut().unwrap().selection.cut_key = hash('d');
+        assert_eq!(f.check(), Outcome::Hold(HoldReason::EvidenceMismatch));
+        let mut f = Fixture::new();
+        f.observation().0.cut_key = hash('d');
+        assert_eq!(f.check(), Outcome::Hold(HoldReason::EvidenceMismatch));
+    }
+
+    #[test]
+    fn receipt_bytes_and_hash_must_agree_independently() {
+        for mutate in [
+            (|r: &mut Receipt| r.byte_count += 1) as fn(&mut Receipt),
+            |r| r.artifact_sha256 = hash('e'),
+        ] {
+            let mut f = Fixture::new();
+            mutate(&mut f.ready_claim().receipt);
+            assert_eq!(f.check(), Outcome::Hold(HoldReason::EvidenceMismatch));
+            let mut f = Fixture::new();
+            mutate(f.observation().1);
+            assert_eq!(f.check(), Outcome::Hold(HoldReason::ArtifactMismatch));
+        }
+        let mut f = Fixture::new();
+        f.ledger.as_mut().unwrap().receipt.as_mut().unwrap().byte_count = 0;
+        assert_eq!(f.check(), Outcome::Hold(HoldReason::VerificationUnavailable));
+    }
+
+    #[test]
+    fn unverified_unavailable_and_unsafe_observations_are_closed_holds() {
+        for (observation, reason) in [
+            (Observation::Unverified, HoldReason::VerificationUnavailable),
+            (Observation::Unavailable, HoldReason::ArtifactUnavailable),
+            (Observation::Unsafe, HoldReason::UnsafeArtifact),
+        ] {
+            let mut f = Fixture::new();
+            f.artifact = Some(observation);
+            assert_eq!(f.check(), Outcome::Hold(reason));
+        }
+    }
+
+    #[test]
+    fn worker_hold_is_not_promoted_and_closed_diagnostics_do_not_echo_cut() {
+        let mut f = Fixture::new();
+        f.claim = Some(WorkerReply {
+            request_generation: 7,
+            response: parse_response(
+                br#"{"hold":{"schema_version":1,"reason":"pending"}}"#
+            ).unwrap(),
+        });
+        assert_eq!(f.check(), Outcome::Hold(HoldReason::Pending));
+        assert_eq!(format!("{:?}", f.check()), "Hold(Pending)");
+    }
+
+    #[test]
+    fn invalid_current_generation_holds() {
+        let mut f = Fixture::new();
+        f.selection.as_mut().unwrap().generation = 0;
+        assert_eq!(f.check(), Outcome::Hold(HoldReason::VerificationUnavailable));
+    }
+}
