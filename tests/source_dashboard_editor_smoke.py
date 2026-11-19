@@ -58,4 +58,3 @@ with tempfile.TemporaryDirectory(prefix='lifeinvader-edit-') as tmp:
 
         print('PASS: 24h counts, dead and auto-sync filtering, category image, real crop/trim/mute/overlay, queue and handoff')
     finally:proc.terminate();proc.wait(timeout=5)
-
