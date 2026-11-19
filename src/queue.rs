@@ -126,7 +126,12 @@ pub async fn add(
         source::post_metadata(&target).unwrap_or_default();
     let db = app.db.lock().map_err(internal)?;
     destination(&db, id)?;
-    let (platform, channel_url, _) = source::source_profile(&db, input.source_id)?;
+    let (mut platform, mut channel_url, _) = source::source_profile(&db, input.source_id)?;
+    if channel_url == crate::solo::SOLO_URL {
+        let (_, original_channel, original_platform) = source::original_account(&target);
+        channel_url = original_channel.unwrap_or_default();
+        platform = original_platform.unwrap_or_else(|| "other".into());
+    }
     let root_path = source::checked_root(&source::config(&db).map_err(internal)?)?;
     let mut date_kind = date.as_ref().map(|_| "metadata".to_owned());
     crate::date_audit::resolve(

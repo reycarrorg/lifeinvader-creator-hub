@@ -18,6 +18,8 @@ use std::{
 use tower_http::services::ServeDir;
 use uuid::Uuid;
 mod analytics;
+mod solo;
+mod selection;
 mod bridge;
 mod categories;
 mod date_audit;
@@ -113,6 +115,8 @@ struct ProfileInput {
     tags: Vec<String>,
     #[serde(default)]
     source_folder: String,
+    #[serde(default)]
+    setup_selection: bool,
 }
 
 fn init(db: &Connection) -> rusqlite::Result<()> {
@@ -174,6 +178,9 @@ fn init(db: &Connection) -> rusqlite::Result<()> {
     CREATE TABLE IF NOT EXISTS source_preferences (profile_id INTEGER PRIMARY KEY REFERENCES profiles(id), include_in_batch INTEGER NOT NULL DEFAULT 1);
     CREATE TABLE IF NOT EXISTS categories (role TEXT NOT NULL CHECK(role IN ('destination','source')), name TEXT NOT NULL COLLATE NOCASE, PRIMARY KEY(role,name));
     CREATE TABLE IF NOT EXISTS source_new_files (profile_id INTEGER NOT NULL REFERENCES profiles(id), root TEXT NOT NULL, path TEXT NOT NULL, downloaded_at INTEGER NOT NULL, seen INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(profile_id,root,path));")?;
+    db.execute_batch("CREATE TABLE IF NOT EXISTS source_selection(profile_id INTEGER PRIMARY KEY REFERENCES profiles(id),pending INTEGER NOT NULL,allowed TEXT NOT NULL,excluded TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'all');")?;
+    let selection_has_mode = { let mut stmt=db.prepare("PRAGMA table_info(source_selection)")?; let cols=stmt.query_map([],|r|r.get::<_,String>(1))?.collect::<Result<Vec<_>,_>>()?; cols.iter().any(|c|c=="mode") };
+    if !selection_has_mode { db.execute("ALTER TABLE source_selection ADD COLUMN mode TEXT NOT NULL DEFAULT 'all'",[])?; }
     db.execute_batch("CREATE TABLE IF NOT EXISTS profile_downloads (profile_id INTEGER NOT NULL REFERENCES profiles(id), root TEXT NOT NULL, platform TEXT NOT NULL, post_id TEXT NOT NULL, path TEXT NOT NULL, posted_date TEXT, PRIMARY KEY(profile_id,root,platform,post_id));")?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS profile_download_files (profile_id INTEGER NOT NULL REFERENCES profiles(id), root TEXT NOT NULL, platform TEXT NOT NULL, post_id TEXT NOT NULL, asset_id TEXT NOT NULL, path TEXT NOT NULL, PRIMARY KEY(profile_id,root,platform,asset_id));")?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS analytics_snapshots (profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, date TEXT NOT NULL, post_id TEXT NOT NULL DEFAULT '', followers INTEGER, following INTEGER, views INTEGER, likes INTEGER, comments INTEGER, shares INTEGER, source TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(profile_id,date,post_id));")?;
@@ -444,6 +451,7 @@ async fn add_profile(
     )
     .map_err(internal)?;
     let id = tx.last_insert_rowid();
+    if p.role == "source" && p.setup_selection { tx.execute("INSERT OR REPLACE INTO settings(key,value) VALUES(?, '1')",[format!("source_needs_selection_{id}")]).map_err(internal)?; }
     if p.role == "destination" {
         tx.execute(
             "INSERT INTO profile_statuses(item_id,profile_id) SELECT id,? FROM items",
@@ -1005,6 +1013,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             get(source::get_config).post(source::save_config),
         )
         .route("/api/source-settings/browse", post(source::browse_folder))
+        .route("/api/solo-posts", post(solo::start))
+        .route("/api/sources/{id}/preview", post(selection::preview))
+        .route("/api/sources/{id}/selection", post(selection::choose))
         .route("/api/sources/discover", get(source::discover))
         .route(
             "/api/date-audit",

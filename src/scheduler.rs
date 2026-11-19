@@ -22,7 +22,8 @@ pub async fn save_batch_setting(
     Json(input): Json<BatchSetting>,
 ) -> ApiResult<StatusCode> {
     let db = app.db.lock().map_err(internal)?;
-    source::source_profile(&db, id)?;
+    let (_,url,_) = source::source_profile(&db, id)?;
+    if url == crate::solo::SOLO_URL { return Err(bad("Solo posts cannot be included in Sync all.")); }
     db.execute("INSERT INTO source_preferences(profile_id,include_in_batch) VALUES(?,?) ON CONFLICT(profile_id) DO UPDATE SET include_in_batch=excluded.include_in_batch",params![id,input.include]).map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -65,7 +66,8 @@ fn save_schedule_for(app: App, id: i64, input: ScheduleInput, role: &str) -> Api
         return Err(bad("Choose an interval from 1 minute to 7 days."));
     }
     let mut db = app.db.lock().map_err(internal)?;
-    source::account_profile(&db, id, role)?;
+    let (_, url, _) = source::account_profile(&db, id, role)?;
+    if url == crate::solo::SOLO_URL { return Err(bad("Solo posts cannot be scheduled.")); }
     let tx = db.transaction().map_err(internal)?;
     let seconds = if input.enabled {
         input.interval_seconds

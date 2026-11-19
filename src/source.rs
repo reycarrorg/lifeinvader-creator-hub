@@ -14,9 +14,9 @@ use tower_http::services::ServeFile;
 
 #[derive(Serialize)]
 pub struct SourceConfig {
-    root: String,
+    pub(crate) root: String,
     pub(crate) downloader: String,
-    photo_helper: String,
+    pub(crate) photo_helper: String,
 }
 #[derive(Deserialize)]
 pub struct ConfigInput {
@@ -38,6 +38,8 @@ pub(crate) struct SourceFile {
     pub(crate) title: Option<String>,
     pub(crate) description: Option<String>,
     pub(crate) original_url: Option<String>,
+    pub(crate) original_account: Option<String>,
+    pub(crate) original_channel_url: Option<String>,
     pub(crate) duration_seconds: Option<f64>,
     asset_id: Option<String>,
     downloaded_at: Option<i64>,
@@ -249,6 +251,9 @@ pub(crate) fn account_profile(
     if role != expected_role {
         return Err(bad("This account is not in this section."));
     }
+    if expected_role == "source" && url == crate::solo::SOLO_URL {
+        return Ok(("other".into(), url, "Solo Posts/Downloads".into()));
+    }
     let parsed: axum::http::Uri = url.parse().map_err(bad)?;
     let host = parsed.host().unwrap_or("").to_ascii_lowercase();
     let host_ok = match platform.as_str() {
@@ -414,6 +419,17 @@ pub(crate) fn post_metadata(
         .filter(|n| n.is_finite() && *n >= 0.0 && *n <= 604800.0);
     Some((date, id, asset_id, title, description, url, duration))
 }
+pub(crate) fn original_account(path: &Path) -> (Option<String>, Option<String>, Option<String>) {
+    let info = path.with_extension("info.json");
+    let metadata = match fs::symlink_metadata(&info) { Ok(m) if m.is_file() && !m.file_type().is_symlink() && m.len() <= 1024*1024 => m, _ => return (None,None,None) };
+    let _ = metadata;
+    let value:serde_json::Value = match fs::read(info).ok().and_then(|v|serde_json::from_slice(&v).ok()) { Some(v)=>v,None=>return (None,None,None) };
+    let text=|keys: &[&str]| keys.iter().find_map(|k|value.get(*k).and_then(|v|v.as_str()).filter(|s|!s.trim().is_empty()).map(|s|s.chars().take(200).collect::<String>()));
+    let account=text(&["uploader_id","channel","uploader"]);
+    let channel=text(&["channel_url","uploader_url"]).filter(|s|s.starts_with("https://"));
+    let platform=text(&["extractor_key","extractor"]).map(|s|s.to_ascii_lowercase()).and_then(|s|if s.contains("tiktok"){Some("tiktok".into())}else if s.contains("instagram"){Some("instagram".into())}else if s.contains("youtube"){Some("youtube".into())}else{None});
+    (account,channel,platform)
+}
 pub(crate) fn gather(
     root: &Path,
     dir: &Path,
@@ -457,6 +473,7 @@ pub(crate) fn gather(
         };
         let (posted_date, post_id, asset_id, title, description, original_url, duration_seconds) =
             post_metadata(&path).unwrap_or_default();
+        let (original_account, original_channel_url, _) = original_account(&path);
         files.push(SourceFile {
             path: relative.replace('\\', "/"),
             name: name.to_string(),
@@ -479,6 +496,8 @@ pub(crate) fn gather(
             title,
             description,
             original_url,
+            original_account,
+            original_channel_url,
             duration_seconds,
             asset_id,
             downloaded_at: None,
@@ -842,7 +861,7 @@ fn sync_for(app: App, id: i64, input: SyncInput, role: &str) -> ApiResult<impl I
     let run_id = start_sync_for(app, id, input, role)?;
     Ok((StatusCode::ACCEPTED, Json(serde_json::json!({"id":run_id}))))
 }
-fn ensure_folder(root: &Path, folder: &str) -> std::io::Result<PathBuf> {
+pub(crate) fn ensure_folder(root: &Path, folder: &str) -> std::io::Result<PathBuf> {
     let mut path = root.to_path_buf();
     for component in Path::new(folder).components() {
         let std::path::Component::Normal(part) = component else {
@@ -863,8 +882,30 @@ fn ensure_folder(root: &Path, folder: &str) -> std::io::Result<PathBuf> {
 pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) -> ApiResult<i64> {
     let mut db = app.db.lock().map_err(internal)?;
     let (platform, url, folder) = account_profile(&db, id, role)?;
+    if url == crate::solo::SOLO_URL { return Err(bad("Solo posts cannot be synced. Add individual links instead.")); }
     let is_profile = role == "destination";
     let cfg = config(&db).map_err(internal)?;
+    let selection: Option<(bool,String,String,String)> = if !is_profile { db.query_row("SELECT pending,allowed,excluded,mode FROM source_selection WHERE profile_id=?",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(internal)? } else { None };
+    let needs_selection:bool = !is_profile && db.query_row("SELECT EXISTS(SELECT 1 FROM settings WHERE key=?)",[format!("source_needs_selection_{id}")],|r|r.get(0)).map_err(internal)?;
+    if needs_selection && selection.is_none() { return Err(bad("Choose which posts to download before the first sync.")); }
+    let mut selection_pending = false;
+    let mut selection_filter = String::from("vcodec != none");
+    if let Some((pending, allowed, excluded, mode)) = selection {
+        let allowed: Vec<String> = serde_json::from_str(&allowed).map_err(internal)?;
+        let excluded: Vec<String> = serde_json::from_str(&excluded).map_err(internal)?;
+        if input.include_photos && (!excluded.is_empty() || mode == "before") { return Err(bad("Photo sync is unavailable for a source with excluded posts; it could bypass your selection.")); }
+        selection_pending = pending;
+        let limit_to_allowed = (pending && !excluded.is_empty()) || mode == "before";
+        let ids = if limit_to_allowed { &allowed } else { &excluded };
+        if !ids.is_empty() {
+            if ids.iter().any(|s|s.is_empty() || !s.chars().all(|c|c.is_ascii_alphanumeric() || "_-".contains(c))) { return Err(bad("The saved selection contains an invalid post ID.")); }
+            let regex=ids.join("|");
+            if regex.len()>24000 { return Err(bad("This selection is too large to sync safely. No posts were downloaded.")); }
+            selection_filter.push_str(if limit_to_allowed { " & id ~= '^(?:" } else { " & id !~= '^(?:" });
+            selection_filter.push_str(&regex);
+            selection_filter.push_str(")$'");
+        }
+    }
     let root = checked_root(&cfg)?;
     let tool = PathBuf::from(&cfg.downloader);
     if !tool.is_absolute() || !tool.is_file() {
@@ -1003,9 +1044,9 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
                 "--progress-template",
                 "download:__LV_PROGRESS__%(progress._percent_str)s",
                 "--match-filters",
-                "vcodec != none",
-                "--download-archive",
             ])
+            .arg(&selection_filter)
+            .arg("--download-archive")
             .arg(if is_profile {
                 account_dir.join("download-archive.txt")
             } else {
@@ -1048,8 +1089,10 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
                         "1",
                         "--progress-template",
                         "download:__LV_PROGRESS__%(progress._percent_str)s",
-                        "--download-archive",
+                        "--match-filters",
                     ])
+                    .arg(&selection_filter)
+                    .arg("--download-archive")
                     .arg(if is_profile {
                         account_dir.join("download-archive.txt")
                     } else {
@@ -1165,6 +1208,7 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
                     let _=db.execute("INSERT INTO source_new_files(profile_id,root,path,downloaded_at,seen) VALUES(?,?,?,unixepoch(),0) ON CONFLICT(profile_id,root,path) DO UPDATE SET downloaded_at=excluded.downloaded_at,seen=0",params![id,root.to_string_lossy().as_ref(),f.path]);
                 }
             }
+            if code == 0 && selection_pending { let _=db.execute("UPDATE source_selection SET pending=0 WHERE profile_id=?",[id]); }
             let _=db.execute("UPDATE source_sync_runs SET state=?,exit_code=?,finished=datetime('now') WHERE id=?",params![state,code,run_id]);
             let _=db.execute("UPDATE source_schedules SET next_run=unixepoch()+interval_seconds WHERE profile_id=? AND enabled=1",[id]);
         }

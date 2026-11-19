@@ -33,3 +33,9 @@ The unauthenticated Instagram profile extractor failed during a live test. An in
 ## Open — Older post dates and online availability
 
 The date audit can use existing sidecars, verify missing dates online where supported, or derive a clearly labeled UTC estimate from an unambiguous TikTok post ID. It does not invent a date for unknown/ambiguous IDs. Platforms may block metadata-only lookups; source ID timestamps are estimates, not guaranteed publishing dates. Audit currently checks date-related metadata, not complete missing thumbnails, captions or all other post fields.
+
+## Open — Initial source selection and solo-link coverage
+
+Related work: [PR #6](https://github.com/reycarrorg/lifeinvader-creator-hub/pull/6).
+
+Metadata-only previews depend on the provider and can fail, omit thumbnails or dates, or return a nonchronological/incomplete feed. Selection currently stops at 1,500 posts and includes the center post. Filtering preserves skipped IDs outside the downloaded archive; later unseen posts can be included for an after selection. A before selection stays limited to selected IDs. Photo sync is blocked where it could bypass the selection. Solo links use the original script's separate folder/archive, so duplicates across other source archives are not detected. Real-platform end-to-end validation, login support, retry/cancel controls, and large-account pagination remain open.
