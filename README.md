@@ -10,6 +10,7 @@ A local desktop-style content hub built with Rust, SQLite, and a browser interfa
 - Paste individual TikTok, Instagram, or YouTube post links under **Sources → Post links** to download into a separate, non-syncing Solo Posts collection. It uses the source folder and a separate archive like the existing solo-post script; original account details are shown when metadata supplies them.
 - When adding a source, preview up to 1,500 posts and choose all, or one side of a selected post. The center post is included. Skipped post IDs are recorded separately from the real archive and excluded from later video syncs; the earlier-side selection remains limited to the selected IDs. **Choose posts** on the source lets you revisit the selection.
 - Profile sync for accessible TikTok, Instagram and YouTube videos and, when the optional photo tools are installed, photo posts. Profile downloads have their own folders and archives.
+- Profile dashboards browse downloaded media across source accounts, with category, source, type, search and length filters and direct queueing. Older local videos can be scanned for length from the library; the scan reads the existing files and does not download them again.
 - A manual content library with per-profile claim and posting status.
 - A local all-profile AI handoff and activity history for the posting queue, with target account, source context, planned time, file references and manually recorded outcomes. Copy or download it from a profile's queue. It does not publish posts; see [computer-use handoff](docs/COMPUTER_USE_HANDOFF.md).
 - Shuffle downloaded source photos and videos using source/category, media type, available duration, original date and text filters; queue original file references for a profile and manually record status. Planned times do not automatically post. See [posting research and roadmap](docs/POSTING_RESEARCH.md). A reported post is a manual record; the app does not publish posts.
@@ -57,6 +58,8 @@ Choose an existing library folder under **Sources → Source folders** before sy
 
 The post selector uses the order returned by the platform, which may not reflect exact posting times; dates and thumbnails can be missing. Flat previews can fail for restricted accounts, and the app offers an explicit download-all fallback for a new source. Photo sync is disabled for selective sources when it could bypass the exclusion policy. Solo-post downloads do not currently use a signed-in browser, and their separate archive does not deduplicate against other source archives.
 
+For a TikTok profile that fails to resolve, **Fix TikTok sync** lets the user save a link to one of that account's own posts. After the normal listing fails, the app checks the post's owner, obtains its account ID and retries with the existing profile archive. Instagram can retry previously captured Brave profile links when its profile extractor fails; this is explicitly reported as partial coverage and photos can also use captured post links. These fallbacks depend on platform access, and captured links do not automatically include later posts unless refreshed.
+
 Use the app only for content you have the right to access and use. Sync is manual unless you enable an individual source's timer. Use only one downloader at a time; separate programs are not coordinated.
 
 ## Source date audit
@@ -95,6 +98,7 @@ python tests/smoke.py
 python tests/categories_smoke.py
 python tests/source_smoke.py
 python tests/profile_sync_smoke.py
+python tests/recovery_smoke.py
 python tests/scheduler_smoke.py
 ```
 
