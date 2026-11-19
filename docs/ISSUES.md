@@ -1,5 +1,9 @@
 # Known issues and planned work
 
+## Open — Profile recovery and content-library coverage
+
+TikTok account-ID recovery requires a valid post belonging to the profile and can still fail when platform access is restricted. Instagram captured-link fallback only covers posts previously visible in Brave and must be refreshed to include new posts; successful fallback is labeled partial. Photo and full account coverage have not been verified in a real sync. Library length scans read local media metadata and store lengths in the app browser's local storage; unsupported or unavailable files can remain unknown.
+
 ## Open — Computer-use posting and concurrency
 
 Related work: [PR #7](https://github.com/reycarrorg/lifeinvader-creator-hub/pull/7).

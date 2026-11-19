@@ -18,6 +18,7 @@ use std::{
 use tower_http::services::ServeDir;
 use uuid::Uuid;
 mod analytics;
+mod recovery;
 mod handoff;
 mod solo;
 mod selection;
@@ -829,6 +830,9 @@ async fn chart_js() -> impl IntoResponse {
         include_str!("../web/chart.umd.min.js"),
     )
 }
+async fn library_js() -> impl IntoResponse {
+    ([(axum::http::header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../web/library.js"))
+}
 async fn previews_js() -> impl IntoResponse {
     (
         [(
@@ -956,6 +960,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .route("/style.css", get(css))
         .route("/app.js", get(js))
         .route("/previews.js", get(previews_js))
+        .route("/library.js", get(library_js))
         .route("/chart.js", get(chart_js))
         .route("/api/items", get(list).post(import))
         .route("/api/posting-handoff", get(handoff::get))
@@ -994,6 +999,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/profiles/{id}/queue/{qid}", post(queue::update))
         .route("/api/profiles/{id}/queue/{qid}/events", get(handoff::events))
+        .route("/api/profiles/{id}/sync-recovery", get(recovery::get).post(recovery::save))
         .route(
             "/api/profiles/{id}/downloads",
             get(source::profile_overview),

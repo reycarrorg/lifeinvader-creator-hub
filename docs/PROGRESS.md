@@ -1,5 +1,12 @@
 # Project progress
 
+## 2026-11-18 — Profile sync recovery and source library
+
+- Added owner-verified TikTok profile recovery from a saved post URL. On a failed profile listing, the app verifies the uploader and retries using the secondary account ID while retaining the existing archive; the photo helper receives the recovered account URL. A bounded real metadata-only check resolved a TikTok account and listed two posts; full live sync remains unverified.
+- Instagram fallback now labels captured-link sync as partial and can retry photo posts individually when the profile photo listing fails. A bounded metadata-only check retrieved one Instagram reel and one photo post; real full media sync remains unverified. Captured links cover only visible posts and can become stale.
+- Profile and category dashboards now browse source media directly, with source/category/type/search/length filters and queue actions that reference existing files. A user-triggered local length scan populates a browser-local cache shared with the random picker; unknown lengths remain excluded from length filters.
+- Validated with fake-downloader recovery, account mismatch and archive reuse, partial Instagram video/photo fallback, existing profile/source/queue tests, and a synthetic browser walkthrough of library filters and queueing. No live full sync was started during the tests.
+
 ## 2026-11-18 — Computer-use posting handoff
 
 Shared review: [PR #7](https://github.com/reycarrorg/lifeinvader-creator-hub/pull/7), stacked on PR #6.
