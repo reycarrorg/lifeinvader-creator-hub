@@ -2,6 +2,8 @@
 
 ## 2026-11-18 — Combined categories and source cutoff clarity
 
+Review: https://github.com/reycarrorg/lifeinvader-creator-hub/pull/9 (stacked on the preceding profile sync and library branch).
+
 - Profiles and Sources now show their own categories and account tiles together. Category dashboards retain member management; profile categories show profile tiles and sync counts, and source categories keep their batch tools.
 - The first-download picker labels the newer and older sides, highlights the cutoff and marks included and skipped previews. Selection still follows platform order, which may not be chronological.
 - Validated category navigation and both selection modes in an isolated local browser with a fake downloader; Rust unit tests passed. No live sync or provider interaction was started. The shared GitHub repository was changed to public at the owner’s request; new work remains on branches.
