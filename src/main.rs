@@ -18,12 +18,18 @@ use std::{
 use tower_http::services::ServeDir;
 use uuid::Uuid;
 mod analytics;
+mod editor;
+mod recovery;
+mod handoff;
+mod solo;
+mod selection;
 mod bridge;
 mod categories;
 mod date_audit;
 mod queue;
 mod scheduler;
 mod source;
+mod tools;
 
 type Db = Arc<Mutex<Connection>>;
 #[derive(Clone)]
@@ -113,6 +119,8 @@ struct ProfileInput {
     tags: Vec<String>,
     #[serde(default)]
     source_folder: String,
+    #[serde(default)]
+    setup_selection: bool,
 }
 
 fn init(db: &Connection) -> rusqlite::Result<()> {
@@ -168,16 +176,30 @@ fn init(db: &Connection) -> rusqlite::Result<()> {
             [],
         )?;
     }
+    let has_archived = {
+        let mut columns = db.prepare("PRAGMA table_info(profiles)")?;
+        let names = columns.query_map([], |r| r.get::<_, String>(1))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        names.iter().any(|name| name == "archived")
+    };
+    if !has_archived { db.execute("ALTER TABLE profiles ADD COLUMN archived INTEGER NOT NULL DEFAULT 0", [])?; }
     db.execute_batch("CREATE TABLE IF NOT EXISTS source_sync_runs (id INTEGER PRIMARY KEY, profile_id INTEGER NOT NULL REFERENCES profiles(id), started TEXT NOT NULL DEFAULT (datetime('now')), finished TEXT, state TEXT NOT NULL, log_file TEXT NOT NULL, exit_code INTEGER);")?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS source_schedules (profile_id INTEGER PRIMARY KEY REFERENCES profiles(id), interval_seconds INTEGER NOT NULL, enabled INTEGER NOT NULL, next_run INTEGER);
     CREATE TABLE IF NOT EXISTS source_queue (id INTEGER PRIMARY KEY, batch_id TEXT NOT NULL, profile_id INTEGER NOT NULL REFERENCES profiles(id), origin TEXT NOT NULL, state TEXT NOT NULL, run_id INTEGER, message TEXT NOT NULL DEFAULT '', created INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS source_preferences (profile_id INTEGER PRIMARY KEY REFERENCES profiles(id), include_in_batch INTEGER NOT NULL DEFAULT 1);
     CREATE TABLE IF NOT EXISTS categories (role TEXT NOT NULL CHECK(role IN ('destination','source')), name TEXT NOT NULL COLLATE NOCASE, PRIMARY KEY(role,name));
     CREATE TABLE IF NOT EXISTS source_new_files (profile_id INTEGER NOT NULL REFERENCES profiles(id), root TEXT NOT NULL, path TEXT NOT NULL, downloaded_at INTEGER NOT NULL, seen INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(profile_id,root,path));")?;
+    let category_columns = { let mut q=db.prepare("PRAGMA table_info(categories)")?; q.query_map([],|r|r.get::<_,String>(1))?.collect::<rusqlite::Result<Vec<_>>>()? };
+    for (name,default) in [("icon", "#"),("color", "pink"),("image_path", "")] { if !category_columns.iter().any(|x|x==name) { db.execute(&format!("ALTER TABLE categories ADD COLUMN {name} TEXT NOT NULL DEFAULT '{default}'"),[])?; } }
+    let has_dead = { let mut q=db.prepare("PRAGMA table_info(source_preferences)")?; let names=q.query_map([],|r|r.get::<_,String>(1))?.collect::<rusqlite::Result<Vec<_>>>()?; names.iter().any(|x|x=="dead") };
+    if !has_dead { db.execute("ALTER TABLE source_preferences ADD COLUMN dead INTEGER NOT NULL DEFAULT 0",[])?; }
+    db.execute_batch("CREATE TABLE IF NOT EXISTS source_selection(profile_id INTEGER PRIMARY KEY REFERENCES profiles(id),pending INTEGER NOT NULL,allowed TEXT NOT NULL,excluded TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'all');")?;
+    let selection_has_mode = { let mut stmt=db.prepare("PRAGMA table_info(source_selection)")?; let cols=stmt.query_map([],|r|r.get::<_,String>(1))?.collect::<Result<Vec<_>,_>>()?; cols.iter().any(|c|c=="mode") };
+    if !selection_has_mode { db.execute("ALTER TABLE source_selection ADD COLUMN mode TEXT NOT NULL DEFAULT 'all'",[])?; }
     db.execute_batch("CREATE TABLE IF NOT EXISTS profile_downloads (profile_id INTEGER NOT NULL REFERENCES profiles(id), root TEXT NOT NULL, platform TEXT NOT NULL, post_id TEXT NOT NULL, path TEXT NOT NULL, posted_date TEXT, PRIMARY KEY(profile_id,root,platform,post_id));")?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS profile_download_files (profile_id INTEGER NOT NULL REFERENCES profiles(id), root TEXT NOT NULL, platform TEXT NOT NULL, post_id TEXT NOT NULL, asset_id TEXT NOT NULL, path TEXT NOT NULL, PRIMARY KEY(profile_id,root,platform,asset_id));")?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS analytics_snapshots (profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, date TEXT NOT NULL, post_id TEXT NOT NULL DEFAULT '', followers INTEGER, following INTEGER, views INTEGER, likes INTEGER, comments INTEGER, shares INTEGER, source TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(profile_id,date,post_id));")?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS posting_queue (id INTEGER PRIMARY KEY, profile_id INTEGER NOT NULL REFERENCES profiles(id), source_id INTEGER NOT NULL REFERENCES profiles(id), platform TEXT NOT NULL, identity_key TEXT NOT NULL, root TEXT NOT NULL, path TEXT NOT NULL, post_id TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', posted_date TEXT NOT NULL DEFAULT '', original_url TEXT NOT NULL DEFAULT '', channel_url TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'queued' CHECK(state IN ('queued','posted','checked')), caption TEXT NOT NULL DEFAULT '', post_url TEXT NOT NULL DEFAULT '', scheduled_for TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')), UNIQUE(profile_id,platform,identity_key));")?;
+    db.execute_batch("CREATE TABLE IF NOT EXISTS posting_queue_events (id INTEGER PRIMARY KEY, queue_id INTEGER NOT NULL REFERENCES posting_queue(id) ON DELETE CASCADE, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), event_type TEXT NOT NULL, previous_state TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, caption TEXT NOT NULL DEFAULT '', post_url TEXT NOT NULL DEFAULT '', scheduled_for TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT ''); CREATE INDEX IF NOT EXISTS posting_queue_events_queue_id ON posting_queue_events(queue_id,id);")?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS analytics_bridge(profile_id INTEGER PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,enabled INTEGER NOT NULL DEFAULT 0,interval_seconds INTEGER NOT NULL DEFAULT 14400,after_post INTEGER NOT NULL DEFAULT 0,next_run INTEGER,last_attempt INTEGER,last_success INTEGER,last_error TEXT NOT NULL DEFAULT '',job_id TEXT,lease_until INTEGER); CREATE TABLE IF NOT EXISTS analytics_bridge_snapshots(id INTEGER PRIMARY KEY,profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,observed_at TEXT NOT NULL,followers INTEGER,following INTEGER,likes INTEGER,followers_approx INTEGER NOT NULL DEFAULT 0,following_approx INTEGER NOT NULL DEFAULT 0,likes_approx INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS analytics_bridge_links(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, url TEXT NOT NULL, captured_at TEXT NOT NULL DEFAULT (datetime('now')), PRIMARY KEY(profile_id,url));")?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS source_date_results(profile_id INTEGER NOT NULL REFERENCES profiles(id),root TEXT NOT NULL,path TEXT NOT NULL,post_id TEXT NOT NULL DEFAULT '',posted_date TEXT NOT NULL DEFAULT '',date_kind TEXT NOT NULL DEFAULT '',title TEXT NOT NULL DEFAULT '',description TEXT NOT NULL DEFAULT '',original_url TEXT NOT NULL DEFAULT '',file_size INTEGER NOT NULL DEFAULT -1,file_modified INTEGER NOT NULL DEFAULT -1,checked_at TEXT NOT NULL DEFAULT (datetime('now')),PRIMARY KEY(profile_id,root,path)); CREATE TABLE IF NOT EXISTS source_date_audits(id INTEGER PRIMARY KEY,state TEXT NOT NULL,online INTEGER NOT NULL,processed INTEGER NOT NULL DEFAULT 0,total INTEGER NOT NULL DEFAULT 0,verified INTEGER NOT NULL DEFAULT 0,estimated INTEGER NOT NULL DEFAULT 0,unknown INTEGER NOT NULL DEFAULT 0,failed INTEGER NOT NULL DEFAULT 0,cancel_requested INTEGER NOT NULL DEFAULT 0,message TEXT NOT NULL DEFAULT '',started TEXT NOT NULL DEFAULT (datetime('now')),finished TEXT);")?;
     let result_columns = {
@@ -197,6 +219,15 @@ fn init(db: &Connection) -> rusqlite::Result<()> {
             )?;
         }
     }
+    db.execute_batch("CREATE TABLE IF NOT EXISTS media_edits (id TEXT PRIMARY KEY, profile_id INTEGER NOT NULL REFERENCES profiles(id), role TEXT NOT NULL, root TEXT NOT NULL, original_path TEXT NOT NULL, edited_path TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')));")?;
+    let has_edit_id = { let mut q=db.prepare("PRAGMA table_info(posting_queue)")?; let names=q.query_map([],|r|r.get::<_,String>(1))?.collect::<rusqlite::Result<Vec<_>>>()?; names.iter().any(|x|x=="edit_id") };
+    if !has_edit_id { db.execute("ALTER TABLE posting_queue ADD COLUMN edit_id TEXT NOT NULL DEFAULT ''",[])?; }
+    let has_queue_revision = {
+        let mut s = db.prepare("PRAGMA table_info(posting_queue)")?;
+        let names=s.query_map([],|r|r.get::<_,String>(1))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        names.iter().any(|x|x=="revision")
+    };
+    if !has_queue_revision { db.execute("ALTER TABLE posting_queue ADD COLUMN revision INTEGER NOT NULL DEFAULT 0",[])?; }
     let has_date_kind = {
         let mut s = db.prepare("PRAGMA table_info(posting_queue)")?;
         let names = s
@@ -297,11 +328,12 @@ fn items(db: &Connection, cutoff: &str) -> rusqlite::Result<Vec<Media>> {
     }
     Ok(all)
 }
-fn profiles(db: &Connection) -> rusqlite::Result<Vec<Profile>> {
+fn profiles(db: &Connection) -> rusqlite::Result<Vec<Profile>> { profiles_by_visibility(db, false) }
+fn profiles_by_visibility(db: &Connection, archived: bool) -> rusqlite::Result<Vec<Profile>> {
     let mut stmt = db.prepare(
-        "SELECT id,name,platform,url,role,tags,avatar_path,source_folder FROM profiles ORDER BY id",
+        "SELECT id,name,platform,url,role,tags,avatar_path,source_folder FROM profiles WHERE archived=? ORDER BY id",
     )?;
-    stmt.query_map([], |r| {
+    stmt.query_map([archived], |r| {
         let raw: String = r.get(5)?;
         Ok(Profile {
             id: r.get(0)?,
@@ -322,6 +354,28 @@ fn profiles(db: &Connection) -> rusqlite::Result<Vec<Profile>> {
         })
     })?
     .collect()
+}
+#[derive(Deserialize)]
+struct ArchiveInput { archived: bool }
+async fn hidden_profiles(State(app): State<App>) -> ApiResult<Json<Vec<Profile>>> {
+    let db = app.db.lock().map_err(internal)?;
+    Ok(Json(profiles_by_visibility(&db, true).map_err(internal)?))
+}
+async fn archive_profile(State(app): State<App>, AxumPath(id): AxumPath<i64>, Json(input): Json<ArchiveInput>) -> ApiResult<StatusCode> {
+    let mut db = app.db.lock().map_err(internal)?;
+    let tx = db.transaction().map_err(internal)?;
+    let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?)", [id], |r| r.get(0)).map_err(internal)?;
+    if !exists { return Err((StatusCode::NOT_FOUND, "Account not found.".into())); }
+    if input.archived {
+        let busy: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM source_sync_runs WHERE profile_id=? AND state='running') OR EXISTS(SELECT 1 FROM source_queue WHERE profile_id=? AND state IN ('starting','running')) OR EXISTS(SELECT 1 FROM analytics_bridge WHERE profile_id=? AND lease_until>unixepoch())", params![id,id,id], |r| r.get(0)).map_err(internal)?;
+        if busy { return Err((StatusCode::CONFLICT, "This account has a sync or refresh in progress. Try again after it finishes.".into())); }
+        tx.execute("UPDATE source_schedules SET enabled=0,next_run=NULL WHERE profile_id=?", [id]).map_err(internal)?;
+        tx.execute("UPDATE analytics_bridge SET enabled=0,next_run=NULL WHERE profile_id=?", [id]).map_err(internal)?;
+        tx.execute("UPDATE source_queue SET state='cancelled',message='Account removed from workspace' WHERE profile_id=? AND state='pending'", [id]).map_err(internal)?;
+    }
+    tx.execute("UPDATE profiles SET archived=? WHERE id=?", params![input.archived,id]).map_err(internal)?;
+    tx.commit().map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 async fn upload_avatar(
     State(app): State<App>,
@@ -427,7 +481,7 @@ async fn add_profile(
     {
         return Err((
             StatusCode::CONFLICT,
-            "That profile link is already added.".into(),
+            "That profile link is already added. Check Removed accounts if you previously removed it.".into(),
         ));
     }
     let tx = db.transaction().map_err(internal)?;
@@ -444,6 +498,7 @@ async fn add_profile(
     )
     .map_err(internal)?;
     let id = tx.last_insert_rowid();
+    if p.role == "source" && p.setup_selection { tx.execute("INSERT OR REPLACE INTO settings(key,value) VALUES(?, '1')",[format!("source_needs_selection_{id}")]).map_err(internal)?; }
     if p.role == "destination" {
         tx.execute(
             "INSERT INTO profile_statuses(item_id,profile_id) SELECT id,? FROM items",
@@ -813,6 +868,9 @@ async fn chart_js() -> impl IntoResponse {
         include_str!("../web/chart.umd.min.js"),
     )
 }
+async fn library_js() -> impl IntoResponse {
+    ([(axum::http::header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../web/library.js"))
+}
 async fn previews_js() -> impl IntoResponse {
     (
         [(
@@ -940,11 +998,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .route("/style.css", get(css))
         .route("/app.js", get(js))
         .route("/previews.js", get(previews_js))
+        .route("/library.js", get(library_js))
         .route("/chart.js", get(chart_js))
         .route("/api/items", get(list).post(import))
+        .route("/api/posting-handoff", get(handoff::get))
         .route("/api/profiles", post(add_profile))
+        .route("/api/profiles/hidden", get(hidden_profiles))
+        .route("/api/profiles/{id}/archive", post(archive_profile))
         .route("/api/categories", post(categories::create))
+        .route("/api/categories/appearance", post(categories::appearance))
+        .route("/api/categories/photo", post(categories::photo))
         .route("/api/categories/members", post(categories::set_members))
+        .route("/api/categories/update", post(categories::update))
         .route("/api/profiles/{id}", post(edit_profile))
         .route("/api/profiles/{id}/photo", post(upload_avatar))
         .route(
@@ -976,6 +1041,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             get(queue::list).post(queue::add),
         )
         .route("/api/profiles/{id}/queue/{qid}", post(queue::update))
+        .route("/api/profiles/{id}/queue/{qid}/events", get(handoff::events))
+        .route("/api/profiles/{id}/sync-recovery", get(recovery::get).post(recovery::save))
         .route(
             "/api/profiles/{id}/downloads",
             get(source::profile_overview),
@@ -1005,6 +1072,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             get(source::get_config).post(source::save_config),
         )
         .route("/api/source-settings/browse", post(source::browse_folder))
+        .route("/api/solo-posts", post(solo::start))
+        .route("/api/sources/{id}/preview", post(selection::preview))
+        .route("/api/sources/{id}/selection", post(selection::choose))
         .route("/api/sources/discover", get(source::discover))
         .route(
             "/api/date-audit",
@@ -1024,7 +1094,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             post(scheduler::save_batch_setting),
         )
         .route("/api/source-schedules", get(scheduler::schedules))
+        .route("/api/editor/render", post(editor::render))
         .route("/api/source-batches", post(scheduler::enqueue_batch))
+        .route("/api/sources/{id}/dead", post(scheduler::set_dead))
+        .route("/api/sources/{id}/folder", get(source::source_folder_location).post(source::open_source_folder))
+        .route("/api/profiles/{id}/folder", get(source::profile_folder_location).post(source::open_profile_folder))
         .route("/api/settings", post(settings))
         .route("/api/items/{id}/status", post(update))
         .route("/api/items/{id}/metadata", post(metadata))

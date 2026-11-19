@@ -15,9 +15,9 @@ The full vision is **not finished**. In particular, a scheduled item does not po
 | Area | Current implementation | What has not been established |
 | --- | --- | --- |
 | Accounts and categories | Separate profile and source views, categories, link-based name/platform detection, optional local profile pictures. | Reliable automatic profile-picture retrieval and actual account authentication. Platform access and link recognition can fail. |
-| Downloading | Source and profile sync use external tools and download archives; source Sync all exclusions, scheduled sync while open, logs and local previews exist. | Complete, reliable access to every account, media type or platform. Instagram profile extraction has failed for an observed account; Brave-link fallback is partial. |
+| Downloading | Source and profile sync use external tools and download archives; TikTok profiles can retry with an owner-verified account ID from a saved post, and Instagram can retry previously captured links with partial coverage. A separate Solo Posts hub accepts individual links. New sources can preview posts and select a cutoff. | Complete live account sync remains unverified. Captured Instagram links can become stale, and previews can be incomplete. Selection is capped at 1,500 posts. Solo posts have a separate archive; photo sync is limited for selective sources. |
 | Dates and metadata | Source listings read sidecars; date audit can check locally or request missing dates online without re-downloading media. Unambiguous TikTok IDs can yield labeled UTC estimates. | Full metadata recovery for every file; estimated dates are not confirmed publishing dates and can differ around day/timezone boundaries. |
-| Selection and queue | Picker shuffles source photos/videos with source, category, type, date, text and available-duration controls. Queue refers to original source files, records a planned time and manual status, and keeps recorded history. | Automatic posting, automatic success verification, a full carousel as one selection, or complete detection of duplicate content across different post IDs. Manual library import still copies files. |
+| Selection and queue | Picker shuffles source photos/videos with source, category, type, date, text and available-duration controls. Queue stores file references, planned times, status and activity, and exposes an all-profile handoff with revision-checked updates. | Automatic posting, automatic success verification, a full carousel as one selection, or complete detection of duplicate content across different post IDs. Manual library import still copies files. |
 | Analytics | Manual snapshots, template CSV import, charts, and an optional paired Brave extension for visible profile counts. | Installed-extension end-to-end verification, private Insights, full account connection/OAuth, universal platform exports and automatic metrics for all posts. |
 | Collaboration | Private GitHub upstream, branch/fork and PR workflow, issue/progress notes and research documents. | A GitHub clone does not include either person's local database, profiles, Drive folders, downloader executables or media. Access/invitation state can change and should be verified. |
 
@@ -27,9 +27,25 @@ Evidence so far includes isolated unit/smoke tests, a bounded live YouTube test-
 
 ### 1. Make the existing experience dependable
 
+- [x] Include Solo Posts in the source picker and library with original account/platform where available, and make quick-edit controls optional. Verify remaining missing metadata and carousel behavior separately.
+
+- [x] Resolve the bundled or configured FFmpeg executable for yt-dlp calls, including Instagram individual posts and source sync; test discovery and arguments using disposable data. Live platform retry remains to be confirmed.
+
+- [x] Allow category renaming while preserving membership and category appearance, improve the multi-category layout, show a one-hour new-media countdown, and open linked account folders.
+- [x] Provide a clearer source picker with filtering, original details and playable previews before queueing; validate real-platform coverage separately.
+
+- [x] Show source sync states and 24-hour tracked additions, add user-set dead status, restrict Sync all to auto-enabled active sources, and expose category icon/color/image settings. Validate behavior against disposable data.
+- [ ] Validate the new quick editor with a wider range of formats, portrait/landscape videos and audio on collaborators’ machines; add interactive crop positioning, richer trimming and saved logo presets if needed. The current editor uses centered crop presets and an uploaded overlay.
+
+- [x] Add profile/source and category context menus with reversible account removal, including preservation of local files, history and category membership. Automatic sync and Brave refresh stay off on restore.
+
+- [x] Bring each role’s categories into its Profiles or Sources view, with a profile category dashboard and a clearer source cutoff selector. Validate using disposable data; real-platform feed order may differ.
+
 - [ ] Verify the Brave extension end to end on an authorized test installation: installation, pairing, initial refresh, schedule, restart, disconnect/revoke, rounded counts, errors and after-post refresh. Keep cookies and platform credentials out of logs and Git; the current extension does not extract them.
+- [ ] Validate solo-post links and source previews against explicitly authorized real accounts, including restricted posts, thumbnails, photos and source ordering; add safe pagination beyond 1,500 and cross-archive duplicate detection.
 - [ ] Validate source and own-profile sync on explicitly authorized test accounts and representative media, including TikTok, Instagram videos/photos, YouTube and restricted/unavailable cases. Document what actually downloaded, failed or required access. The current Instagram visible-link fallback is partial.
 - [ ] Investigate remaining missing thumbnails and profile pictures; use existing local files for previews and do not re-download archived videos just to create a thumbnail. Add a safe automatic avatar lookup only where it is reliable, with a manual fallback.
+- [ ] Verify complete real-account TikTok and Instagram sync with the owner, including post/photo access and refreshed browser links; the metadata-only checks do not establish complete coverage.
 - [ ] Verify upgrades against disposable copies of real-format databases and media layouts; preserve settings, archives and existing media. Test disconnected/moved folders, interrupted sync, and concurrent operations.
 - [ ] Improve source date coverage and other missing metadata (titles, descriptions, links, duration) without overwriting originals. Preserve provenance and distinguish confirmed dates, ID estimates, file/download dates and unknowns. Keep online audits opt-in and cancellable.
 
@@ -39,7 +55,7 @@ Evidence so far includes isolated unit/smoke tests, a bounded live YouTube test-
 - [ ] Represent a multi-photo carousel as one post with its ordered assets; make photo and video selection, preview, duration and date filters work with incomplete metadata. Keep filtering and shuffle straightforward.
 - [ ] Improve the queue manager: edit/remove/reorder or reschedule safely, distinguish draft/queued/posted/failed/needs review, show original title/description and source/post links, copy useful text, and preserve history. Items remain active until their status is recorded or checked off.
 - [ ] Make the launch cutoff and date/timezone handling explicit and configurable. Do not assume the example cutoff is the actual GTA launch time, and do not treat date-only or estimated timestamps as exact.
-- [ ] Design the requested future AI-assisted workflow: inspect the chosen media and context, draft a caption in the creator's style, show the target and source, and update the queue only after a result is confirmed. It is not implemented today.
+- [ ] Build and validate an AI-assisted workflow that inspects media, drafts captions and operates an authorized posting flow. The local handoff and activity log do not themselves publish or verify anything. Add upload leases and recovery before allowing concurrent operators.
 
 ### 3. Build real analytics and secure connections
 

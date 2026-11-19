@@ -1,6 +1,8 @@
 """Disposable stand-in for gallery-dl used by the profile-sync test."""
-import json, pathlib, sqlite3, sys
+import json, os, pathlib, sqlite3, sys
 args=sys.argv[1:]
+if os.environ.get('LV_GALLERY_PROFILE_FAIL') and args[-1].rstrip('/').endswith('/demo-account'):
+    print('synthetic profile photo scan failure',file=sys.stderr);sys.exit(1)
 assert '--config-ignore' in args and '--write-metadata' in args and '--filter' in args
 assert 'jpg' in args[args.index('--filter')+1]
 target=pathlib.Path(args[args.index('--directory')+1])

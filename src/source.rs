@@ -14,9 +14,9 @@ use tower_http::services::ServeFile;
 
 #[derive(Serialize)]
 pub struct SourceConfig {
-    root: String,
+    pub(crate) root: String,
     pub(crate) downloader: String,
-    photo_helper: String,
+    pub(crate) photo_helper: String,
 }
 #[derive(Deserialize)]
 pub struct ConfigInput {
@@ -38,6 +38,9 @@ pub(crate) struct SourceFile {
     pub(crate) title: Option<String>,
     pub(crate) description: Option<String>,
     pub(crate) original_url: Option<String>,
+    pub(crate) original_account: Option<String>,
+    pub(crate) original_channel_url: Option<String>,
+    pub(crate) original_platform: Option<String>,
     pub(crate) duration_seconds: Option<f64>,
     asset_id: Option<String>,
     downloaded_at: Option<i64>,
@@ -249,6 +252,9 @@ pub(crate) fn account_profile(
     if role != expected_role {
         return Err(bad("This account is not in this section."));
     }
+    if expected_role == "source" && url == crate::solo::SOLO_URL {
+        return Ok(("other".into(), url, "Solo Posts/Downloads".into()));
+    }
     let parsed: axum::http::Uri = url.parse().map_err(bad)?;
     let host = parsed.host().unwrap_or("").to_ascii_lowercase();
     let host_ok = match platform.as_str() {
@@ -414,6 +420,46 @@ pub(crate) fn post_metadata(
         .filter(|n| n.is_finite() && *n >= 0.0 && *n <= 604800.0);
     Some((date, id, asset_id, title, description, url, duration))
 }
+pub(crate) fn original_account(path: &Path) -> (Option<String>, Option<String>, Option<String>) {
+    let info = path.with_extension("info.json");
+    let metadata = match fs::symlink_metadata(&info) {
+        Ok(m) if m.is_file() && !m.file_type().is_symlink() && m.len() <= 1024 * 1024 => m,
+        _ => return (None, None, None),
+    };
+    let _ = metadata;
+    let value: serde_json::Value = match fs::read(info)
+        .ok()
+        .and_then(|v| serde_json::from_slice(&v).ok())
+    {
+        Some(v) => v,
+        None => return (None, None, None),
+    };
+    let text = |keys: &[&str]| {
+        keys.iter().find_map(|k| {
+            value
+                .get(*k)
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| s.chars().take(200).collect::<String>())
+        })
+    };
+    let account = text(&["uploader_id", "channel", "uploader"]);
+    let channel = text(&["channel_url", "uploader_url"]).filter(|s| s.starts_with("https://"));
+    let platform = text(&["extractor_key", "extractor"])
+        .map(|s| s.to_ascii_lowercase())
+        .and_then(|s| {
+            if s.contains("tiktok") {
+                Some("tiktok".into())
+            } else if s.contains("instagram") {
+                Some("instagram".into())
+            } else if s.contains("youtube") {
+                Some("youtube".into())
+            } else {
+                None
+            }
+        });
+    (account, channel, platform)
+}
 pub(crate) fn gather(
     root: &Path,
     dir: &Path,
@@ -431,6 +477,7 @@ pub(crate) fn gather(
         }
         let path = entry.path();
         if ft.is_dir() {
+            if entry.file_name() == ".lifeinvader-edits" { continue; }
             gather(root, &path, depth + 1, files)?;
             continue;
         }
@@ -457,6 +504,7 @@ pub(crate) fn gather(
         };
         let (posted_date, post_id, asset_id, title, description, original_url, duration_seconds) =
             post_metadata(&path).unwrap_or_default();
+        let (original_account, original_channel_url, original_platform) = original_account(&path);
         files.push(SourceFile {
             path: relative.replace('\\', "/"),
             name: name.to_string(),
@@ -479,6 +527,9 @@ pub(crate) fn gather(
             title,
             description,
             original_url,
+            original_account,
+            original_channel_url,
+            original_platform,
             duration_seconds,
             asset_id,
             downloaded_at: None,
@@ -548,6 +599,20 @@ fn mark_seen_for(app: App, id: i64, role: &str) -> ApiResult<StatusCode> {
     .map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
+fn account_folders(app:&App,id:i64,role:&str)->ApiResult<Vec<PathBuf>> {
+ let db=app.db.lock().map_err(internal)?;let (_,_,folder)=account_profile(&db,id,role)?;let root=checked_root(&config(&db).map_err(internal)?)?;Ok(allowed_dirs(&root,&folder))
+}
+fn display_folder(path:&Path)->String {let text=path.to_string_lossy();if let Some(rest)=text.strip_prefix(r"\\?\UNC\"){format!(r"\\{}",rest)}else{text.strip_prefix(r"\\?\").unwrap_or(&text).to_string()}}
+fn folder_response(app:&App,id:i64,role:&str)->ApiResult<Json<serde_json::Value>> {let paths=account_folders(app,id,role)?;Ok(Json(serde_json::json!({"paths":paths.iter().map(|p|display_folder(p)).collect::<Vec<_>>() }))) }
+pub async fn source_folder_location(State(app):State<App>,AxumPath(id):AxumPath<i64>)->ApiResult<Json<serde_json::Value>>{folder_response(&app,id,"source")}
+pub async fn profile_folder_location(State(app):State<App>,AxumPath(id):AxumPath<i64>)->ApiResult<Json<serde_json::Value>>{folder_response(&app,id,"destination")}
+fn show_folder(app:&App,id:i64,role:&str)->ApiResult<StatusCode>{let paths=account_folders(app,id,role)?;let path=paths.first().ok_or_else(||(StatusCode::NOT_FOUND,"This account folder does not exist yet. Check Folder settings or sync it first.".into()))?;
+ #[cfg(windows)] let mut command=std::process::Command::new("explorer.exe");
+ #[cfg(target_os="macos")] let mut command=std::process::Command::new("open");
+ #[cfg(all(not(windows),not(target_os="macos")))] let mut command=std::process::Command::new("xdg-open");
+ command.arg(display_folder(path)).spawn().map_err(|_|bad("Could not open the folder in your file manager."))?;Ok(StatusCode::NO_CONTENT)}
+pub async fn open_source_folder(State(app):State<App>,AxumPath(id):AxumPath<i64>)->ApiResult<StatusCode>{show_folder(&app,id,"source")}
+pub async fn open_profile_folder(State(app):State<App>,AxumPath(id):AxumPath<i64>)->ApiResult<StatusCode>{show_folder(&app,id,"destination")}
 pub async fn overview(
     State(app): State<App>,
     AxumPath(id): AxumPath<i64>,
@@ -603,7 +668,8 @@ fn overview_for(app: App, id: i64, role: &str) -> ApiResult<Json<serde_json::Val
     for f in &mut files {
         if let Some((downloaded, seen)) = records.get(&f.path) {
             f.downloaded_at = Some(*downloaded);
-            f.is_new = !*seen;
+            let now=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
+            f.is_new = !*seen && *downloaded > now-3600;
         }
     }
     files.sort_by(|a, b| {
@@ -842,7 +908,7 @@ fn sync_for(app: App, id: i64, input: SyncInput, role: &str) -> ApiResult<impl I
     let run_id = start_sync_for(app, id, input, role)?;
     Ok((StatusCode::ACCEPTED, Json(serde_json::json!({"id":run_id}))))
 }
-fn ensure_folder(root: &Path, folder: &str) -> std::io::Result<PathBuf> {
+pub(crate) fn ensure_folder(root: &Path, folder: &str) -> std::io::Result<PathBuf> {
     let mut path = root.to_path_buf();
     for component in Path::new(folder).components() {
         let std::path::Component::Normal(part) = component else {
@@ -863,8 +929,81 @@ fn ensure_folder(root: &Path, folder: &str) -> std::io::Result<PathBuf> {
 pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) -> ApiResult<i64> {
     let mut db = app.db.lock().map_err(internal)?;
     let (platform, url, folder) = account_profile(&db, id, role)?;
+    let archived: bool = db.query_row("SELECT archived FROM profiles WHERE id=?", [id], |r| r.get(0)).map_err(internal)?;
+    if archived { return Err(bad("Restore this account before syncing it.")); }
+    let paused_start: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM source_queue q WHERE q.profile_id=? AND q.state='starting' AND q.origin IN ('auto','batch') AND (NOT COALESCE((SELECT enabled FROM source_schedules WHERE profile_id=q.profile_id),0) OR COALESCE((SELECT dead FROM source_preferences WHERE profile_id=q.profile_id),0)))",[id],|r|r.get(0)).map_err(internal)?;
+    if paused_start { return Err(bad("Queued sync cancelled because auto sync is off or the source is marked dead.")); }
+
+    if url == crate::solo::SOLO_URL {
+        return Err(bad(
+            "Solo posts cannot be synced. Add individual links instead.",
+        ));
+    }
     let is_profile = role == "destination";
     let cfg = config(&db).map_err(internal)?;
+    let selection: Option<(bool, String, String, String)> = if !is_profile {
+        db.query_row(
+            "SELECT pending,allowed,excluded,mode FROM source_selection WHERE profile_id=?",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .optional()
+        .map_err(internal)?
+    } else {
+        None
+    };
+    let needs_selection: bool = !is_profile
+        && db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM settings WHERE key=?)",
+                [format!("source_needs_selection_{id}")],
+                |r| r.get(0),
+            )
+            .map_err(internal)?;
+    if needs_selection && selection.is_none() {
+        return Err(bad("Choose which posts to download before the first sync."));
+    }
+    let mut selection_pending = false;
+    let mut selection_filter = String::from("vcodec != none");
+    if let Some((pending, allowed, excluded, mode)) = selection {
+        let allowed: Vec<String> = serde_json::from_str(&allowed).map_err(internal)?;
+        let excluded: Vec<String> = serde_json::from_str(&excluded).map_err(internal)?;
+        if input.include_photos && (!excluded.is_empty() || mode == "before") {
+            return Err(bad(
+                "Photo sync is unavailable for a source with excluded posts; it could bypass your selection.",
+            ));
+        }
+        selection_pending = pending;
+        let limit_to_allowed = (pending && !excluded.is_empty()) || mode == "before";
+        let ids = if limit_to_allowed {
+            &allowed
+        } else {
+            &excluded
+        };
+        if !ids.is_empty() {
+            if ids.iter().any(|s| {
+                s.is_empty()
+                    || !s
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || "_-".contains(c))
+            }) {
+                return Err(bad("The saved selection contains an invalid post ID."));
+            }
+            let regex = ids.join("|");
+            if regex.len() > 24000 {
+                return Err(bad(
+                    "This selection is too large to sync safely. No posts were downloaded.",
+                ));
+            }
+            selection_filter.push_str(if limit_to_allowed {
+                " & id ~= '^(?:"
+            } else {
+                " & id !~= '^(?:"
+            });
+            selection_filter.push_str(&regex);
+            selection_filter.push_str(")$'");
+        }
+    }
     let root = checked_root(&cfg)?;
     let tool = PathBuf::from(&cfg.downloader);
     if !tool.is_absolute() || !tool.is_file() {
@@ -954,6 +1093,17 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
     } else {
         Vec::new()
     };
+    let recovery_seed: Option<String> = if is_profile && platform == "tiktok" {
+        db.query_row(
+            "SELECT value FROM settings WHERE key=?",
+            [format!("profile_recovery_seed_{id}")],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(internal)?
+    } else {
+        None
+    };
     drop(db);
     let db = app.db.clone();
     let photo_helper = cfg.photo_helper;
@@ -968,6 +1118,7 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
             .filter(|f| f.kind == "video")
             .map(|f| f.path)
             .collect();
+        let mut used_partial_fallback = false;
         let result = (|| -> std::io::Result<i32> {
             if !before_ok {
                 return Err(std::io::Error::other(
@@ -986,53 +1137,9 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
             } else {
                 "%(title).120B [%(id.-8:)s].%(ext)s"
             });
-            let mut cmd = Command::new(&tool);
-            cmd.args([
-                "--ignore-config",
-                "--ignore-errors",
-                "--windows-filenames",
-                "--no-overwrites",
-                "--write-description",
-                "--write-info-json",
-                "--color",
-                "never",
-                "--newline",
-                "--progress",
-                "--progress-delta",
-                "1",
-                "--progress-template",
-                "download:__LV_PROGRESS__%(progress._percent_str)s",
-                "--match-filters",
-                "vcodec != none",
-                "--download-archive",
-            ])
-            .arg(if is_profile {
-                account_dir.join("download-archive.txt")
-            } else {
-                root.join("download-archive.txt")
-            })
-            .arg("--output")
-            .arg(&output)
-            .arg("--")
-            .arg(&url);
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                cmd.creation_flags(0x08000000);
-            }
-            let status = cmd
-                .stdout(Stdio::from(log.try_clone()?))
-                .stderr(Stdio::from(log.try_clone()?))
-                .status()?;
-            let mut code = status.code().unwrap_or(1);
-            if code != 0 && !fallback_links.is_empty() {
-                writeln!(
-                    log,
-                    "\nProfile scan failed. Trying {} previously visible Instagram post links captured by Brave; older posts may be missing.",
-                    fallback_links.len()
-                )?;
-                let mut retry = Command::new(&tool);
-                retry
+            let make_command = |target: &str| {
+                let mut command = Command::new(&tool);
+                command
                     .args([
                         "--ignore-config",
                         "--ignore-errors",
@@ -1048,17 +1155,136 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
                         "1",
                         "--progress-template",
                         "download:__LV_PROGRESS__%(progress._percent_str)s",
-                        "--download-archive",
+                        "--match-filters",
                     ])
+                    .arg(&selection_filter)
+                    .arg("--download-archive")
                     .arg(if is_profile {
                         account_dir.join("download-archive.txt")
                     } else {
                         root.join("download-archive.txt")
                     })
                     .arg("--output")
-                    .arg(&output)
-                    .arg("--")
-                    .args(&fallback_links);
+                    .arg(&output);
+                crate::tools::configure_ytdlp(&mut command);
+                command.arg("--").arg(target);
+                #[cfg(windows)]
+                {
+                    use std::os::windows::process::CommandExt;
+                    command.creation_flags(0x08000000);
+                }
+                command
+            };
+            let status = make_command(&url)
+                .stdout(Stdio::from(log.try_clone()?))
+                .stderr(Stdio::from(log.try_clone()?))
+                .status()?;
+            let mut code = status.code().unwrap_or(1);
+            let mut effective_url = url.clone();
+            if code != 0
+                && let Some(seed) = recovery_seed
+                    .as_ref()
+                    .filter(|s| crate::recovery::valid_seed(&url, s))
+            {
+                writeln!(
+                    log,
+                    "\nTrying a verified account ID using the saved post link..."
+                )?;
+                let mut probe = Command::new(&tool);
+                probe
+                    .args([
+                        "--ignore-config",
+                        "--skip-download",
+                        "--no-warnings",
+                        "--no-playlist",
+                        "--socket-timeout",
+                        "10",
+                        "--retries",
+                        "0",
+                        "--print",
+                        "uploader",
+                        "--print",
+                        "channel_id",
+                    ]);
+                crate::tools::configure_ytdlp(&mut probe);
+                probe.arg("--").arg(seed);
+                #[cfg(windows)]
+                {
+                    use std::os::windows::process::CommandExt;
+                    probe.creation_flags(0x08000000);
+                }
+                let result = probe.stderr(Stdio::from(log.try_clone()?)).output()?;
+                let output = String::from_utf8_lossy(&result.stdout);
+                let lines: Vec<_> = output
+                    .lines()
+                    .map(str::trim)
+                    .filter(|x| !x.is_empty())
+                    .collect();
+                if result.status.success()
+                    && lines.len() == 2
+                    && lines[0]
+                        .trim_start_matches('@')
+                        .eq_ignore_ascii_case(&handle)
+                    && (10..=200).contains(&lines[1].len())
+                    && lines[1]
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+                {
+                    effective_url = format!("tiktokuser:{}", lines[1]);
+                    writeln!(
+                        log,
+                        "Account verified. Retrying profile sync with the recovered ID."
+                    )?;
+                    let status = make_command(&effective_url)
+                        .stdout(Stdio::from(log.try_clone()?))
+                        .stderr(Stdio::from(log.try_clone()?))
+                        .status()?;
+                    code = status.code().unwrap_or(1);
+                } else {
+                    writeln!(
+                        log,
+                        "Could not verify the saved post belongs to this profile; original error remains."
+                    )?;
+                }
+            }
+            if code != 0 && !fallback_links.is_empty() {
+                used_partial_fallback = true;
+                writeln!(
+                    log,
+                    "\nProfile scan failed. Trying {} previously visible Instagram post links captured by Brave; older posts may be missing.",
+                    fallback_links.len()
+                )?;
+                let mut retry = Command::new(&tool);
+                retry
+                    .args([
+                        "--ignore-config",
+                        "--ignore-errors",
+                        "--ignore-no-formats-error",
+                        "--windows-filenames",
+                        "--no-overwrites",
+                        "--write-description",
+                        "--write-info-json",
+                        "--color",
+                        "never",
+                        "--newline",
+                        "--progress",
+                        "--progress-delta",
+                        "1",
+                        "--progress-template",
+                        "download:__LV_PROGRESS__%(progress._percent_str)s",
+                        "--match-filters",
+                    ])
+                    .arg(&selection_filter)
+                    .arg("--download-archive")
+                    .arg(if is_profile {
+                        account_dir.join("download-archive.txt")
+                    } else {
+                        root.join("download-archive.txt")
+                    })
+                    .arg("--output")
+                    .arg(&output);
+                crate::tools::configure_ytdlp(&mut retry);
+                retry.arg("--").args(&fallback_links);
                 #[cfg(windows)]
                 {
                     use std::os::windows::process::CommandExt;
@@ -1074,7 +1300,7 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
                 writeln!(log, "\nChecking TikTok photo posts...")?;
                 let mut cmd = Command::new("python");
                 cmd.arg(photo_helper)
-                    .arg(&url)
+                    .arg(&effective_url)
                     .arg("--destination")
                     .arg(if is_profile { &account_dir } else { &root })
                     .arg("--yt")
@@ -1120,8 +1346,52 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
                     .stdout(Stdio::from(log.try_clone()?))
                     .stderr(Stdio::from(log.try_clone()?))
                     .status()?;
-                if !result.success() {
-                    code = result.code().unwrap_or(1);
+                let mut photo_code = result.code().unwrap_or(1);
+                if photo_code != 0 && !fallback_links.is_empty() {
+                    let photos: Vec<_> = fallback_links
+                        .iter()
+                        .filter(|link| link.contains("/p/"))
+                        .collect();
+                    if !photos.is_empty() {
+                        used_partial_fallback = true;
+                        writeln!(
+                            log,
+                            "\nProfile photo scan failed. Trying {} previously visible Instagram posts; coverage is partial.",
+                            photos.len()
+                        )?;
+                        let mut retry = Command::new("python");
+                        retry
+                            .arg("-s")
+                            .arg("-m")
+                            .arg("gallery_dl")
+                            .env("PYTHONPATH", &gallery_dir)
+                            .args([
+                                "--config-ignore",
+                                "--write-metadata",
+                                "--filter",
+                                "extension.lower() in ('jpg','jpeg','png','webp','avif')",
+                                "--download-archive",
+                            ])
+                            .arg(account_dir.join("instagram-photo-archive.sqlite3"))
+                            .arg("--directory")
+                            .arg(&account_dir)
+                            .arg("--")
+                            .args(photos);
+                        #[cfg(windows)]
+                        {
+                            use std::os::windows::process::CommandExt;
+                            retry.creation_flags(0x08000000);
+                        }
+                        photo_code = retry
+                            .stdout(Stdio::from(log.try_clone()?))
+                            .stderr(Stdio::from(log.try_clone()?))
+                            .status()?
+                            .code()
+                            .unwrap_or(1);
+                    }
+                }
+                if photo_code != 0 {
+                    code = photo_code;
                 }
             }
             Ok(code)
@@ -1133,7 +1403,13 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
                 1
             }
         };
-        let state = if code == 0 { "finished" } else { "error" };
+        let state = if code != 0 {
+            "error"
+        } else if used_partial_fallback {
+            "partial"
+        } else {
+            "finished"
+        };
         let _ = writeln!(
             log,
             "\nSync {state} (exit code {code}). Platform restrictions or unavailable posts can limit results."
@@ -1164,6 +1440,12 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
                     }
                     let _=db.execute("INSERT INTO source_new_files(profile_id,root,path,downloaded_at,seen) VALUES(?,?,?,unixepoch(),0) ON CONFLICT(profile_id,root,path) DO UPDATE SET downloaded_at=excluded.downloaded_at,seen=0",params![id,root.to_string_lossy().as_ref(),f.path]);
                 }
+            }
+            if code == 0 && selection_pending {
+                let _ = db.execute(
+                    "UPDATE source_selection SET pending=0 WHERE profile_id=?",
+                    [id],
+                );
             }
             let _=db.execute("UPDATE source_sync_runs SET state=?,exit_code=?,finished=datetime('now') WHERE id=?",params![state,code,run_id]);
             let _=db.execute("UPDATE source_schedules SET next_run=unixepoch()+interval_seconds WHERE profile_id=? AND enabled=1",[id]);

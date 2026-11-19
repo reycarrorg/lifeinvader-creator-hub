@@ -4,12 +4,21 @@ A local desktop-style content hub built with Rust, SQLite, and a browser interfa
 
 ## What works
 
-- Separate profile and source views, categories, and category dashboards. Paste a supported account link to fill its name and platform; photos and categories can be set under More options.
+- Profile and source views each include their own categories and category dashboards. Use Manage to rename a category and choose its members. Right-click a tile for account or category options; account removal is reversible from Removed accounts and keeps files and history. Paste a supported account link to fill its name and platform; photos and categories can be set under More options.
 - Profile analytics for manual snapshots, template CSV imports and optional Brave-based refresh of visible TikTok/Instagram profile counts, with offline charts. Private platform Insights are not connected. See [analytics research and roadmap](docs/ANALYTICS_RESEARCH.md).
-- Source sync with a shared download archive, per-source Sync all exclusions, optional scheduled sync while the app is open, progress logs, local video previews, and a separate date audit.
+- New-download highlights expire one hour after the Hub records a download, with a visible countdown; marking media seen clears them earlier. Source and profile views offer **Open folder** as well as folder settings.
+- Source sync with a shared download archive, optional scheduled sync while the app is open, progress logs, local previews, and a separate date audit. Sync all includes only sources with auto sync enabled that have not been marked dead. Right-click a source to mark it dead or active. Tile counts show tracked downloads from the last 24 hours, even after marking them seen.
+- Paste individual TikTok, Instagram, or YouTube post links under **Sources → Post links** to download into a separate, non-syncing Solo Posts collection. It uses the source folder and a separate archive like the existing solo-post script; original account details are shown when metadata supplies them.
+- Choose **Solo Posts · individual links** in the source or category filter of the source picker or content library. Matching video thumbnails are omitted from those choices, while standalone photos remain available. Original account, platform and post details depend on saved metadata; queue entries refer to the local files.
+- When adding a source, preview up to 1,500 posts and choose all, or one side of a selected post. The center post is included. Skipped post IDs are recorded separately from the real archive and excluded from later video syncs; the earlier-side selection remains limited to the selected IDs. **Choose posts** on the source lets you revisit the selection.
 - Profile sync for accessible TikTok, Instagram and YouTube videos and, when the optional photo tools are installed, photo posts. Profile downloads have their own folders and archives.
+- Category dashboards let you choose an icon and color or upload a PNG/JPEG for the category. The picture stays in local media storage.
+- Edit source media or your own downloaded media with centered crop presets, start/end trims, optional mute, and an optional uploaded PNG/JPEG logo at 50% opacity. FFmpeg creates a separate file under the source folder. Source edits can be queued for review; the queue keeps the original post identity and description and references the edited copy. Nothing is published automatically. The editor needs FFmpeg (`tools/ffmpeg.exe` on Windows, `LIFEINVADER_FFMPEG`, or a system PATH installation).
+- Quick editing is optional. In **Settings**, turn off **Show quick editor** to hide media edit buttons; original media can still be previewed and queued. The preference is stored in the app browser and can be changed again at any time.
+- Profile dashboards browse downloaded media across source accounts, with category, source, type, search and length filters and direct queueing. Older local videos can be scanned for length from the library; the scan reads the existing files and does not download them again.
 - A manual content library with per-profile claim and posting status.
-- Shuffle downloaded source photos and videos using source/category, media type, available duration, original date and text filters; queue original file references for a profile and manually record status. Planned times do not automatically post. See [posting research and roadmap](docs/POSTING_RESEARCH.md). A reported post is a manual record; the app does not publish posts.
+- A local all-profile AI handoff and activity history for the posting queue, with target account, source context, planned time, file references and manually recorded outcomes. Copy or download it from a profile's queue. It does not publish posts; see [computer-use handoff](docs/COMPUTER_USE_HANDOFF.md).
+- Pick downloaded source photos and videos using source/category, media type, available duration, original date, text and ordering controls; preview the result, see its original details, and queue file references for a profile to review and manually record status. Planned times do not automatically post. See [posting research and roadmap](docs/POSTING_RESEARCH.md). A reported post is a manual record; the app does not publish posts.
 
 A fresh database starts without accounts or source folders. Add your own accounts and choose your own library folder in the app. Profiles and downloaded files are local to each installation; a GitHub fork does not share the app's database or media.
 
@@ -33,7 +42,7 @@ Copy-Item target\release\lifeinvader_hub.exe .\Lifeinvader.exe
 .\Lifeinvader.exe
 ```
 
-Replace `YOUR-USERNAME` with the owner of your fork, or with `reycarrorg` to clone the shared repository directly. GitHub authentication is required for a private repository.
+Replace `YOUR-USERNAME` with the owner of your fork, or with `reycarrorg` to clone the shared repository directly. The shared repository is private; GitHub authentication and collaborator access are required.
 
 The app opens its own Edge window at `127.0.0.1:3847`. Closing that window ends the local service after any running sync finishes. You can also start a development server with `cargo run -- --server-only` and open the local address in a browser.
 
@@ -42,7 +51,7 @@ The app opens its own Edge window at `127.0.0.1:3847`. Closing that window ends 
 Downloaded utilities and media are intentionally excluded from the repository. To enable sync and thumbnails:
 
 1. Download the Windows executable for [yt-dlp](https://github.com/yt-dlp/yt-dlp/releases) from its official releases and save it as `tools/yt-dlp.exe`, or select its full path under **Sources → Source folders**.
-2. Download an FFmpeg build from a source listed on the [FFmpeg download page](https://ffmpeg.org/download.html) and save its executable as `tools/ffmpeg.exe`. It creates thumbnail images from local videos. The browser may provide a fallback when FFmpeg is unavailable.
+2. Download an FFmpeg build from a source listed on the [FFmpeg download page](https://ffmpeg.org/download.html) and save both `ffmpeg.exe` and `ffprobe.exe` in `tools/`. Lifeinvader passes the discovered FFmpeg path to yt-dlp for source and individual-post downloads; it also uses FFmpeg for local thumbnails and edits. `LIFEINVADER_FFMPEG` can point to a different executable or containing folder.
 3. For TikTok photo posts, install Python 3. The included `helpers/tiktok_photos.py` is detected automatically when started from the project folder; its path can also be selected in **Source folders**.
 4. For Instagram photo posts, install the helper into the project folder:
 
@@ -51,6 +60,10 @@ Downloaded utilities and media are intentionally excluded from the repository. T
    ```
 
 Choose an existing library folder under **Sources → Source folders** before syncing. Source videos use a shared `download-archive.txt` in that folder; profile downloads use `_My Profiles/<platform>/profile-<id>/` and their own archives. The tools skip entries already recorded in their archives. They do not guarantee that every post can be accessed: TikTok and Instagram may require authentication or restrict automated access. This app does not currently sign in to those services.
+
+The post selector uses the order returned by the platform, which may not reflect exact posting times; dates and thumbnails can be missing. Flat previews can fail for restricted accounts, and the app offers an explicit download-all fallback for a new source. Photo sync is disabled for selective sources when it could bypass the exclusion policy. Solo-post downloads do not currently use a signed-in browser, and their separate archive does not deduplicate against other source archives.
+
+For a TikTok profile that fails to resolve, **Fix TikTok sync** lets the user save a link to one of that account's own posts. After the normal listing fails, the app checks the post's owner, obtains its account ID and retries with the existing profile archive. Instagram can retry previously captured Brave profile links when its profile extractor fails; this is explicitly reported as partial coverage and photos can also use captured post links. These fallbacks depend on platform access, and captured links do not automatically include later posts unless refreshed.
 
 Use the app only for content you have the right to access and use. Sync is manual unless you enable an individual source's timer. Use only one downloader at a time; separate programs are not coordinated.
 
@@ -84,11 +97,14 @@ python tests/bridge_smoke.py
 python tests/bridge_sync_smoke.py
 node tests/bridge_collector_test.js
 python tests/queue_smoke.py
+python tests/solo_picker_smoke.py
+python tests/handoff_smoke.py
 python tests/date_audit_smoke.py
 python tests/smoke.py
 python tests/categories_smoke.py
 python tests/source_smoke.py
 python tests/profile_sync_smoke.py
+python tests/recovery_smoke.py
 python tests/scheduler_smoke.py
 ```
 

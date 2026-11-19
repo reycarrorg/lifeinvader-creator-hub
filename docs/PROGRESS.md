@@ -1,5 +1,73 @@
 # Project progress
 
+## 2026-11-18 — Solo Posts picker and optional editor
+
+Review: https://github.com/reycarrorg/lifeinvader-creator-hub/pull/14 (stacked on the FFmpeg fix branch).
+
+- Added explicit Solo Posts choices to source and category filters in both the picker and content library. Where sidecar metadata is available, show the original platform and account and use the platform in queue duplicate checks. Suppress a Solo image from these choices when its filename stem and post ID match a video; standalone images remain available and no files are removed.
+- Added a browser-local setting to hide quick-edit controls. Users can continue previewing and queueing original media, and may re-enable editing later.
+- An isolated browser walkthrough verified both Solo filters, video and photo previews, exclusion of a matching video thumbnail, direct queueing and the editor setting. Before merging the stacked PRs, all nine Rust unit tests, the browser collector test, and 20 isolated Python smoke tests passed. The release also started against a disposable copy of an existing database and listed its Solo media. No live downloads or posts were made.
+
+## 2026-11-18 — FFmpeg discovery for downloads
+
+Review: https://github.com/reycarrorg/lifeinvader-creator-hub/pull/13 (stacked on the category/picker branch).
+
+- Diagnosed an Instagram individual-post log reporting that yt-dlp could not find FFmpeg even though it was in Lifeinvader’s tools folder. Download and metadata commands now receive the discovered FFmpeg executable via yt-dlp’s explicit location option, including source sync, profile recovery, source previews, and online date checks.
+- Installed a matching FFprobe 7.1 next to the existing FFmpeg; verified the existing executable matched the official 7.1 package before extracting it. An offline real yt-dlp test detected both tools and converted a synthetic local file. The user’s running batch was interrupted at their request; existing archives and media were preserved. A live Instagram retry was left to the user.
+
+## 2026-11-18 — Category management and source picker preview
+
+Review: https://github.com/reycarrorg/lifeinvader-creator-hub/pull/12 (stacked on the source dashboard and editor branch).
+
+- Category Manage now updates the name and membership together, preserves appearance and archived members, and rejects duplicate names. Category cards wrap into readable rows.
+- New-media highlights expire one hour after the Hub recorded the download, unless marked seen earlier; the tile border and label show the remaining time. The separate 24-hour activity count is unchanged. Account views show and can open their existing linked folders.
+- Reworked the post picker with concise primary and optional filters, source-aware choices, original details, and video/photo preview before queueing. Already queued or recorded items are excluded for the current posting profile.
+- Checked renaming, hidden membership and appearance, expiration and folder path discovery with disposable data. Browser checks covered multi-category layout, renaming, highlight countdown, media preview and queueing. No live sync or publication was performed.
+
+## 2026-11-18 — Source status, categories and quick edits
+
+Review: https://github.com/reycarrorg/lifeinvader-creator-hub/pull/11 (stacked on the account context-menu branch).
+
+The owner requested private visibility. The shared repository was made private again and antisolvent retained write access, verified through GitHub.
+
+- Added source 24-hour tracked download counts, explicit dead/active state, status labels and colors, and server-enforced Sync all eligibility. Existing auto-sync timers are preserved; marking dead pauses automatic work and cancels pending jobs.
+- Added category icon/color selection and local PNG/JPEG uploads, improved settings and sync log following, collapsible media/dashboard sections, and original-date-first media order.
+- Added FFmpeg quick edits with centered crop, trim, mute and optional 50% logo overlay. Edits are separate files and queue entries retain original post identity while their handoff points to the edited copy. Own-profile media supports editing and download; source media can also be queued for review.
+- Validated source eligibility and category images with disposable data; generated real synthetic video/audio and image edits and verified crop, trim, muted/preserved audio, output, queue and handoff. Browser checks covered the category selector and render-to-queue flow. No live sync or publishing was performed.
+
+## 2026-11-18 — Account and category context menus
+
+Review: https://github.com/reycarrorg/lifeinvader-creator-hub/pull/10 (stacked on the category-navigation branch).
+
+- Profile and source tiles offer right-click and keyboard menus; category tiles offer open and member management. Account pages also have an options button.
+- Removing an account archives it from the workspace without deleting files, archives, categories, queues or history. Active syncs prevent removal; pending sync jobs are cancelled. Scheduled sync and Brave refresh are disabled and remain off after restoration. Removed accounts can be restored in their own section.
+- Tested with disposable data in the browser and a dedicated archive smoke test, including queue references, category membership and in-progress sync guards. No real account or media was removed.
+
+## 2026-11-18 — Combined categories and source cutoff clarity
+
+Review: https://github.com/reycarrorg/lifeinvader-creator-hub/pull/9 (stacked on the preceding profile sync and library branch).
+
+- Profiles and Sources now show their own categories and account tiles together. Category dashboards retain member management; profile categories show profile tiles and sync counts, and source categories keep their batch tools.
+- The first-download picker labels the newer and older sides, highlights the cutoff and marks included and skipped previews. Selection still follows platform order, which may not be chronological.
+- Validated category navigation and both selection modes in an isolated local browser with a fake downloader; Rust unit tests passed. No live sync or provider interaction was started. The shared GitHub repository was changed to public at the owner’s request; new work remains on branches.
+
+## 2026-11-18 — Profile sync recovery and source library
+
+Shared review: [PR #8](https://github.com/reycarrorg/lifeinvader-creator-hub/pull/8), stacked on PR #7.
+
+- Added owner-verified TikTok profile recovery from a saved post URL. On a failed profile listing, the app verifies the uploader and retries using the secondary account ID while retaining the existing archive; the photo helper receives the recovered account URL. A bounded real metadata-only check resolved a TikTok account and listed two posts; full live sync remains unverified.
+- Instagram fallback now labels captured-link sync as partial and can retry photo posts individually when the profile photo listing fails. A bounded metadata-only check retrieved one Instagram reel and one photo post; real full media sync remains unverified. Captured links cover only visible posts and can become stale.
+- Profile and category dashboards now browse source media directly, with source/category/type/search/length filters and queue actions that reference existing files. A user-triggered local length scan populates a browser-local cache shared with the random picker; unknown lengths remain excluded from length filters.
+- Validated with fake-downloader recovery, account mismatch and archive reuse, partial Instagram video/photo fallback, existing profile/source/queue tests, and a synthetic browser walkthrough of library filters and queueing. No live full sync was started during the tests.
+
+## 2026-11-18 — Computer-use posting handoff
+
+Shared review: [PR #7](https://github.com/reycarrorg/lifeinvader-creator-hub/pull/7), stacked on PR #6.
+
+- Added a local all-profile JSON handoff with target, source details, validated local file path when available, planned time, due classification, state, revision, record template and activity history. A profile can copy or download it. Queue edits can record notes, needs-review items and failed attempts without clearing the queue.
+- Added persistent event snapshots and optional revision checks for updates; the UI and handoff use these checks. Old entries have no fabricated prior history. Activity records and exports remain local unless shared by the user.
+- Validated with synthetic multi-profile queue data, missing files, due/future/unscheduled times, stale-update rejection and restart persistence; no social-media post was made. The handoff is not an autonomous publisher, provider verification, a scheduler or a lease against concurrent uploads. See `COMPUTER_USE_HANDOFF.md`.
+
 Keep entries concise and dated. Record actual validation and remaining limitations, and link relevant issues or pull requests when available. The current code and repository history are authoritative if an entry becomes stale.
 
 ## 2026-11-18 — Initial shared project
@@ -38,3 +106,11 @@ Validation for the analytics and queue work: Rust unit tests; isolated analytics
 
 - Added `TODO.md` with the product direction, current implementation and validation boundaries, prioritized follow-up work, and a workflow for both collaborators and their AI assistants. Collaborators can adapt their own forks while proposing shared changes through review.
 - Corrected stale notes about the bounded YouTube test, date audit, photo selection and Brave refresh. Documentation-only change; verified references and consistency against the current repository and prior recorded tests.
+
+## 2026-11-18 — Solo links and initial source selection
+
+Shared review: [PR #6](https://github.com/reycarrorg/lifeinvader-creator-hub/pull/6).
+
+- Added a batch link box for individual TikTok, Instagram and YouTube posts, a non-syncing Solo Posts collection, a separate archive, progress, and original-account metadata where returned. The flow adapts the existing interactive script's downloader approach rather than launching its prompts.
+- Added a metadata-only source preview and a centered cutoff strip with all/before/after choices. Excluded IDs remain separate from the real download archive and are filtered from subsequent syncs; a before selection remains limited to selected IDs. Post order is platform-supplied and the center post is included.
+- Validated in an isolated database with a fake downloader and the test browser; no new real social content was downloaded. Restrictions: at most 1,500 preview posts, missing/unreliable ordering or thumbnails, no account login in the solo flow, separate solo archive, and selective photo sync blocked where it could bypass exclusions.

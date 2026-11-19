@@ -36,12 +36,15 @@ with tempfile.TemporaryDirectory(prefix='lifeinvader-schedule-test-') as tmp:
         files=get(f'/api/sources/{a}')['files']; assert len(files)==1 and files[0]['is_new']
         assert json_post(f'/api/sources/{a}/schedule',{'enabled':False,'interval_seconds':60})[0]==204
         until(lambda: not next(x for x in get('/api/source-schedules')['schedules'] if x['profile_id']==a)['queue_state'])
-        assert json_post(f'/api/sources/{b}/batch-setting',{'include':False})[0]==204
-        assert not next(x for x in get('/api/source-schedules')['schedules'] if x['profile_id']==b)['include_in_batch']
+        code,body=json_post('/api/source-batches',{'profile_ids':[a,b],'include_photos':False}); assert code==202,body
+        assert json.loads(body)['excluded']==2
+        assert json_post(f'/api/sources/{a}/schedule',{'enabled':True,'interval_seconds':60})[0]==204
+        assert json_post(f'/api/sources/{b}/schedule',{'enabled':True,'interval_seconds':60})[0]==204
+        assert json_post(f'/api/sources/{b}/dead',{'dead':True})[0]==204
         code,body=json_post('/api/source-batches',{'profile_ids':[a,b],'include_photos':False}); assert code==202,body
         batch_response=json.loads(body);assert batch_response['added']==1 and batch_response['excluded']==1,batch_response
         until(lambda: (s:=get('/api/source-schedules')['batch']) and s['remaining']==0)
-        assert json_post(f'/api/sources/{b}/batch-setting',{'include':True})[0]==204
+        assert json_post(f'/api/sources/{b}/dead',{'dead':False})[0]==204
         code,body=json_post('/api/source-batches',{'profile_ids':[a,b],'include_photos':False}); assert code==202,body
         assert json.loads(body)['added']==2
         until(lambda: (s:=get('/api/source-schedules')['batch']) and s['remaining']==0)
@@ -58,6 +61,6 @@ with tempfile.TemporaryDirectory(prefix='lifeinvader-schedule-test-') as tmp:
         until(lambda: get(f'/api/profiles/{own}/downloads')['last_run'] and get(f'/api/profiles/{own}/downloads')['last_run']['state']=='finished')
         assert next(x for x in get('/api/source-schedules')['schedules'] if x['profile_id']==own)['next_run']>time.time()
         assert json_post(f'/api/profiles/{own}/schedule',{'enabled':False,'interval_seconds':60})[0]==204
-        print('PASS: source and profile schedules, timer reset, source exclusion, serial batch sync, and archive reuse')
+        print('PASS: source and profile schedules, timer reset, dead/off exclusion, serial batch sync, and archive reuse')
     finally:
         proc.terminate();proc.wait(timeout=5)

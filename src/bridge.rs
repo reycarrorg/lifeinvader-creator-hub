@@ -87,7 +87,7 @@ pub struct Config {
     after_post: bool,
 }
 fn profile(db: &rusqlite::Connection, id: i64) -> ApiResult<()> {
-    let found:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM profiles WHERE id=? AND role IN ('destination','source') AND platform IN ('tiktok','instagram'))",[id],|r|r.get(0)).map_err(internal)?;
+    let found:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM profiles WHERE id=? AND archived=0 AND role IN ('destination','source') AND platform IN ('tiktok','instagram'))",[id],|r|r.get(0)).map_err(internal)?;
     if found {
         Ok(())
     } else {
@@ -143,7 +143,7 @@ pub async fn poll(
     let mut db = app.db.lock().map_err(internal)?;
     auth(&db, &headers)?;
     let tx = db.transaction().map_err(internal)?;
-    let row:Option<(i64,String,String)>=tx.query_row("SELECT p.id,p.platform,p.url FROM analytics_bridge b JOIN profiles p ON p.id=b.profile_id WHERE p.role IN ('destination','source') AND p.platform IN ('instagram','tiktok') AND b.enabled=1 AND b.next_run<=unixepoch() AND (b.lease_until IS NULL OR b.lease_until<unixepoch()) ORDER BY b.next_run,p.id LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(internal)?;
+    let row:Option<(i64,String,String)>=tx.query_row("SELECT p.id,p.platform,p.url FROM analytics_bridge b JOIN profiles p ON p.id=b.profile_id WHERE p.archived=0 AND p.role IN ('destination','source') AND p.platform IN ('instagram','tiktok') AND b.enabled=1 AND b.next_run<=unixepoch() AND (b.lease_until IS NULL OR b.lease_until<unixepoch()) ORDER BY b.next_run,p.id LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(internal)?;
     let job = if let Some((id, platform, url)) = row {
         let j = Uuid::new_v4().to_string();
         tx.execute("UPDATE analytics_bridge SET job_id=?,lease_until=unixepoch()+180,last_attempt=unixepoch(),last_error='',next_run=unixepoch()+interval_seconds WHERE profile_id=?",params![j,id]).map_err(internal)?;
