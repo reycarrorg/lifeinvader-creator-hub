@@ -2,6 +2,8 @@
 
 ## 2026-11-18 — Computer-use posting handoff
 
+Shared review: [PR #7](https://github.com/reycarrorg/lifeinvader-creator-hub/pull/7), stacked on PR #6.
+
 - Added a local all-profile JSON handoff with target, source details, validated local file path when available, planned time, due classification, state, revision, record template and activity history. A profile can copy or download it. Queue edits can record notes, needs-review items and failed attempts without clearing the queue.
 - Added persistent event snapshots and optional revision checks for updates; the UI and handoff use these checks. Old entries have no fabricated prior history. Activity records and exports remain local unless shared by the user.
 - Validated with synthetic multi-profile queue data, missing files, due/future/unscheduled times, stale-update rejection and restart persistence; no social-media post was made. The handoff is not an autonomous publisher, provider verification, a scheduler or a lease against concurrent uploads. See `COMPUTER_USE_HANDOFF.md`.
