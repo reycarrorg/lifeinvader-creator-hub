@@ -7,6 +7,8 @@ A local desktop-style content hub built with Rust, SQLite, and a browser interfa
 - Separate profile and source views, categories, and category dashboards. Paste a supported account link to fill its name and platform; photos and categories can be set under More options.
 - Profile analytics for manual snapshots, template CSV imports and optional Brave-based refresh of visible TikTok/Instagram profile counts, with offline charts. Private platform Insights are not connected. See [analytics research and roadmap](docs/ANALYTICS_RESEARCH.md).
 - Source sync with a shared download archive, per-source Sync all exclusions, optional scheduled sync while the app is open, progress logs, local video previews, and a separate date audit.
+- Paste individual TikTok, Instagram, or YouTube post links under **Sources → Post links** to download into a separate, non-syncing Solo Posts collection. It uses the source folder and a separate archive like the existing solo-post script; original account details are shown when metadata supplies them.
+- When adding a source, preview up to 1,500 posts and choose all, or one side of a selected post. The center post is included. Skipped post IDs are recorded separately from the real archive and excluded from later video syncs; the earlier-side selection remains limited to the selected IDs. **Choose posts** on the source lets you revisit the selection.
 - Profile sync for accessible TikTok, Instagram and YouTube videos and, when the optional photo tools are installed, photo posts. Profile downloads have their own folders and archives.
 - A manual content library with per-profile claim and posting status.
 - Shuffle downloaded source photos and videos using source/category, media type, available duration, original date and text filters; queue original file references for a profile and manually record status. Planned times do not automatically post. See [posting research and roadmap](docs/POSTING_RESEARCH.md). A reported post is a manual record; the app does not publish posts.
@@ -51,6 +53,8 @@ Downloaded utilities and media are intentionally excluded from the repository. T
    ```
 
 Choose an existing library folder under **Sources → Source folders** before syncing. Source videos use a shared `download-archive.txt` in that folder; profile downloads use `_My Profiles/<platform>/profile-<id>/` and their own archives. The tools skip entries already recorded in their archives. They do not guarantee that every post can be accessed: TikTok and Instagram may require authentication or restrict automated access. This app does not currently sign in to those services.
+
+The post selector uses the order returned by the platform, which may not reflect exact posting times; dates and thumbnails can be missing. Flat previews can fail for restricted accounts, and the app offers an explicit download-all fallback for a new source. Photo sync is disabled for selective sources when it could bypass the exclusion policy. Solo-post downloads do not currently use a signed-in browser, and their separate archive does not deduplicate against other source archives.
 
 Use the app only for content you have the right to access and use. Sync is manual unless you enable an individual source's timer. Use only one downloader at a time; separate programs are not coordinated.
 
