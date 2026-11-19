@@ -19,13 +19,16 @@ The full vision is **not finished**. In particular, a scheduled item does not po
 | Dates and metadata | Source listings read sidecars; date audit can check locally or request missing dates online without re-downloading media. Unambiguous TikTok IDs can yield labeled UTC estimates. | Full metadata recovery for every file; estimated dates are not confirmed publishing dates and can differ around day/timezone boundaries. |
 | Selection and queue | Picker shuffles source photos/videos with source, category, type, date, text and available-duration controls. Queue stores file references, planned times, status and activity, and exposes an all-profile handoff with revision-checked updates. | Automatic posting, automatic success verification, a full carousel as one selection, or complete detection of duplicate content across different post IDs. Manual library import still copies files. |
 | Analytics | Manual snapshots, template CSV import, charts, and an optional paired Brave extension for visible profile counts. | Installed-extension end-to-end verification, private Insights, full account connection/OAuth, universal platform exports and automatic metrics for all posts. |
-| Collaboration | Public GitHub upstream, branch/fork and PR workflow, issue/progress notes and research documents. | A GitHub clone does not include either person's local database, profiles, Drive folders, downloader executables or media. Access/invitation state can change and should be verified. |
+| Collaboration | Private GitHub upstream, branch/fork and PR workflow, issue/progress notes and research documents. | A GitHub clone does not include either person's local database, profiles, Drive folders, downloader executables or media. Access/invitation state can change and should be verified. |
 
 Evidence so far includes isolated unit/smoke tests, a bounded live YouTube test-channel download, an Instagram reel and partial browser-link fallback test, and limited metadata-only date checks. These are not proof of complete channel downloads, successful publishing, private Insights, every platform/account, or every operating system. See `PROGRESS.md` and the research documents for details.
 
 ## Suggested next work
 
 ### 1. Make the existing experience dependable
+
+- [x] Show source sync states and 24-hour tracked additions, add user-set dead status, restrict Sync all to auto-enabled active sources, and expose category icon/color/image settings. Validate behavior against disposable data.
+- [ ] Validate the new quick editor with a wider range of formats, portrait/landscape videos and audio on collaborators’ machines; add interactive crop positioning, richer trimming and saved logo presets if needed. The current editor uses centered crop presets and an uploaded overlay.
 
 - [x] Add profile/source and category context menus with reversible account removal, including preservation of local files, history and category membership. Automatic sync and Brave refresh stay off on restore.
 

@@ -476,6 +476,7 @@ pub(crate) fn gather(
         }
         let path = entry.path();
         if ft.is_dir() {
+            if entry.file_name() == ".lifeinvader-edits" { continue; }
             gather(root, &path, depth + 1, files)?;
             continue;
         }
@@ -913,6 +914,9 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
     let (platform, url, folder) = account_profile(&db, id, role)?;
     let archived: bool = db.query_row("SELECT archived FROM profiles WHERE id=?", [id], |r| r.get(0)).map_err(internal)?;
     if archived { return Err(bad("Restore this account before syncing it.")); }
+    let paused_start: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM source_queue q WHERE q.profile_id=? AND q.state='starting' AND q.origin IN ('auto','batch') AND (NOT COALESCE((SELECT enabled FROM source_schedules WHERE profile_id=q.profile_id),0) OR COALESCE((SELECT dead FROM source_preferences WHERE profile_id=q.profile_id),0)))",[id],|r|r.get(0)).map_err(internal)?;
+    if paused_start { return Err(bad("Queued sync cancelled because auto sync is off or the source is marked dead.")); }
+
     if url == crate::solo::SOLO_URL {
         return Err(bad(
             "Solo posts cannot be synced. Add individual links instead.",
