@@ -2,6 +2,8 @@
 
 ## 2026-11-18 — FFmpeg discovery for downloads
 
+Review: https://github.com/reycarrorg/lifeinvader-creator-hub/pull/13 (stacked on the category/picker branch).
+
 - Diagnosed an Instagram individual-post log reporting that yt-dlp could not find FFmpeg even though it was in Lifeinvader’s tools folder. Download and metadata commands now receive the discovered FFmpeg executable via yt-dlp’s explicit location option, including source sync, profile recovery, source previews, and online date checks.
 - Installed a matching FFprobe 7.1 next to the existing FFmpeg; verified the existing executable matched the official 7.1 package before extracting it. An offline real yt-dlp test detected both tools and converted a synthetic local file. The user’s running batch was interrupted at their request; existing archives and media were preserved. A live Instagram retry was left to the user.
 
