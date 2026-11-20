@@ -1,0 +1,214 @@
+use crate::{App,controller_store as store,workspace_media as media,workspace_events};
+use axum::{Extension,Json,Router,body::{Body,Bytes},extract::{State,Path as AxumPath,Request},http::{Method,StatusCode,header},response::{Html,IntoResponse,Response},routing::{get,post}};
+use futures_util::StreamExt;
+use tower::ServiceExt;
+use tower_http::services::ServeFile;
+use serde_json::{Value,json};
+
+pub fn routes(app:App)->Router<App>{
+    Router::new().route("/workspace",get(page)).route("/workspace/manage",get(manage)).route("/workspace.css",get(css)).route("/workspace.js",get(js))
+        .route("/snapmatic-utility.css",get(utility_css)).route("/snapmatic-utility.js",get(utility_js))
+        .route("/manifest.webmanifest",get(manifest)).route("/favicon.ico",get(favicon))
+        .route("/icon-192.png",get(icon_192)).route("/icon-512.png",get(icon_512))
+        .route("/workspace-phase5.js",get(||async{([(header::CONTENT_TYPE,"text/javascript; charset=utf-8")],include_str!("../web/workspace-phase5.js"))}))
+ .route("/workspace-edit.js",get(||async{([(header::CONTENT_TYPE,"text/javascript; charset=utf-8")],include_str!("../web/workspace-edit.js"))}))
+        .route("/workspace-platform-draft.js",get(||async{([(header::CONTENT_TYPE,"text/javascript; charset=utf-8")],include_str!("../web/workspace-platform-draft.js"))}))
+        .route("/api/clips/{id}/platform-draft",get(crate::workspace_platform_drafts::read).put(crate::workspace_platform_drafts::save))
+        .route("/workspace-preflight.js",get(||async{([(header::CONTENT_TYPE,"text/javascript; charset=utf-8")],include_str!("../web/workspace-preflight.js"))}))
+        .route("/api/workspace/media-facts",get(||async{([(header::CONTENT_TYPE,"application/json"),(header::CACHE_CONTROL,"no-store")],include_str!("../web/workspace-media-facts.json"))}))
+        .route("/api/workspace",get(data))
+        .route("/api/workspace/intake",get(phase4_state))
+        .route("/api/workspace/import-mp4",get(crate::workspace_local_import::status).post(crate::workspace_local_import::submit))
+        .route("/api/workspace/sources-v2",get(crate::workspace_sources_v2::catalogue))
+        .route("/api/workspace/sources-v2/{id}/preview",post(crate::workspace_sources_v2::preview).layer(axum::extract::DefaultBodyLimit::max(8192)))
+        .route("/api/workspace/source-download/{id}",get(crate::workspace_source_download::status).post(crate::workspace_source_download::start).layer(axum::extract::DefaultBodyLimit::max(2048)))
+        .route("/api/workspace/tiktok/export/{id}",get(crate::workspace_tiktok_export::status).post(crate::workspace_tiktok_export::export).layer(axum::extract::DefaultBodyLimit::max(5*1024*1024)))
+        .route("/api/workspace/tiktok/export-folder",post(crate::workspace_tiktok_export::open_folder))
+        .route("/api/workspace/tiktok/inbox-draft",post(crate::controller_tiktok_inbox::draft).layer(axum::extract::DefaultBodyLimit::max(4096)))
+        .route("/api/workspace/cache-preview",get(phase4_cache)).route("/api/workspace/cache",get(phase4_cache_usage))
+        .route("/api/workspace/local-preview",get(nvenc_status).post(nvenc_start))
+        .route("/api/workspace/local-preview/{id}/video",get(nvenc_stream).head(nvenc_stream))
+        .route("/api/clips/{id}/draft",get(crate::workspace_drafts::read).put(crate::workspace_drafts::save))
+        .route("/api/workspace/open-backup",post(crate::workspace_drafts::open_backup))
+        .route("/api/workspace/triage",get(crate::workspace_triage::read).post(crate::workspace_triage::write)
+            .layer(axum::extract::DefaultBodyLimit::max(8192)))
+        .route("/api/workspace/channel-profiles",get(crate::workspace_phase1::channel_profiles))
+        .route("/api/workspace/restore/{kind}",post(crate::workspace_phase1::restore_open))
+        .route("/api/workspace/diagnostics",post(crate::workspace_phase1::export))
+        .route("/api/workspace/ledger",get(ledger)).route("/api/workspace/system",get(system))
+        .route("/api/clips/{id}/video",get(clip_stream).head(clip_stream))
+        .route("/api/clips/{id}/poster",get(poster).head(poster)).route("/api/workspace/clips/{id}/stream",get(clip_stream).head(clip_stream))
+        .route("/api/workspace/clips/{id}/poster",get(poster).head(poster))
+        .route("/api/workspace/publish",post(block_publish)).route("/api/events",get(workspace_events::sse))
+        .layer(Extension(workspace_events::Feed::start(app)))
+}
+async fn manage()->Html<String>{Html(include_str!("../web/index.html").replace("<body>","<body class=\"sm-embedded\">"))}
+async fn page()->Html<&'static str>{Html(include_str!("../web/workspace.html"))}
+async fn css()->impl IntoResponse{([(header::CONTENT_TYPE,"text/css; charset=utf-8")],include_str!("../web/workspace.css"))}
+async fn js()->impl IntoResponse{([(header::CONTENT_TYPE,"text/javascript; charset=utf-8")],include_str!("../web/workspace.js"))}
+async fn utility_css()->impl IntoResponse{([(header::CONTENT_TYPE,"text/css; charset=utf-8")],include_str!("../web/snapmatic-utility.css"))}
+async fn utility_js()->impl IntoResponse{([(header::CONTENT_TYPE,"text/javascript; charset=utf-8")],include_str!("../web/snapmatic-utility.js"))}
+async fn manifest()->impl IntoResponse {
+    ([(header::CONTENT_TYPE,"application/manifest+json"),(header::CACHE_CONTROL,"no-cache")],
+        include_str!("../web/manifest.webmanifest"))
+}
+async fn favicon()->impl IntoResponse { asset("image/x-icon",include_bytes!("../web/snapmatic.ico")) }
+async fn icon_192()->impl IntoResponse { asset("image/png",include_bytes!("../web/icon-192.png")) }
+async fn icon_512()->impl IntoResponse { asset("image/png",include_bytes!("../web/icon-512.png")) }
+fn asset(ty:&'static str, bytes:&'static [u8])->impl IntoResponse{
+    ([(header::CONTENT_TYPE,ty),(header::CACHE_CONTROL,"public, max-age=86400"),(header::X_CONTENT_TYPE_OPTIONS,"nosniff")],bytes)
+}
+async fn block_publish()->impl IntoResponse{
+    (StatusCode::FORBIDDEN,Json(json!({"reason":"public_publish_disabled","publishing_enabled":false})))
+}
+fn no_store(v:Value)->Response{([(header::CACHE_CONTROL,"no-store")],Json(v)).into_response()}
+async fn ledger(State(app):State<App>)->Response{
+    match tokio::task::spawn_blocking(move||crate::workspace_ledger::data(&app)).await {
+        Ok(Ok(v))=>no_store(v),_=>safe_error(store::Error("ledger_unavailable")),
+    }
+}
+async fn system(State(app):State<App>)->Response{
+    let db=match app.db.lock(){Ok(v)=>v,Err(_)=>return safe_error(store::Error("storage_unavailable"))};
+    let cfg=crate::source::config(&db).ok();
+    let drive=cfg.as_ref().is_some_and(|v|v.root==crate::source::DRIVE_SOURCE_ROOT);
+    no_store(json!({"schema":"snapmatic-system-v1","loopback_only":true,"publishing_enabled":false,"cleanup_enabled":false,
+        "preview_mode":"strict SQLite clip ID / pinned media","workers_in_eta_mode":false,
+        "source_path":if drive{Some(crate::source::DRIVE_SOURCE_ROOT)}else{None},
+        "backup_path":if drive{Some(r"Z:\SnapmaticReview\Local Media\Posted Clips Backup")}else{None}}))
+}
+fn safe_error(e:store::Error)->Response{
+    (StatusCode::SERVICE_UNAVAILABLE,Json(json!({"reason":e.0}))).into_response()
+}
+async fn phase4_state(State(app):State<App>)->Response{
+    tokio::task::spawn_blocking(move||no_store(crate::workspace_phase4::state(&app))).await
+        .unwrap_or_else(|_|safe_error(store::Error("intake_status_unavailable")))
+}
+async fn phase4_cache_usage(State(app):State<App>)->Response{
+    tokio::task::spawn_blocking(move||match crate::workspace_phase4::cache_usage(&app){
+        Ok(v)=>no_store(v),Err(e)=>safe_error(e)
+    }).await.unwrap_or_else(|_|safe_error(store::Error("cache_usage_unavailable")))
+}
+async fn phase4_cache(State(app):State<App>)->Response{
+    tokio::task::spawn_blocking(move||match crate::workspace_phase4::cache_preview(&app){
+        Ok(v)=>no_store(v),Err(e)=>safe_error(e)
+    }).await.unwrap_or_else(|_|safe_error(store::Error("cache_preview_unavailable")))
+}
+async fn data(State(app):State<App>)->Response{
+    let result=tokio::task::spawn_blocking(move||{
+        let mut index=media::index(&app)?;
+        if let Ok(add)=crate::workspace_phase4::rows(&app) {
+            for row in add{
+                if !index.iter().any(|r|r["clip_id"]==row["clip_id"]||
+                    (r["preview_sha256"].is_string()&&r["preview_sha256"]==row["preview_sha256"])){
+                    index.push(row);
+                }
+            }
+        }
+        for row in crate::workspace_source_download::rows(&app)?.into_iter().chain(crate::workspace_local_import::rows(&app)?){
+            if !index.iter().any(|r|r["clip_id"]==row["clip_id"]||
+                (r["preview_sha256"].is_string()&&r["preview_sha256"]==row["preview_sha256"])){index.push(row);}
+        }
+        let d=app.db.lock().map_err(|_|store::Error("storage_unavailable"))?;
+        let jobs=store::jobs(&d)?.into_iter().map(|j|{
+            json!({"kind":"rendered","clip_id":j.id,"id":j.id,
+                "name":j.source_ref.rsplit(['\\','/']).next().unwrap_or("Rendered clip"),
+                "state":j.state,"caption_status":j.caption_status,"review":j.review,"revision":j.revision,
+                "preview_sha256":j.preview_sha256,"poster_available":false,
+                "preview_available":j.preview_sha256.is_some()&&matches!(j.state.as_str(),"READY_FOR_REVIEW"|"POSTED"|"BACKED_UP"),
+                "preview_only":true})
+        }).collect::<Vec<_>>();
+        Ok::<_,store::Error>(json!({"schema":"snapmatic-workspace-v1","index":index,"jobs":jobs,
+                                   "publishing_enabled":false,"cleanup_enabled":false,"draft_submit_enabled":false}))
+    }).await.unwrap_or(Err(store::Error("workspace_unavailable")));
+    match result{Ok(v)=>no_store(v),Err(e)=>safe_error(e)}
+}
+async fn nvenc_status(State(app):State<App>)->Response{
+    match tokio::task::spawn_blocking(move||crate::workspace_nvenc::status(&app)).await{
+        Ok(v)=>no_store(v),Err(_)=>safe_error(store::Error("preview_status_unavailable")),
+    }
+}
+async fn nvenc_start(State(app):State<App>,headers:axum::http::HeaderMap,Json(r):Json<crate::workspace_nvenc::Request>)->Response{
+    if headers.get(header::ORIGIN).and_then(|x|x.to_str().ok())!=Some("http://127.0.0.1:3847"){
+        return (StatusCode::FORBIDDEN,Json(json!({"reason":"local_origin_required"}))).into_response();
+    }
+    match tokio::task::spawn_blocking(move||crate::workspace_nvenc::dispatch(app,r)).await{
+        Ok(Ok(v))=>(StatusCode::ACCEPTED,Json(v)).into_response(),
+        Ok(Err(e))=>(StatusCode::CONFLICT,Json(json!({"reason":e.0}))).into_response(),
+        Err(_)=>safe_error(store::Error("preview_dispatch_unavailable")),
+    }
+}
+async fn nvenc_stream(State(app):State<App>,AxumPath(id):AxumPath<String>,request:Request)->Response{
+    let (path,lease)=match tokio::task::spawn_blocking(move||crate::workspace_nvenc::open(&app,&id)).await{
+        Ok(Ok(x))=>x,_=>return missing(),
+    };
+    let r=ServeFile::new(path).oneshot(request).await.unwrap_or_else(|never|match never{});
+    let (mut parts,body)=r.into_response().into_parts();
+    parts.headers.insert(header::CACHE_CONTROL,header::HeaderValue::from_static("no-store"));
+    parts.headers.insert(header::X_CONTENT_TYPE_OPTIONS,header::HeaderValue::from_static("nosniff"));
+    Response::from_parts(parts,Body::from_stream(body.into_data_stream().map(move|c|{let _=&lease;c})))
+}
+
+fn missing()->Response{(StatusCode::NOT_FOUND,Json(json!({"reason":"preview_unavailable"}))).into_response()}
+async fn staged_asset(app:App,id:String,request:Request,poster:bool)->Response{
+    let resolved=tokio::task::spawn_blocking(move||match media::open(&app,&id,poster){
+        Err(e) if matches!(e.0,"preview_unavailable"|"manifest_unavailable")=>{
+            if media::index(&app)?.iter().any(|r|r["clip_id"]==id){Err(e)}
+            else{match crate::workspace_phase4::open(&app,&id,poster){
+                Ok(x)=>Ok(x),Err(_)=>crate::workspace_source_download::open(&app,&id,poster).or_else(|_|crate::workspace_local_import::open(&app,&id,poster)).map_err(|_|store::Error("preview_unavailable"))
+            }}
+        }
+        result=>result,
+    })
+        .await.unwrap_or(Err(store::Error("preview_unavailable")));
+    let (path,lease)=match resolved{Ok(v)=>v,Err(e) if e.0=="preview_unavailable"=>return missing(),Err(e)=>return safe_error(e)};
+    let r=ServeFile::new(path).oneshot(request).await.unwrap_or_else(|never|match never{});
+    let (mut parts,body)=r.into_response().into_parts();
+    parts.headers.insert(header::CACHE_CONTROL,header::HeaderValue::from_static("no-store"));
+    parts.headers.insert(header::X_CONTENT_TYPE_OPTIONS,header::HeaderValue::from_static("nosniff"));
+    let owned=body.into_data_stream().map(move|chunk|{let _=&lease;chunk});
+    Response::from_parts(parts,Body::from_stream(owned))
+}
+async fn poster(State(app):State<App>,AxumPath(id):AxumPath<String>,r:Request)->Response {
+    if media::hex(&id){staged_asset(app,id,r,true).await}else{missing()}
+}
+fn one_range(raw:&str,n:usize)->Option<(usize,usize)>{
+    let i=raw.strip_prefix("bytes=")?;let (left,right)=i.split_once('-')?;
+    if n==0||i.contains(','){return None;}
+    if left.is_empty(){
+        let num=right.parse::<usize>().ok()?;
+        return (num>0).then_some((n.saturating_sub(num),n-1));
+    }
+    let start=left.parse::<usize>().ok()?;
+    let end=if right.is_empty(){n-1}else{right.parse::<usize>().ok()?.min(n-1)};
+    (start<n&&start<=end).then_some((start,end))
+}
+fn rendered_bytes(bytes:Vec<u8>,request:Request)->Response{
+    let len=bytes.len();let head=*request.method()==Method::HEAD;
+    let mut b=Response::builder().header(header::ACCEPT_RANGES,"bytes")
+        .header(header::CONTENT_TYPE,"video/mp4").header(header::CACHE_CONTROL,"no-store")
+        .header(header::X_CONTENT_TYPE_OPTIONS,"nosniff");
+    let body=if let Some(r)=request.headers().get(header::RANGE){
+        let Some((a,z))=r.to_str().ok().and_then(|r|one_range(r,len)) else {
+            return b.status(StatusCode::RANGE_NOT_SATISFIABLE).header(header::CONTENT_RANGE,format!("bytes */{len}"))
+                .header(header::CONTENT_LENGTH,0).body(Body::empty()).unwrap();
+        };
+        b=b.status(StatusCode::PARTIAL_CONTENT).header(header::CONTENT_RANGE,format!("bytes {a}-{z}/{len}"))
+            .header(header::CONTENT_LENGTH,z-a+1);
+        if head{Body::empty()}else{Body::from(Bytes::from(bytes).slice(a..=z))}
+    }else{
+        b=b.header(header::CONTENT_LENGTH,len);
+        if head{Body::empty()}else{Body::from(bytes)}
+    };
+    b.body(body).unwrap()
+}
+async fn clip_stream(State(app):State<App>,AxumPath(id):AxumPath<String>,r:Request)->Response {
+    if media::hex(&id){return staged_asset(app,id,r,false).await;}
+    if uuid::Uuid::parse_str(&id).ok().is_none_or(|v|v.to_string()!=id){return missing();}
+    let result=tokio::task::spawn_blocking(move||{
+        let d=app.db.lock().map_err(|_|store::Error("storage_unavailable"))?;
+        let j=store::job(&d,&id)?;
+        if !crate::controller_source::controller_current(&d,j.source_id,&j.source_binding){return Err(store::Error("source_unavailable"));}
+        store::preview(&d,&id)
+    }).await.unwrap_or(Err(store::Error("preview_unavailable")));
+    match result{Ok(bytes)=>rendered_bytes(bytes,r),Err(_)=>missing()}
+}

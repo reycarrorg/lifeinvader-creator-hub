@@ -1,4 +1,37 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+mod controller;
+mod controller_store;
+mod controller_ops;
+mod controller_worker;
+#[cfg(feature="snapmatic-hud")] mod workspace;
+#[cfg(feature="snapmatic-hud")] mod workspace_media;
+#[cfg(feature="snapmatic-hud")] mod workspace_events;
+#[cfg(feature="snapmatic-hud")] mod workspace_ledger;
+#[cfg(feature="snapmatic-hud")] mod workspace_drafts;
+#[cfg(feature="snapmatic-hud")] mod workspace_phase1;
+#[cfg(feature="snapmatic-hud")] mod workspace_platform_drafts;
+#[cfg(feature="snapmatic-hud")] mod workspace_nvenc;
+#[cfg(feature="snapmatic-hud")] mod workspace_phase4;
+#[cfg(feature="snapmatic-hud")] mod workspace_triage;
+#[cfg(feature="snapmatic-hud")] mod workspace_source_download;
+#[cfg(feature="snapmatic-hud")] mod workspace_sources_v2;
+#[cfg(feature="snapmatic-hud")] mod workspace_local_import;
+#[cfg(feature="snapmatic-hud")] mod workspace_tiktok_export;
+#[cfg(feature="snapmatic-hud")] mod controller_tiktok_inbox;
+#[cfg(windows)] mod controller_youtube;
+#[cfg(windows)] mod controller_instagram;
+mod controller_registry;
+mod controller_source;
+mod controller_proof;
+mod controller_receipt;
+mod controller_clip;
+mod controller_admission;
+mod controller_supervisor;
+mod controller_manual;
+mod controller_ui_lifetime;
+mod controller_candidate;
+#[cfg(windows)] mod controller_native_process;
+#[cfg(windows)] mod controller_native_launcher;
 
 use axum::{
     Json, Router,
@@ -40,6 +73,11 @@ struct App {
     media: PathBuf,
     log_dir: PathBuf,
     cache_scope: String,
+    controller_ui: Arc<controller_ui_lifetime::Lifetime>,
+    controller_catalog: Option<Arc<controller_source::Catalog>>,
+    controller_manual: Arc<dyn controller_manual::Manual>,
+    controller_ops: Arc<dyn controller_ops::StatusReader>,
+    controller_worker: Arc<dyn controller_worker::Reader>,
 }
 type ApiResult<T> = Result<T, (StatusCode, String)>;
 fn bad(e: impl std::fmt::Display) -> (StatusCode, String) {
@@ -482,6 +520,11 @@ async fn add_profile(
     Json(p): Json<ProfileInput>,
 ) -> ApiResult<impl IntoResponse> {
     let (url, tags) = validate_profile(&p)?;
+    #[cfg(feature="snapmatic-hud")]
+    if std::env::var_os("LIFEINVADER_DRIVE_INTAKE_ENABLED").as_deref()==Some(std::ffi::OsStr::new("1"))
+        &&p.role=="source"&&p.platform!="tiktok"{
+        return Err(bad("Snapmatic profile downloading supports TikTok sources only."));
+    }
     let mut db = app.db.lock().map_err(internal)?;
     if db
         .query_row("SELECT id FROM profiles WHERE url=?", [&url], |r| {
@@ -746,6 +789,18 @@ async fn metadata(
     }
     Ok(StatusCode::NO_CONTENT)
 }
+async fn owner_review_policy(request: axum::extract::Request,next:axum::middleware::Next)->axum::response::Response {
+    let target=request.uri().path();
+    let workspace_local=target=="/api/workspace/import-mp4"||target=="/api/workspace/publish"
+        ||target=="/api/workspace/triage"||target=="/api/controller/ui-lifetime"
+        ||(target.starts_with("/api/clips/")&&(target.ends_with("/draft")||target.ends_with("/platform-draft")));
+    if target.starts_with("/api/")&&((request.method()!=axum::http::Method::GET&&request.method()!=axum::http::Method::HEAD&&!workspace_local)
+        ||target.starts_with("/api/bridge/")||target.starts_with("/api/posting-handoff")
+        ||target.starts_with("/api/controller/youtube")||target.starts_with("/api/controller/instagram")||target.starts_with("/api/controller/tiktok")){
+        return (axum::http::StatusCode::FORBIDDEN,Json(serde_json::json!({"reason":"owner_review_local_only","publishing_enabled":false}))).into_response();
+    }
+    next.run(request).await
+}
 async fn local_only(
     request: axum::extract::Request,
     next: axum::middleware::Next,
@@ -853,8 +908,12 @@ async fn update(
     }
     Ok(StatusCode::NO_CONTENT)
 }
-async fn index() -> Html<&'static str> {
-    Html(include_str!("../web/index.html"))
+async fn index() -> Html<String> {
+    let source=include_str!("../web/index.html");
+    #[cfg(feature="snapmatic-hud")]
+    return Html(r#"<meta http-equiv="refresh" content="0;url=/workspace?view=studio"><a href="/workspace?view=studio">Open Snapmatic Studio</a>"#.to_owned());
+    #[cfg(not(feature="snapmatic-hud"))]
+    Html(source.replace(r#"<a href="/workspace">Film Roll</a>"#,""))
 }
 async fn css() -> impl IntoResponse {
     (
@@ -904,7 +963,7 @@ fn show_error(message: &str) {
         .encode_wide()
         .chain(Some(0))
         .collect();
-    let title: Vec<u16> = std::ffi::OsStr::new("Lifeinvader Hub")
+    let title: Vec<u16> = std::ffi::OsStr::new("Snapmatic")
         .encode_wide()
         .chain(Some(0))
         .collect();
@@ -914,7 +973,7 @@ fn show_error(message: &str) {
 }
 
 #[cfg(windows)]
-fn launch_window() -> Result<std::process::Child, Box<dyn std::error::Error>> {
+fn launch_window(port:u16, isolated_profile:Option<&Path>) -> Result<std::process::Child, Box<dyn std::error::Error>> {
     let candidates = ["ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA"];
     let edge = candidates
         .iter()
@@ -924,27 +983,53 @@ fn launch_window() -> Result<std::process::Child, Box<dyn std::error::Error>> {
         .ok_or(
             "Microsoft Edge is required to open the Lifeinvader window, but it was not found.",
         )?;
-    let profile = PathBuf::from(
-        std::env::var_os("LOCALAPPDATA").ok_or("Local app data folder was not found.")?,
-    )
-    .join("LifeinvaderHub/WindowProfile");
+    let profile = match isolated_profile {
+        Some(profile)=>profile.to_path_buf(),
+        None=>PathBuf::from(std::env::var_os("LOCALAPPDATA").ok_or("Local app data folder was not found.")?)
+            .join("LifeinvaderHub/WindowProfile"),
+    };
     Ok(std::process::Command::new(edge)
-        .arg("--app=http://127.0.0.1:3847/")
+        .arg(if cfg!(feature="snapmatic-hud"){format!("--app=http://127.0.0.1:{port}/workspace?view=studio")}else{format!("--app=http://127.0.0.1:{port}/")})
+        .arg("--new-window")
         .arg(format!("--user-data-dir={}", profile.display()))
         .args([
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-background-mode",
-            "--window-size=1200,850",
+            "--window-size=1440,900",
         ])
         .spawn()?)
+}
+
+#[cfg(all(windows,feature="snapmatic-hud"))]
+struct SnapmaticInstance(windows_sys::Win32::Foundation::HANDLE);
+#[cfg(all(windows,feature="snapmatic-hud"))]
+impl Drop for SnapmaticInstance{
+    fn drop(&mut self){ unsafe{windows_sys::Win32::Foundation::CloseHandle(self.0);}}
+}
+#[cfg(all(windows,feature="snapmatic-hud"))]
+impl SnapmaticInstance{
+    fn open(fixture:bool)->std::io::Result<Self>{
+        use windows_sys::Win32::Foundation::{GetLastError,ERROR_ALREADY_EXISTS};
+        #[link(name="kernel32")]
+        unsafe extern "system"{
+            fn CreateMutexW(attributes:*const std::ffi::c_void,owner:i32,name:*const u16)->windows_sys::Win32::Foundation::HANDLE;
+        }
+        let name=if fixture{r"Local\Snapmatic_OwnerReview_ReopenFixture_43855"}else{r"Local\Snapmatic_OwnerReview_Instance"};
+        let name=name.encode_utf16().chain(Some(0)).collect::<Vec<_>>();
+        let (raw,last)=unsafe{let raw=CreateMutexW(std::ptr::null(),0,name.as_ptr());(raw,GetLastError())};
+        if raw.is_null(){return Err(std::io::Error::from_raw_os_error(last as i32));}
+        let mutex=Self(raw);
+        if last==ERROR_ALREADY_EXISTS{return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists,"SNAPMATIC_INSTANCE_ALREADY_ACTIVE"));}
+        Ok(mutex)
+    }
 }
 
 #[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
         let message = format!(
-            "Could not start Lifeinvader Hub.\n\n{e}\n\nIf it is already open, close the other copy and try again."
+            "Could not start Snapmatic.\n\n{e}\n\nIf it is already open, close the other copy and try again."
         );
         eprintln!("{message}");
         #[cfg(windows)]
@@ -964,7 +1049,21 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             std::env::set_current_dir(parent)?;
         }
     }
-    let port = if server_only {
+    #[cfg(all(windows,feature="snapmatic-hud"))]
+    let reopen_fixture = !server_only && std::env::args().any(|a|a=="--snapmatic-reopen-fixture") &&
+        std::env::var_os("LIFEINVADER_DB").is_some_and(|p|{
+            let path=PathBuf::from(p);
+            path.is_absolute() && path.file_name().is_some_and(|n|n=="lifeinvader.sqlite3") &&
+                path.parent().and_then(Path::file_name).is_some_and(|n|n=="snapmatic-best-practice-reopen-fixture") &&
+                controller_native_launcher::clean_path(&path).is_ok()
+        }) && std::env::var_os("LIFEINVADER_YOUTUBE_DUE_GUARDIAN").is_none() &&
+        std::env::var_os("LIFEINVADER_PHASE4_SCOPE").is_none() && std::env::var_os("LIFEINVADER_PHASE4_ADMISSION_SHA256").is_none();
+    #[cfg(not(all(windows,feature="snapmatic-hud")))]
+    let reopen_fixture=false;
+    if std::env::args().any(|a|a=="--snapmatic-reopen-fixture")&&!reopen_fixture{
+        return Err("REOPEN_FIXTURE_SCOPE_INVALID".into());
+    }
+    let port = if reopen_fixture {43855} else if server_only {
         std::env::var("LIFEINVADER_PORT")
             .ok()
             .and_then(|p| p.parse::<u16>().ok())
@@ -972,11 +1071,33 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         3847
     };
+    // This OS session guard precedes all local database and external provider activity.
+    #[cfg(all(windows,feature="snapmatic-hud"))]
+    let _desktop_instance=if !server_only{Some(SnapmaticInstance::open(reopen_fixture)?)}else{None};
     // Claim the local port before opening or migrating the database.
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
-    let db_path = PathBuf::from(
-        std::env::var("LIFEINVADER_DB").unwrap_or_else(|_| "data/lifeinvader.sqlite3".into()),
-    );
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await
+        .map_err(|e|std::io::Error::new(e.kind(),format!("BIND_FAILED 127.0.0.1:{port}: {e}")))?;
+    eprintln!("BIND_OK 127.0.0.1:{port}");
+    let args = std::env::args().collect::<Vec<_>>();
+    let isolated_review = args.iter().any(|s|s=="--isolated-review-plan" || s=="--isolated-review-sha256");
+    let configured_db = std::env::var_os("LIFEINVADER_DB");
+    if isolated_review && configured_db.is_none() {
+        return Err("Isolated review requires an explicit seeded LIFEINVADER_DB filesystem path.".into());
+    }
+    let configured_db = PathBuf::from(configured_db.unwrap_or_else(|| "data/lifeinvader.sqlite3".into()));
+    if isolated_review && !configured_db.is_absolute() {
+        return Err("Isolated review database path must be absolute.".into());
+    }
+    #[cfg(windows)]
+    if isolated_review && !matches!(
+        configured_db.components().next(), Some(std::path::Component::Prefix(p)) if matches!(p.kind(),std::path::Prefix::Disk(_))
+    ){
+        return Err("Isolated review requires a plain drive-qualified SQLite file path (not URI or device prefix).".into());
+    }
+    let db_path = std::path::absolute(configured_db)?;
+    if isolated_review && !std::fs::symlink_metadata(&db_path).is_ok_and(|m|m.is_file()){
+        return Err("Isolated review seeded database is missing or not a regular file.".into());
+    }
     let media =
         PathBuf::from(std::env::var("LIFEINVADER_MEDIA").unwrap_or_else(|_| "media".into()));
     if let Some(p) = db_path.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -992,8 +1113,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."))
         .join("sync-logs");
-    let db = Connection::open(&db_path)?;
+    let controller_catalog = controller_source::provision_catalog(&args).map_err(std::io::Error::other)?;
+    let controller_manual = controller_manual::provision(&args, &db_path, &media).map_err(|e|std::io::Error::other(e.0))?;
+    let mut db = Connection::open(&db_path)?;
+    db.busy_timeout(std::time::Duration::from_millis(2500))?;
     init(&db)?;
+    controller_store::init(&db).map_err(|e|std::io::Error::other(e.0))?;
+    controller_store::recover(&mut db, chrono::Utc::now().timestamp()).map_err(|e|std::io::Error::other(e.0))?;
     let cache_scope = {
         use std::hash::{Hash, Hasher};
         let mut hash = std::collections::hash_map::DefaultHasher::new();
@@ -1008,15 +1134,72 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         media: media.clone(),
         log_dir,
         cache_scope,
+        controller_ui: Arc::new(controller_ui_lifetime::Lifetime::new(
+            controller_manual.configured() || (!server_only && std::env::var_os("LIFEINVADER_INTEGRATION_REVIEW").is_some()))),
+        controller_catalog,
+        controller_manual,
+        controller_ops: Arc::new(controller_ops::Unavailable),
+        controller_worker: Arc::new(controller_worker::Unavailable),
     };
     #[cfg(target_os = "macos")]
     let _cache_worker = tokio::spawn(thumbnail_cache::worker(app.clone()));
-    let scheduler = tokio::spawn(scheduler::worker(app.clone()));
-    let auto_scheduler = tokio::spawn(auto_queue::worker(app.clone()));
+    // Review validation must never wake the original source-sync or auto-queue schedules.
+    let drive_intake = {
+        let db = app.db.lock().map_err(|_| std::io::Error::other("source settings unavailable"))?;
+        source::config(&db)?.root.eq_ignore_ascii_case(source::DRIVE_SOURCE_ROOT)
+    };
+    let review_only = true; // Owner-review builds never start background posting or sync.
+    #[cfg(all(windows,feature="snapmatic-hud"))]
+    let triage_fixture=server_only&&port==43850&&review_only&&args.iter().any(|a|a=="--snapmatic-triage-fixture")&&workspace_triage::fixture_enabled(&app);
+    let scheduler = (!review_only).then(|| tokio::spawn(scheduler::worker(app.clone())));
+    let auto_scheduler = (!review_only).then(|| tokio::spawn(auto_queue::worker(app.clone())));
+    #[cfg(all(windows,feature="snapmatic-hud"))]
+    let phase4_fixture=server_only&&args.iter().any(|s|s=="--phase4-fixture")&&workspace_phase4::fixture_enabled(&app);
+    #[cfg(all(windows,feature="snapmatic-hud"))]
+    let phase4_watcher=if phase4_fixture||(!server_only&&drive_intake&&app.controller_ui.enabled()){
+        workspace_phase4::start(&app)
+    }else{None};
     #[cfg(windows)]
     let sync_db = app.db.clone();
-    let router = Router::new()
-        .route("/", get(index))
+    #[cfg(windows)]
+    let ui_lifetime=app.controller_ui.clone();
+    #[cfg(windows)]
+    let manual_shutdown=app.controller_manual.clone();
+    #[cfg(all(windows,feature="snapmatic-hud"))]
+    let mut import_inbox=if review_only{workspace_local_import::supervised_inbox(app.clone(),port,server_only)}else{None};
+    #[cfg(all(windows,feature="snapmatic-hud"))]
+    let inbox_fixture=server_only&&port==43858&&import_inbox.is_some()&&args.iter().any(|a|a=="--snapmatic-inbox-fixture");
+    let router = Router::new().merge(controller::routes());
+    #[cfg(feature="snapmatic-hud")]
+    let router = router.merge(workspace::routes(app.clone()));
+    #[cfg(all(windows,feature="snapmatic-hud"))]
+    let reopen_profile=if !server_only && review_only && (drive_intake || reopen_fixture) && !isolated_review
+        && std::env::var_os("LIFEINVADER_SNAPMATIC_REOPEN").as_deref()==Some(std::ffi::OsStr::new("1")) {
+        let profile_name=if reopen_fixture{"desktop-window-snapmatic-current".into()}else{
+            let raw=std::env::var("LIFEINVADER_SNAPMATIC_DESKTOP_PROFILE").map_err(|_|"Snapmatic desktop profile is not pinned")?;
+            if raw.strip_prefix("desktop-window-").and_then(|id|uuid::Uuid::parse_str(id).ok().filter(|value|value.to_string()==id)).is_none(){
+                return Err("SNAPMATIC_DESKTOP_PROFILE_INVALID".into());
+            }
+            raw
+        };
+        let folder=db_path.parent().ok_or("No Snapmatic database parent")?.join(profile_name);
+        if !reopen_fixture && !folder.is_dir(){return Err("SNAPMATIC_DESKTOP_PROFILE_MISSING".into());}
+        if folder.try_exists()? { controller_native_launcher::clean_path(&folder).map_err(|e|std::io::Error::other(e.0))?; }
+        else { std::fs::create_dir(&folder)?; }
+        Some(folder)
+    }else{None};
+    #[cfg(all(windows,feature="snapmatic-hud"))]
+    let router={
+        let owned=reopen_profile.is_some();
+        router.route("/api/workspace/desktop-identity",get(move||async move{
+            if !owned{return axum::http::StatusCode::NOT_FOUND.into_response();}
+            ([(axum::http::header::CACHE_CONTROL,"no-store")],Json(serde_json::json!({
+               "schema":"snapmatic-desktop-owner-v1","pid":std::process::id(),
+               "workspace":if reopen_fixture{"reopen-fixture-only"}else{"drive-review-only"},"publishing_enabled":false
+            }))).into_response()
+        }))
+    };
+    let router = router.route("/", get(index))
         .route("/style.css", get(css))
         .route("/app.js", get(js))
         .route("/previews.js", get(previews_js))
@@ -1135,17 +1318,50 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .nest_service("/media", ServeDir::new(media))
         .layer(DefaultBodyLimit::max(255 * 1024 * 1024))
         .layer(axum::middleware::from_fn(local_only))
+        .layer(axum::middleware::from_fn(owner_review_policy))
         .with_state(app);
-    println!("Lifeinvader Hub: http://127.0.0.1:{port}");
+    println!("Snapmatic: http://127.0.0.1:{port}");
     #[cfg(windows)]
     if !server_only {
-        let mut window = launch_window()?;
+        let isolated_ui=ui_lifetime.enabled();
+        #[cfg(feature="snapmatic-hud")]
+        let candidate=reopen_profile;
+        #[cfg(not(feature="snapmatic-hud"))]
+        let candidate:Option<PathBuf>=None;
+        let profile=if candidate.is_some(){candidate}else if isolated_ui {
+            let profile=db_path.parent().ok_or("No isolated database parent")?.join(format!("desktop-window-{}",uuid::Uuid::new_v4()));
+            std::fs::create_dir(&profile)?;
+            Some(profile)
+        }else{None};
+        let mut window = launch_window(port,profile.as_deref())
+            .map_err(|e|std::io::Error::other(format!("UI_BOOTSTRAP_START_FAILED: {e}")))?;
+        eprintln!("UI_BOOTSTRAP_STARTED pid={}",window.id());
+        let _youtube_guardian=(false && isolated_ui && drive_intake
+            && std::env::var("LIFEINVADER_YOUTUBE_DUE_GUARDIAN").ok().as_deref()==Some("1"))
+            .then(|| tokio::spawn(controller::youtube_guardian()));
         let db = sync_db;
+        let (lifetime_tx,lifetime_rx)=tokio::sync::oneshot::channel();
         axum::serve(listener, router)
             .with_graceful_shutdown(async move {
-                let _ = tokio::task::spawn_blocking(move || window.wait()).await;
-                scheduler.abort();
-                auto_scheduler.abort();
+                let close_reason=if isolated_ui {
+                    let reason=controller_ui_lifetime::wait(&ui_lifetime,Some(window)).await;
+                    let _=tokio::task::spawn_blocking(move||manual_shutdown.shutdown()).await;
+                    Some(reason)
+                }else{
+                    match tokio::task::spawn_blocking(move || window.wait()).await {
+                        Ok(Ok(status))=>eprintln!("UI_BOOTSTRAP_EXIT code={:?}",status.code()),
+                        Ok(Err(error))=>eprintln!("UI_BOOTSTRAP_WAIT_ERROR: {error}"),
+                        Err(error)=>eprintln!("UI_BOOTSTRAP_JOIN_ERROR: {error}"),
+                    }
+                    None
+                };
+                #[cfg(all(windows,feature="snapmatic-hud"))]
+                if let Some(w)=import_inbox.take(){w.abort();}
+                #[cfg(feature="snapmatic-hud")]
+                if let Some(w)=phase4_watcher{let _=tokio::task::spawn_blocking(move||w.stop()).await;}
+                let _=lifetime_tx.send(close_reason);
+                if let Some(worker) = scheduler { worker.abort(); }
+                if let Some(worker) = auto_scheduler { worker.abort(); }
                 if let Ok(db)=db.lock(){let _=db.execute("UPDATE source_queue SET state='interrupted',message='App closed before queued sync started' WHERE state IN ('pending','starting')",[]);let _=db.execute("UPDATE source_date_audits SET cancel_requested=1 WHERE state='running'",[]);}
                 // Keep the service and the archive lock alive until an active download exits.
                 loop {
@@ -1154,14 +1370,44 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 }
             })
-            .await?;
+            .await.map_err(|e|std::io::Error::other(format!("SERVE_FAILED: {e}")))?;
+        if let Ok(Some(reason))=lifetime_rx.await {
+            if reason!="UI_CLOSE_REQUESTED" {return Err(std::io::Error::other(reason).into());}
+        }
         return Ok(());
     }
     #[cfg(not(windows))]
     let _ = server_only;
-    axum::serve(listener, router).await?;
-    scheduler.abort();
-    auto_scheduler.abort();
+    #[cfg(all(windows,feature="snapmatic-hud"))]
+    if phase4_fixture{
+        let run=async move{axum::serve(listener,router).await};
+        let secs=if std::env::var_os("LIFEINVADER_PHASE4_ADMISSION_SHA256").is_some(){
+            std::env::var("LIFEINVADER_PHASE4_FIXTURE_LIFETIME_SECS").ok()
+                .and_then(|s|s.parse::<u64>().ok()).filter(|s|(15..=250).contains(s)).unwrap_or(250)
+        }else{115};
+        let result=tokio::time::timeout(std::time::Duration::from_secs(secs),run).await;
+        if let Some(w)=phase4_watcher{let _=tokio::task::spawn_blocking(move||w.stop()).await;}
+        if let Ok(Err(e))=result{return Err(std::io::Error::other(format!("PHASE4_FIXTURE_SERVE_FAILED: {e}")).into());}
+        return Ok(());
+    }
+    #[cfg(all(windows,feature="snapmatic-hud"))]
+    if inbox_fixture {
+        let until=std::time::Duration::from_secs(35);
+        let result=tokio::time::timeout(until,axum::serve(listener,router)).await;
+        if let Some(w)=import_inbox.take(){w.abort();}
+        if let Ok(Err(e))=result{return Err(std::io::Error::other(format!("INBOX_FIXTURE_SERVE_FAILED: {e}")).into());}
+        return Ok(());
+    }
+    #[cfg(all(windows,feature="snapmatic-hud"))]
+    if triage_fixture {
+        if let Ok(Err(e))=tokio::time::timeout(std::time::Duration::from_secs(35),axum::serve(listener,router)).await {
+            return Err(std::io::Error::other(format!("TRIAGE_FIXTURE_SERVE_FAILED: {e}")).into());
+        }
+        return Ok(());
+    }
+    axum::serve(listener, router).await.map_err(|e|std::io::Error::other(format!("SERVE_FAILED: {e}")))?;
+    if let Some(worker) = scheduler { worker.abort(); }
+    if let Some(worker) = auto_scheduler { worker.abort(); }
     Ok(())
 }
 

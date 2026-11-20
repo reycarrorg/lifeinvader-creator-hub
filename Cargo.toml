@@ -3,6 +3,9 @@ name = "lifeinvader_hub"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+snapmatic-hud = ["dep:futures-util"]
+
 [dependencies]
 axum = { version = "0.8", features = ["multipart"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -17,5 +20,10 @@ uuid = { version = "1", features = ["v4"] }
 
 csv = "1.4"
 
+sha2 = "=0.10.9"
+futures-util = { version = "=0.3.34", optional = true, default-features = false, features = ["std"] }
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Networking_WinHttp", "Win32_Security_Credentials", "Win32_System_Threading"] }

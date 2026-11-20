@@ -13,6 +13,12 @@ pub async fn render(State(app):State<App>,mut form:Multipart)->ApiResult<Json<se
  let input=input.ok_or_else(||bad("Missing editor options."))?;
  if !["source","destination"].contains(&input.role.as_str()) || !["original","9:16","1:1","16:9"].contains(&input.crop.as_str()) || !input.start.is_finite() || input.start<0.0 || input.start>604800.0 || input.end.is_some_and(|end|!end.is_finite()||end<=input.start||end>604800.0) { return Err(bad("Check the crop and trim values.")); }
  if overlay.len()>5*1024*1024 || (!overlay.is_empty() && !overlay.starts_with(b"\x89PNG\r\n\x1a\n") && !overlay.starts_with(b"\xff\xd8\xff")) { return Err(bad("Overlay must be a PNG or JPEG under 5 MB.")); }
+ {
+  let db=app.db.lock().map_err(internal)?;
+  if source::drive_profile(&db,input.profile_id,&input.role) || source::authorized_review_profile(&db,input.profile_id,&input.role) {
+   return Err(bad("This source is read-only. Use Make a clip with an independently reviewed cut."));
+  }
+ }
  let original=source::resolve_file(&app,input.profile_id,&input.path,&input.role)?;
  if original.components().any(|c|c.as_os_str()==".lifeinvader-edits") {return Err(bad("Open the original media to make another edit."));}
  let ext=original.extension().and_then(|s|s.to_str()).unwrap_or("").to_lowercase();let video=["mp4","webm","mov","mkv"].contains(&ext.as_str());

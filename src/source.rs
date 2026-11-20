@@ -366,6 +366,9 @@ pub(crate) fn checked_root(c: &SourceConfig) -> ApiResult<PathBuf> {
     checked_root_path(&c.root)
 }
 fn checked_root_path(configured: &str) -> ApiResult<PathBuf> {
+    if configured.eq_ignore_ascii_case(DRIVE_SOURCE_ROOT) {
+        return Err(bad("Local Media is mounted through read-only intake."));
+    }
     let root = PathBuf::from(configured);
     if !root.is_absolute() || !root.is_dir() {
         return Err(bad(
@@ -691,12 +694,154 @@ pub async fn profile_overview(
 ) -> ApiResult<Json<serde_json::Value>> {
     bounded_overview(app, id, "destination", true).await
 }
+
+pub(crate) const DRIVE_SOURCE_URL: &str = "lifeinvader-local://everything-clips";
+pub(crate) const DRIVE_SOURCE_ROOT: &str = r"Z:\SnapmaticReview\Local Media";
+
+pub(crate) fn drive_profile(db: &Connection, id: i64, role: &str) -> bool {
+    role == "source" && db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1 AND role='source' AND archived=0 AND platform='local' AND url=?2)",
+        params![id, DRIVE_SOURCE_URL], |r| r.get(0),
+    ).unwrap_or(false)
+}
+
+fn drive_safe_metadata(path: &Path) -> Option<fs::Metadata> {
+    let m = fs::symlink_metadata(path).ok()?;
+    if m.file_type().is_symlink() { return None; }
+    #[cfg(windows)] {
+        use std::os::windows::fs::MetadataExt;
+        if m.file_attributes() & 0x400 != 0 { return None; }
+    }
+    Some(m)
+}
+
+fn drive_root(configured: &str) -> Option<PathBuf> {
+    if configured != DRIVE_SOURCE_ROOT || std::env::var_os("LIFEINVADER_DRIVE_INTAKE_ENABLED").as_deref() != Some(std::ffi::OsStr::new("1")) { return None; }
+    let p = Path::new(configured);
+    for a in p.ancestors() { if !drive_safe_metadata(a)?.is_dir() { return None; } }
+    p.canonicalize().ok()
+}
+
+fn drive_allowed_component(v: &std::ffi::OsStr) -> bool {
+    let Some(v) = v.to_str() else { return false };
+    if v.starts_with('.') || v.ends_with(['.', ' ']) || v.contains(':') { return false; }
+    !matches!(v.to_ascii_lowercase().as_str(), "posted clips backup" | "ready to delete" |
+        "ready to post" | "review tests - not for posting" | "reference material" |
+        "staging" | "output" | "outputs" | "cache" | "app staging" | "app output" |
+        "lifeinvader" | "controller" | "worker")
+}
+
+fn drive_kind(p: &Path) -> Option<&'static str> {
+    match p.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "mp4" | "webm" | "mov" | "mkv" => Some("video"),
+        "jpg" | "jpeg" | "png" | "webp" | "gif" | "avif" => Some("image"),
+        _ => None,
+    }
+}
+
+fn drive_target(root: &Path, reference: &str) -> Option<PathBuf> {
+    let mut p = root.to_path_buf();
+    let rel = Path::new(reference);
+    if reference.is_empty() || reference.contains([':', '\0']) || rel.is_absolute() { return None; }
+    // This input is the exact trusted SQLite path, not a client URL path.
+    for part in reference.split(['/', '\\']) {
+        if part.is_empty() || !drive_allowed_component(std::ffi::OsStr::new(part)) { return None; }
+        p.push(part);
+        drive_safe_metadata(&p)?;
+    }
+    let canonical = p.canonicalize().ok()?;
+    (canonical == p && canonical.starts_with(root) && canonical.is_file() && drive_kind(&canonical).is_some()).then_some(canonical)
+}
+
+#[derive(serde::Serialize,Default)]
+struct IndexedReview { pending_review:u64, duplicate_hold:u64, test_hold:u64 }
+fn drive_review_index(db:&Connection,id:i64)->ApiResult<(IndexedReview,Vec<(String,u64,u64,String)>)>{
+    let mut review=IndexedReview::default();
+    let mut counts=db.prepare("SELECT state,count(*) FROM ops_source_review_index WHERE source_id=? GROUP BY state").map_err(internal)?;
+    let mut rows=counts.query([id]).map_err(internal)?;
+    while let Some(row)=rows.next().map_err(internal)?{
+        let count=u64::try_from(row.get::<_,i64>(1).map_err(internal)?).map_err(|_|bad("Invalid review index count."))?;
+        match row.get::<_,String>(0).map_err(internal)?.as_str(){
+            "pending_review"=>review.pending_review=count,"duplicate_hold"=>review.duplicate_hold=count,
+            "test_hold"=>review.test_hold=count,_=>return Err(bad("Unknown review index state.")),
+        }
+    }
+    let mut stmt=db.prepare("SELECT path,size,modified_ns,state FROM ops_source_review_index WHERE source_id=? AND state='pending_review' ORDER BY modified_ns DESC,path LIMIT 500").map_err(internal)?;
+    let rows=stmt.query_map([id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,i64>(2)?,r.get::<_,String>(3)?))).map_err(internal)?
+        .collect::<rusqlite::Result<Vec<_>>>().map_err(internal)?
+        .into_iter().map(|(path,size,ns,state)|Ok((path,
+            u64::try_from(size).map_err(|_|bad("Invalid indexed media size."))?,
+            u64::try_from(ns).map_err(|_|bad("Invalid indexed media timestamp."))?,state)))
+        .collect::<ApiResult<Vec<_>>>()?;
+    Ok((review,rows))
+}
+pub(crate) fn indexed_drive_path(db:&Connection,source_id:i64,relative:&str,size:i64,ns:i64)->Option<PathBuf>{
+    if !drive_profile(db,source_id,"source"){return None;}
+    let r=config(db).ok()?;
+    let root=drive_root(&r.root)?;
+    drive_indexed_media(&root,relative.to_owned(),u64::try_from(size).ok()?,u64::try_from(ns).ok()?)?;
+    drive_target(&root,relative)
+}
+fn drive_indexed_media(root:&Path,path:String,size:u64,modified_ns:u64)->Option<SourceFile>{
+    let target=drive_target(root,&path)?;
+    let m=drive_safe_metadata(&target)?;
+    let modified=m.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+    if m.len()!=size || modified.as_nanos()!=u128::from(modified_ns){return None;}
+    let name=target.file_name()?.to_str()?.to_owned();
+    let kind=drive_kind(&target)?;
+    Some(SourceFile{
+        path,name,kind:kind.into(),size,modified:modified.as_secs(),
+        created:None,posted_date_kind:None,posted_date:None,post_id:None,title:None,
+        description:None,original_url:None,original_account:None,original_channel_url:None,
+        original_platform:None,duration_seconds:None,asset_id:None,downloaded_at:None,is_new:false,
+    })
+}
+
+pub(crate) fn authorized_review_profile(db:&Connection,id:i64,role:&str)->bool {
+    role=="source" && db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1 AND role='source' AND archived=0 AND platform='local' AND url=?2)",
+        params![id,crate::controller_source::LOCAL_AUTHORIZED_URL],|r|r.get(0)).unwrap_or(false)
+}
+fn authorized_review_reference(app:&App,db:&Connection,id:i64)->Option<String>{
+    let j=crate::controller_store::job(db,app.controller_manual.reviewed_job_id()?).ok()?;
+    (j.source_id==id).then_some(j.source_ref)
+}
+fn authorized_review_overview(app:&App,id:i64,reference:Option<String>)->ApiResult<Json<serde_json::Value>>{
+    let file=reference.and_then(|path|{
+        let p=crate::controller_source::controller_file(app,id,&path).ok()?;
+        let m=fs::metadata(&p).ok()?;
+        Some(serde_json::json!({"path":path,"name":p.file_name()?.to_str()?,"kind":"video","size":m.len(),
+            "modified":m.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_secs()}))
+    });
+    Ok(Json(serde_json::json!({"configured":file.is_some(),"files":file.into_iter().collect::<Vec<_>>(),
+        "url":crate::controller_source::LOCAL_AUTHORIZED_URL,"platform":"local","read_only":true})))
+}
 fn overview_for(app: App, id: i64, role: &str) -> ApiResult<Json<serde_json::Value>> {
     let db = app.db.lock().map_err(internal)?;
-    let (platform, url, folder) = account_profile(&db, id, role)?;
     let cfg = config(&db).map_err(internal)?;
+    if authorized_review_profile(&db,id,role) {
+        let reference=authorized_review_reference(&app,&db,id);
+        drop(db);
+        return authorized_review_overview(&app,id,reference);
+    }
+    if drive_profile(&db, id, role) {
+        let (review_index,rows)=drive_review_index(&db,id)?;
+        drop(db);
+        let root = drive_root(&cfg.root);
+        let files = match &root {
+            Some(root)=>rows.into_iter().filter_map(|(p,size,ns,_)|drive_indexed_media(root,p,size,ns)).collect::<Vec<_>>(),
+            None=>Vec::new(),
+        };
+        return Ok(Json(serde_json::json!({"configured":root.is_some(),"root":cfg.root,
+            "folder":"Local Media","files":files,"review_index":review_index,"platform":"local","url":DRIVE_SOURCE_URL,"read_only":true})));
+    }
+    let (platform, url, folder) = account_profile(&db, id, role)?;
     let last = last_run(&db, id, &app.log_dir).map_err(internal)?;
     drop(db);
+    if cfg.root == DRIVE_SOURCE_ROOT {
+        return Ok(Json(serde_json::json!({"configured":false,"root":cfg.root,"folder":folder,
+            "files":[],"last_run":last,"platform":platform,"url":url,"photos_supported":false})));
+    }
     let root = match checked_root(&cfg) {
         Ok(r) => r,
         Err(_) => {
@@ -798,8 +943,29 @@ async fn file_for(
 pub(crate) fn resolve_file(app: &App, id: i64, path: &str, role: &str) -> ApiResult<PathBuf> {
     let (folder, configured_root) = {
         let db = app.db.lock().map_err(internal)?;
+        let configured = setting(&db, "source_root").map_err(internal)?.unwrap_or_default();
+        if authorized_review_profile(&db,id,role) {
+            let reference=authorized_review_reference(app,&db,id);
+            drop(db);
+            if reference.as_deref()!=Some(path) {return Err((StatusCode::NOT_FOUND,"Reviewed original is unavailable.".into()));}
+            return crate::controller_source::controller_file(app,id,path)
+                .map_err(|_|(StatusCode::NOT_FOUND,"Reviewed original is unavailable.".into()));
+        }
+        if drive_profile(&db, id, role) {
+            let row=db.query_row("SELECT path,size,modified_ns FROM ops_source_review_index WHERE source_id=? AND path=? AND state='pending_review'",
+                params![id,path],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,i64>(2)?))).optional().map_err(internal)?;
+            return row.and_then(|(p,size,ns)|{
+                if p!=path{return None;}
+                let root=drive_root(&configured)?;
+                drive_indexed_media(&root,p,u64::try_from(size).ok()?,u64::try_from(ns).ok()?)?;
+                drive_target(&root,path)
+            }).ok_or((StatusCode::NOT_FOUND, "Indexed Drive source is unavailable or on hold.".into()));
+        }
         let (_, _, folder) = account_profile(&db, id, role)?;
-        (folder, setting(&db, "source_root").map_err(internal)?.unwrap_or_default())
+        if configured == DRIVE_SOURCE_ROOT {
+            return Err((StatusCode::NOT_FOUND, "Legacy source is inactive for Drive intake.".into()));
+        }
+        (folder, configured)
     };
     let root = checked_root_path(&configured_root)?;
     let relative = Path::new(path);

@@ -19,3 +19,13 @@
 *.webm
 .env
 .env.*
+
+/bridge-test-data/
+/controller-test-data/
+/staging/
+/stock-tiktok-proof-v1/
+*.pdb
+*.whl
+*.pem
+*.key
+*.bundle
