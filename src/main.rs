@@ -54,6 +54,7 @@ type Db = Arc<Mutex<Connection>>;
 #[derive(Clone)]
 struct App {
     controller_ui: Arc<controller_ui_lifetime::Lifetime>,
+    controller_catalog: Option<Arc<controller_source::Catalog>>,
     controller_manual: Arc<dyn controller_manual::Manual>,
     controller_ops: Arc<dyn controller_ops::StatusReader>,
     controller_worker: Arc<dyn controller_worker::Reader>,
@@ -1012,6 +1013,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut media =
         PathBuf::from(std::env::var("LIFEINVADER_MEDIA").unwrap_or_else(|_| "media".into()));
     if let Some(root)=&package_root {db_path=root.join("controller.sqlite");media=root.join("media");}
+    let controller_catalog=controller_source::provision_catalog(&std::env::args().collect::<Vec<_>>()).map_err(std::io::Error::other)?;
     let controller_manual=controller_manual::provision(&std::env::args().collect::<Vec<_>>(),&db_path,&media).map_err(|e|std::io::Error::other(e.0))?;
     let headless_review=controller_headless::enabled(&std::env::args().collect::<Vec<_>>(),controller_manual.configured()).map_err(std::io::Error::other)? || package_review;
     if let Some(p) = db_path.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -1043,6 +1045,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     db.execute("UPDATE source_queue SET state='interrupted',message='App closed before queued sync finished' WHERE state IN ('pending','starting','running')",[])?;
     let app = App {
         controller_ui: Arc::new(controller_ui_lifetime::Lifetime::new(controller_manual.configured() || package_review)),
+        controller_catalog,
         controller_manual,
         controller_ops: Arc::new(controller_ops::Unavailable),
         controller_worker: Arc::new(controller_worker::Unavailable),

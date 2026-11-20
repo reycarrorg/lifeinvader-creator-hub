@@ -1888,7 +1888,7 @@ mod thumbnail_integration_tests {
         db.execute("INSERT INTO profiles(id,name,platform,url,role,tags) VALUES(2,'dest','tiktok','https://www.tiktok.com/@dest','destination','[]')", []).unwrap();
         let app = crate::App {
             controller_ui: std::sync::Arc::new(crate::controller_ui_lifetime::Lifetime::new(false)),
-                controller_manual: std::sync::Arc::new(crate::controller_manual::Unavailable),
+                controller_catalog:None,controller_manual: std::sync::Arc::new(crate::controller_manual::Unavailable),
                 controller_ops: std::sync::Arc::new(crate::controller_ops::Unavailable),
                 controller_worker: std::sync::Arc::new(crate::controller_worker::Unavailable),
                 db: Arc::new(Mutex::new(db)),
@@ -2018,7 +2018,7 @@ mod thumbnail_integration_tests {
             db.execute("INSERT INTO profiles(id,name,platform,url,role,tags) VALUES(1,'solo','other',?,'source','[]')",[crate::solo::SOLO_URL]).unwrap();
             let app = App {
                 controller_ui: std::sync::Arc::new(crate::controller_ui_lifetime::Lifetime::new(false)),
-                controller_manual: std::sync::Arc::new(crate::controller_manual::Unavailable),
+                controller_catalog:None,controller_manual: std::sync::Arc::new(crate::controller_manual::Unavailable),
                 controller_ops: std::sync::Arc::new(crate::controller_ops::Unavailable),
                 controller_worker: std::sync::Arc::new(crate::controller_worker::Unavailable),
                 db: Arc::new(Mutex::new(db)),

@@ -5,6 +5,57 @@ use rusqlite::{Connection,OptionalExtension};
 use serde::{Deserialize,Serialize};
 use std::path::{Path as FsPath,PathBuf};
 const MAX_REQUEST:usize=16*1024;
+#[derive(Clone,Deserialize,Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AuthorizedSource {
+    source_id:String,revision:String,topic:String,origin:String,source_sha256:String,
+    rights_basis:String,authorization_ref:String,
+}
+#[derive(Deserialize)] #[serde(deny_unknown_fields)]
+pub(crate) struct Catalog {schema:String,sources:Vec<AuthorizedSource>}
+impl Catalog {
+    pub(crate) fn parse(raw:&[u8],pin:&str)->Result<Self,&'static str>{
+        use sha2::{Digest,Sha256};
+        if raw.len()>1048576 || pin.len()!=64 || format!("{:x}",Sha256::digest(raw))!=pin{return Err("catalog_pin_mismatch")}
+        let c:Self=serde_json::from_slice(raw).map_err(|_|"catalog_schema")?;
+        if c.schema!="authorized-source-catalog-v1" || c.sources.len()>1000{return Err("catalog_schema")}
+        let mut seen=std::collections::BTreeSet::new();
+        for s in &c.sources {
+            if [&s.source_id,&s.revision,&s.topic,&s.origin,&s.source_sha256,&s.rights_basis,&s.authorization_ref].iter().any(|v|v.is_empty()||v.len()>512||v.chars().any(|c|c<' '))
+                || !matches!(s.origin.as_str(),"local-owned"|"authorized-export")
+                || !matches!(s.rights_basis.as_str(),"owned"|"licensed"|"permission")
+                || crate::controller_proof::Hash256::parse(&s.source_sha256).is_none()
+                || !seen.insert(s.source_id.clone()) {return Err("catalog_authorization")}
+        }
+        Ok(c)
+    }
+    fn permits(&self,a:&Admission,path:&FsPath)->bool{
+        use sha2::{Digest,Sha256};use std::io::Read;
+        let Some(s)=self.sources.iter().find(|s|s.topic=="gta6"&&s.source_id==a.id.to_string()&&s.revision==controller_binding(a)) else{return false};
+        let Ok(mut file)=std::fs::File::open(path) else{return false};
+        let mut hash=Sha256::new();let mut buf=[0u8;65536];
+        loop {match file.read(&mut buf){Ok(0)=>break,Ok(n)=>hash.update(&buf[..n]),Err(_)=>return false}}
+        format!("{:x}",hash.finalize())==s.source_sha256
+    }
+    pub(crate) fn available(&self,db:&Connection)->Vec<AuthorizedSource>{
+        self.sources.iter().filter(|s|s.topic=="gta6"&&s.source_id.parse::<i64>().ok().and_then(|id|current(db,id)).is_some_and(|a|controller_binding(&a)==s.revision)).cloned().collect()
+    }
+}
+pub(crate) fn provision_catalog(args:&[String])->Result<Option<std::sync::Arc<Catalog>>,&'static str>{
+    let paths:Vec<_>=args.windows(2).filter(|v|v[0]=="--authorized-source-catalog").collect();
+    let pins:Vec<_>=args.windows(2).filter(|v|v[0]=="--authorized-source-catalog-sha256").collect();
+    if !args.iter().any(|s|s=="--authorized-source-catalog"||s=="--authorized-source-catalog-sha256"){return Ok(None)}
+    if paths.len()!=1||pins.len()!=1{return Err("catalog_arguments")}
+    let path=FsPath::new(&paths[0][1]);
+    if !path.is_absolute(){return Err("catalog_absolute_path_required")}
+    #[cfg(windows)] let _lease=crate::controller_native_process::lease(path,&pins[0][1]).map_err(|_|"catalog_lease")?;
+    #[cfg(not(windows))] return Err("catalog_windows_required");
+    #[cfg(windows)] {
+        use std::io::Read;
+        let mut raw=Vec::new();std::fs::File::open(path).map_err(|_|"catalog_read")?.take(1048577).read_to_end(&mut raw).map_err(|_|"catalog_read")?;
+        Ok(Some(std::sync::Arc::new(Catalog::parse(&raw,&pins[0][1])?)))
+    }
+}
 pub(crate) const LOCAL_SYNTHETIC_URL:&str="lifeinvader-local://synthetic-review";
 #[derive(Deserialize)] #[serde(deny_unknown_fields)] struct SelectionRequest {path:String}
 fn parse_selection(raw:&[u8])->Option<SelectionRequest> {
@@ -76,6 +127,7 @@ fn resolve(app:&App,id:i64,reference:&str)->Result<(Admission,PathBuf),Rejected>
         let db=app.db.lock().map_err(|_|Rejected::Unavailable)?;
         if current(&db,id).as_ref()!=Some(&admission){return Err(Rejected::Unavailable);}
     }
+    if app.controller_catalog.as_ref().is_some_and(|c|!c.permits(&admission,&path)){return Err(Rejected::Unavailable)}
     Ok((admission,path))
 }
 
@@ -108,6 +160,31 @@ pub(crate) fn local_selection_allowed(db:&Connection,id:i64,provider:&str,provid
 
 #[cfg(test)] mod synthetic_profile_regression {
     use super::*;
+    #[test] fn catalog_binding_checks_actual_selection_and_stale_revision(){
+        use sha2::{Digest,Sha256};
+        let mut app=crate::controller::tests::app();
+        {let db=app.db.lock().unwrap();db.execute("UPDATE profiles SET platform='local',url=? WHERE id=1",[LOCAL_SYNTHETIC_URL]).unwrap();}
+        let a={let db=app.db.lock().unwrap();current(&db,1).unwrap()};
+        let raw=serde_json::to_vec(&serde_json::json!({"schema":"authorized-source-catalog-v1","sources":[{
+            "source_id":"1","revision":controller_binding(&a),"topic":"gta6","origin":"local-owned",
+            "source_sha256":format!("{:x}",Sha256::digest(b"inert source")),"rights_basis":"owned","authorization_ref":"synthetic-review-only"
+        }]})).unwrap();
+        let pin=format!("{:x}",Sha256::digest(&raw));
+        assert!(Catalog::parse(&raw,&"0".repeat(64)).is_err());
+        app.controller_catalog=Some(std::sync::Arc::new(Catalog::parse(&raw,&pin).unwrap()));
+        assert!(controller_selection(&app,1,"sample-source/original.mp4").is_ok());
+        {let db=app.db.lock().unwrap();assert_eq!(app.controller_catalog.as_ref().unwrap().available(&db).len(),1);db.execute("UPDATE profiles SET source_folder='changed' WHERE id=1",[]).unwrap();assert!(app.controller_catalog.as_ref().unwrap().available(&db).is_empty());}
+        assert!(controller_selection(&app,1,"sample-source/original.mp4").is_err());
+        let db=app.db.lock().unwrap();assert_eq!(db.query_row("SELECT COUNT(*) FROM controller_admission_launches",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    }
+    #[test] fn catalog_rejects_duplicate_fields_and_unreviewed_rights(){
+        use sha2::{Digest,Sha256};
+        for raw in [br#"{"schema":"authorized-source-catalog-v1","schema":"authorized-source-catalog-v1","sources":[]}"#.as_slice(),br#"{"schema":"authorized-source-catalog-v1","sources":[{"source_id":"1","revision":"x","topic":"gta6","origin":"local-owned","source_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","rights_basis":"public","authorization_ref":"x"}]}"#.as_slice()]{
+            assert!(Catalog::parse(raw,&format!("{:x}",Sha256::digest(raw))).is_err());
+        }
+        assert!(provision_catalog(&["--authorized-source-catalog".into()]).is_err());
+        assert!(provision_catalog(&[]).unwrap().is_none());
+    }
     #[test] fn synthetic_profile_host_rejection_and_corrected_metadata_preserve_source_guard(){
         let app=crate::controller::tests::app();
         let reference="sample-source/original.mp4";

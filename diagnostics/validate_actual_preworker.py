@@ -3,7 +3,13 @@ import contextlib,hashlib,json,os,sys,time,sqlite3,copy
 from pathlib import Path
 repo=Path(__file__).resolve().parents[1];root=Path(sys.argv[1]).resolve() if len(sys.argv)==2 else repo/'tools/native-preworker-chain-12'
 assert root.is_relative_to(repo/'tools')
-sys.path[:0]=[str(repo/'helpers/clip_worker'),str(repo/'tools/speech-runtime/Lib/site-packages')]
+startup=json.loads((root/'config/bootstrap.json').read_text())
+startup_manifest=Path(startup['manifest']);assert hashlib.sha256(startup_manifest.read_bytes()).hexdigest()==startup['manifest_sha256']
+startup_files=json.loads(startup_manifest.read_text())['files']
+for name in ('reviewed_job.py','prepare.py','local_producer.py'):
+ path=Path(startup['worker_root'])/name
+ assert startup_files.get(str(path))==hashlib.sha256(path.read_bytes()).hexdigest()
+sys.path[:0]=[startup['worker_root'],startup['site_packages']]
 import reviewed_job,prepare,local_producer
 
 def deny(event,args):

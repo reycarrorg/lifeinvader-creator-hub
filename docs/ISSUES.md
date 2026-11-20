@@ -206,3 +206,10 @@ One streamed preview was observed without a cache registration; the initial regi
 On 2026-11-19, the full Rust test suite failed seven preview-cache tests under default parallel execution; all 40 passed with `cargo test -- --test-threads=1`. Investigate shared test state before relying on parallel runs. This does not establish Windows behavior.
 
 PR16 semantic conflict safeguards: upstream unconditional auto_queue startup is not accepted in review modes; upstream Mac cache cleanup worker is not activated on adapted. Added policy/no-effect tests, fixed cross-branch App constructors. macOS-specific runtime remains unverified; existing upstream cautionary history is retained and does not describe enabled cleanup in this adapted candidate.
+
+## Authorized-source discovery integration boundary
+The offline selector does not fetch remote sources or establish rights by itself. The catalog digest must come from independent operator review, not the selected file. APP source UI/registry wiring and updated worker/package inventory remain pending; no new hardware qualification claimed.
+
+Catalog caller integration is now implemented (AUTHORIZED_SOURCE_CATALOG.md); missing independent catalog/review provisioning and versioned runtime/package qualification still block a new hardware run. Provider auth health is deliberately unconfigured until a reviewed native backend is installed; no optimistic connected status.
+
+Catalog14 qualification completed: independently reviewed catalog/source and final-folder runtime now passed one production headless render/restart. Prior ENCODER_BUSY evidence retained; no guard relaxation. Fixed driver evidence collision with optional create-only attempt directory, retaining fixed evidence and rejecting reparse/escape/overwrite. ONNX health failure was diagnostic RuntimeError preventing native platform fallback; verifier now denies subprocess with handled OSError. No production permission change. Visual playback/caption quality remains unobserved in this headless run; provider enrollment remains unconfigured.

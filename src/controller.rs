@@ -17,6 +17,7 @@ fn denied()->Response { (StatusCode::FORBIDDEN,Json(json!({"reason":"same_origin
 pub fn routes()->Router<App>{
     Router::new().route("/controller",get(page)).route("/controller.js",get(script))
         .route("/api/controller",get(snapshot))
+        .route("/api/controller/authorized-sources",get(authorized_sources))
         .route("/api/controller/ui-lifetime",post(ui_lifetime))
         .route("/api/controller/settings",post(configure))
         .route("/api/controller/jobs",post(enqueue))
@@ -27,6 +28,8 @@ pub fn routes()->Router<App>{
         .route("/api/controller/jobs/{id}/import-completed",post(import_clip))
         .route("/api/controller/jobs/{id}/preview",get(preview))
         .route("/api/controller/jobs/{id}/worker-evidence",get(worker_evidence))
+        .route("/api/controller/jobs/{id}/status-details",get(status_details))
+        .route("/api/controller/provider-auth",get(provider_auth))
         .route("/api/controller/quota",get(quota))
         .layer(DefaultBodyLimit::max(16*1024))
 }
@@ -34,6 +37,9 @@ pub fn routes()->Router<App>{
 pub fn package_routes()->Router<App>{
     Router::new().route("/controller",get(page)).route("/controller.js",get(script))
         .route("/api/controller",get(package_snapshot))
+        .route("/api/controller/authorized-sources",get(authorized_sources))
+        .route("/api/controller/provider-auth",get(provider_auth))
+        .route("/api/controller/jobs/{id}/status-details",get(status_details))
         .route("/api/controller/ui-lifetime",post(ui_lifetime))
         .route("/api/controller/jobs/{id}",get(job))
         .route("/api/controller/jobs/{id}/preview",get(preview))
@@ -46,6 +52,32 @@ async fn package_snapshot(State(app):State<App>)->Response{
     match result{Ok(v)=>([(header::CACHE_CONTROL,"no-store")],Json(v)).into_response(),Err(e)=>fail(e)}
 }
 async fn page()->Html<&'static str>{Html(include_str!("../web/controller.html"))}
+async fn provider_auth()->Response{
+    // No enrollment backend is installed here. Do not infer auth from quotas,
+    // environment variables or credentials saved by a separate setup helper.
+    ([(header::CACHE_CONTROL,"no-store")],Json(json!({"schema":"controller-provider-auth-v1","active_provider":null,"connect_enabled":false,"providers":[
+        {"provider":"youtube","health":"unconfigured"},{"provider":"instagram","health":"unconfigured"},{"provider":"tiktok","health":"unconfigured"}
+    ],"publishing_enabled":false}))).into_response()
+}
+async fn status_details(State(app):State<App>,Path(id):Path<String>)->Response{
+    let result=tokio::task::spawn_blocking(move||{
+        let read=||{let db=app.db.lock().map_err(|_|store::Error("storage_unavailable"))?;
+            let j=store::job(&db,&id)?;
+            if !crate::controller_source::controller_current(&db,j.source_id,&j.source_binding){return Err(store::Error("source_unavailable"))}Ok(j)};
+        let j=read()?;let worker=app.controller_worker.read(&j,now());
+        if read()?!=j{return Err(store::Error("selection_changed"))}
+        Ok::<_,store::Error>(json!({"schema":"controller-status-details-v1","job_id":j.id,"revision":j.revision,
+            "durable_state":j.state,"hold_reason":j.hold_reason,"worker":worker,
+            "recorded_preview_sha256":j.preview_sha256,"preview_requires_integrity_check":true,
+            "publishing_enabled":false,"deletion_enabled":false}))
+    }).await.unwrap_or(Err(store::Error("storage_unavailable")));
+    match result{Ok(v)=>([(header::CACHE_CONTROL,"no-store")],Json(v)).into_response(),Err(e)=>fail(e)}
+}
+async fn authorized_sources(State(app):State<App>)->Response{
+    let Some(catalog)=&app.controller_catalog else{return Json(json!({"configured":false,"sources":[],"render_authorized":false})).into_response()};
+    let Ok(db)=app.db.lock() else{return fail(store::Error("storage_unavailable"))};
+    ([(header::CACHE_CONTROL,"no-store")],Json(json!({"configured":true,"sources":catalog.available(&db),"render_authorized":false}))).into_response()
+}
 async fn script()->impl IntoResponse{ ([(header::CONTENT_TYPE,"text/javascript; charset=utf-8"),(header::CACHE_CONTROL,"no-store")],include_str!("../web/controller.js")) }
 #[derive(Deserialize)] #[serde(deny_unknown_fields)] struct UiSignal{action:String}
 async fn ui_lifetime(State(app):State<App>,headers:HeaderMap,Json(signal):Json<UiSignal>)->Response{
@@ -142,13 +174,30 @@ pub(crate) mod tests {
     use tower::ServiceExt;
     use axum::{body::{Body,to_bytes},http::Request};
     use sha2::{Digest,Sha256};
+    #[tokio::test] async fn status_details_and_auth_are_read_only_and_default_denied(){
+        let a=app();let api=routes().with_state(a.clone());
+        let admission=crate::controller_source::controller_selection(&a,1,"sample-source/original.mp4").unwrap();
+        let j={let mut db=a.db.lock().unwrap();store::enqueue(&mut db,1,"sample-source/original.mp4","youtube",&crate::controller_source::controller_binding(&admission),100).unwrap()};
+        let before={let db=a.db.lock().unwrap();db.execute_batch("PRAGMA query_only=ON").unwrap();db.total_changes()};
+        let path=format!("/api/controller/jobs/{}/status-details",j.id);
+        for _ in 0..2 {
+            let response=api.clone().oneshot(request("GET",&path,"",false)).await.unwrap();assert_eq!(response.status(),StatusCode::OK);
+            let v:serde_json::Value=serde_json::from_slice(&to_bytes(response.into_body(),16384).await.unwrap()).unwrap();
+            assert_eq!(v["worker"]["state"],"UNKNOWN");assert_eq!(v["deletion_enabled"],false);assert_eq!(v["publishing_enabled"],false);
+        }
+        let response=api.clone().oneshot(request("GET","/api/controller/provider-auth","",false)).await.unwrap();
+        let v:serde_json::Value=serde_json::from_slice(&to_bytes(response.into_body(),16384).await.unwrap()).unwrap();
+        assert_eq!(v["connect_enabled"],false);assert!(v["providers"].as_array().unwrap().iter().all(|p|p["health"]=="unconfigured"));
+        assert_eq!(api.oneshot(request("POST",&path,"{}",true)).await.unwrap().status(),StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(a.db.lock().unwrap().total_changes(),before);
+    }
     pub(crate) fn app()->App{
         let root=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("controller-test-data").join(uuid::Uuid::new_v4().to_string());
         std::fs::create_dir_all(root.join("sample-source")).unwrap();std::fs::write(root.join("sample-source/original.mp4"),b"inert source").unwrap();
         let db=Connection::open_in_memory().unwrap();crate::init(&db).unwrap();store::init(&db).unwrap();
         db.execute("INSERT INTO profiles(id,name,platform,url,role,source_folder) VALUES(1,'sample-source','tiktok','https://www.tiktok.com/@sample-source','source','sample-source')",[]).unwrap();
         db.execute("INSERT INTO settings(key,value) VALUES('source_root',?)",[root.to_str().unwrap()]).unwrap();
-        App{cache_scope:"adapted-isolated-test".into(),controller_ui:Arc::new(crate::controller_ui_lifetime::Lifetime::new(false)),controller_manual:Arc::new(crate::controller_manual::Unavailable),db:Arc::new(Mutex::new(db)),media:root.clone(),log_dir:root,controller_ops:Arc::new(crate::controller_ops::Unavailable),controller_worker:Arc::new(crate::controller_worker::Unavailable),
+        App{cache_scope:"adapted-isolated-test".into(),controller_ui:Arc::new(crate::controller_ui_lifetime::Lifetime::new(false)),controller_catalog:None,controller_manual:Arc::new(crate::controller_manual::Unavailable),db:Arc::new(Mutex::new(db)),media:root.clone(),log_dir:root,controller_ops:Arc::new(crate::controller_ops::Unavailable),controller_worker:Arc::new(crate::controller_worker::Unavailable),
 }
     }
     #[tokio::test] async fn package_review_has_no_dispatch_or_ops(){

@@ -1576,7 +1576,7 @@ mod tests {
         let db = std::mem::replace(&mut f.db, Connection::open_in_memory().unwrap());
         let app = App {
             controller_ui: std::sync::Arc::new(crate::controller_ui_lifetime::Lifetime::new(false)),
-            controller_manual: std::sync::Arc::new(crate::controller_manual::Unavailable),
+            controller_catalog:None,controller_manual: std::sync::Arc::new(crate::controller_manual::Unavailable),
             controller_ops: std::sync::Arc::new(crate::controller_ops::Unavailable),
             controller_worker: std::sync::Arc::new(crate::controller_worker::Unavailable),
             db: Arc::new(Mutex::new(db)),

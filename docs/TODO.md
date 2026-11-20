@@ -218,3 +218,11 @@ Package09 actual startup/close now PASS: PID30676 exit0/zeroowneddescendants/zer
 - [ ] Independently review the installed macOS generated-preview cache integration, especially unknown third-party mirror/backup cases, cross-machine queue state, and its timed runtime behavior; validate further on disposable media before relying on or expanding its use. Do not claim Google Drive file eviction from thumbnail cleanup.
 
 PR16 candidate: review detached normal merge commit before any fast-forward of adapted. Windows offline compile and16focusedtests passed; no macOSruntimeclaim. Keep cachedeletion permanentlyOFF and source/autoqueue timersOFF inreview. Preserve existingpackage/heldjobs; no rerender. Update PR16 only after promotion, no mainpush/PRmerge.
+
+- [ ] Wire authorized-source discover_gta6 catalog selection into APP source registry with independent catalog pin; retain byte intake, rubric/cut and manual admission. Qualify the integrated versioned runtime manifest before a fresh E2E; do not rerun held jobs.
+
+- [x] Connect optional independently pinned authorized catalog to native source resolution and picker with offline tests.
+- [ ] Qualify new integrated runtime/package inventory and fresh reviewed synthetic E2E; provider enrollment remains outside this build.
+
+- [x] Qualify Catalog14 versioned embedded runtime, independent fixture, real Controller/queue/ASR/NVENC receipt and same-artifact read-only restart (2026-11-20).
+- [ ] Independently review the integrated source diff and any desired visible playback/caption quality; headless receipt reuse is proven, visual quality is not. No rerender required for inspection.

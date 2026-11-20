@@ -47,7 +47,7 @@ window.LVController = Object.freeze({attach(article,sourceId,file){
       if(j.state==='QUEUED'&&snapshot.manual_native_enabled)buttons.append(action('Render reviewed clip',()=>mutate(base+'/render-reviewed',{revision:j.revision}),!s.paused));
       if(j.state==='QUEUED')buttons.append(action('Check clip preparation',async()=>{try{const v=await api(base+'/prepare',{revision:j.revision});evidence.textContent=v.state+' · Dry run only; no render started. Whisper installed: '+Boolean(v.faster_whisper_available)+'. GPU/model loading not yet verified.';}catch(e){evidence.textContent=e.message;}}));
       if(j.state==='QUEUED')buttons.append(action('Import reviewed completion',()=>mutate(base+'/import-completed',{revision:j.revision})));
-      buttons.append(action('Check worker evidence',async()=>{try{const v=await api(base+'/worker-evidence');evidence.textContent='Worker: '+v.state+' · '+v.reason+' (read-only; no approval or retry authority)';}catch(e){evidence.textContent='Worker evidence unavailable';}}));
+      buttons.append(action('Check worker evidence',async()=>{try{const v=await api(base+'/status-details');evidence.textContent='Job: '+v.durable_state+'; worker: '+v.worker.state+'; '+v.worker.reason+'; preview integrity checked on open.';}catch(e){evidence.textContent='Worker evidence unavailable';}}));
       if(['READY_FOR_REVIEW','POSTED','BACKED_UP'].includes(j.state))buttons.append(action('Reopen preview',()=>openPreview(j)));
       if(j.state==='READY_FOR_REVIEW'&&j.review==='PENDING')for(const name of ['approve','reject'])buttons.append(action(name==='approve'?'Approve review':'Reject review',()=>mutate(base+'/review',{revision:j.revision,action:name})));
       if(['HELD','FAILED'].includes(j.state))buttons.append(action('Resume job',()=>mutate(base+'/review',{revision:j.revision,action:'resume'}),j.retry_safe));
@@ -79,6 +79,7 @@ window.LVController = Object.freeze({attach(article,sourceId,file){
   $('refresh').onclick=refresh;$('close-preview').onclick=()=>$('preview-dialog').close();$('preview-dialog').addEventListener('close',closePreview);window.addEventListener('pagehide',closePreview);
   $('enqueue').onsubmit=e=>{e.preventDefault();mutate('/api/controller/jobs',{source_id:Number($('source').value),path:$('source-path').value,platform:$('platform').value});};
   const prefill=new URLSearchParams(location.search);$('source-path').value=prefill.get('path')||'';
-  api('/api/items').then(data=>{for(const p of data.profiles.filter(p=>p.role==='source'&&p.url!=='https://lifeinvader.local/solo-posts')){const o=node('option',p.name);o.value=p.id;$('source').append(o);}$('source').value=prefill.get('source_id')||'';}).catch(e=>notice(e.message));
+  Promise.all([api('/api/items'),api('/api/controller/authorized-sources')]).then(([data,catalog])=>{for(const p of data.profiles.filter(p=>p.role==='source'&&p.url!=='https://lifeinvader.local/solo-posts'&&(!catalog.configured||catalog.sources.some(s=>s.source_id===String(p.id))))){const o=node('option',p.name);o.value=p.id;$('source').append(o);}$('source').value=prefill.get('source_id')||'';}).catch(e=>notice(e.message));
+  api('/api/controller/provider-auth').then(v=>{$('connection').textContent=v.providers.map(p=>p.provider+': '+p.health).join(' | ')+'. Connect unavailable; publishing off.';}).catch(()=>{$('connection').textContent='Provider auth unknown. Connect and publishing unavailable.';});
   refresh();
 })();

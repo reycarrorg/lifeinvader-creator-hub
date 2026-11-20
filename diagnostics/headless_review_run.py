@@ -2,7 +2,7 @@
 Normal app endpoints only. One render POST, then at most one read-only restart.
 No browser, producer replacement, credential, GPU polling loop or retries.
 """
-import ctypes,datetime,hashlib,http.client,json,os,sqlite3,subprocess,sys,time
+import ctypes,datetime,hashlib,http.client,json,os,re,sqlite3,stat,subprocess,sys,time
 from pathlib import Path
 
 def sha(p):
@@ -65,11 +65,27 @@ def descendants(root_pid):
         return sorted(pid for pid,_ in pairs if pid in owned and pid!=root_pid)
     finally:close(h)
 
-def run(packet_path,pin):
+def create_attempt_evidence(root, attempt):
+    if not re.fullmatch(r'attempt-[0-9]{2}',attempt):raise ValueError('exact attempt name required')
+    parent=Path(root)/'preflight'
+    for p in (parent,*parent.parents):
+        s=p.lstat()
+        if stat.S_ISLNK(s.st_mode) or getattr(s,'st_file_attributes',0)&0x400:
+            raise RuntimeError('reparse evidence path')
+        if not stat.S_ISDIR(s.st_mode):raise RuntimeError('evidence parent not directory')
+    target=parent/attempt
+    target.mkdir(exist_ok=False)
+    s=target.lstat()
+    if stat.S_ISLNK(s.st_mode) or getattr(s,'st_file_attributes',0)&0x400:
+        raise RuntimeError('reparse evidence path')
+    return target
+
+def run(packet_path,pin,attempt=None):
     packet_path=Path(packet_path).resolve(strict=True)
     if sha(packet_path)!=pin:raise RuntimeError('packet pin')
     packet=json.loads(Path(packet_path).read_bytes());root=Path(packet_path).parent.parent
-    log=(root/'preflight/headless-run.jsonl').open('x',encoding='utf-8')
+    evidence=create_attempt_evidence(root,attempt) if attempt is not None else root/'preflight'
+    log=(evidence/'headless-run.jsonl').open('x',encoding='utf-8')
     def record(event,**values):
         row=dict(event=event,utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),**values)
         log.write(json.dumps(row)+'\n');log.flush();print(json.dumps(row),flush=True)
@@ -84,21 +100,25 @@ def run(packet_path,pin):
         if db.execute('SELECT count(*) FROM controller_admissions').fetchone()[0]!=0:raise RuntimeError('existing admission')
     # Exact module pins are verified before importing this otherwise inert guard.
     manifest=json.loads((root/'config/runtime.json').read_bytes())['files']
-    module_root=Path(__file__).resolve().parents[1]/'helpers/clip_worker'
+    module_root=Path(packet['worker_module_root']) if 'worker_module_root' in packet else Path(__file__).resolve().parents[1]/'helpers/clip_worker'
     for leaf in ('gpu_guard.py','nvml_encoder_probe.py'):
         p=module_root/leaf
         if manifest.get(str(p))!=sha(p):raise RuntimeError('GPU helper pin')
     sys.path.insert(0,str(module_root));import gpu_guard
     producer=json.loads((root/'config/producer.json').read_bytes())
     if sha(producer['nvidia_smi'])!=producer['nvidia_smi_sha256']:raise RuntimeError('GPU tool pin')
-    gpu_guard.guard(producer['nvidia_smi'],packet['gpu_uuid'],root/'preflight','preclaim')
+    gpu_guard.guard(producer['nvidia_smi'],packet['gpu_uuid'],evidence,'preclaim')
     record('GPU_PREFLIGHT_QUALIFIED')
     env=dict(os.environ,LIFEINVADER_DB=str(dbpath),LIFEINVADER_MEDIA=str(root/'media'),LIFEINVADER_PORT=str(port))
     env.pop('PYTHONPATH',None)
     def launch(number):
         if sha(exe)!=packet['exe_sha256']:raise RuntimeError('app pin changed')
-        out=(root/f'preflight/app-{number}.stdout').open('xb');err=(root/f'preflight/app-{number}.stderr').open('xb')
-        child=subprocess.Popen([str(exe),'--server-only','--headless-review','--isolated-review-plan',str(plan_path),'--isolated-review-sha256',packet['plan_sha256']],cwd=root,env=env,stdin=subprocess.DEVNULL,stdout=out,stderr=err,creationflags=subprocess.CREATE_NO_WINDOW)
+        out=(evidence/f'app-{number}.stdout').open('xb');err=(evidence/f'app-{number}.stderr').open('xb')
+        args=[str(exe),'--server-only','--headless-review','--isolated-review-plan',str(plan_path),'--isolated-review-sha256',packet['plan_sha256']]
+        if 'authorized_catalog' in packet:
+            if sha(packet['authorized_catalog'])!=packet['authorized_catalog_sha256']:raise RuntimeError('catalog pin changed')
+            args+=['--authorized-source-catalog',packet['authorized_catalog'],'--authorized-source-catalog-sha256',packet['authorized_catalog_sha256']]
+        child=subprocess.Popen(args,cwd=root,env=env,stdin=subprocess.DEVNULL,stdout=out,stderr=err,creationflags=subprocess.CREATE_NO_WINDOW)
         out.close();err.close();record('APP_STARTED',number=number,pid=child.pid)
         return child
     def request(child,path,body=None,binary=False):
@@ -123,6 +143,9 @@ def run(packet_path,pin):
             if ids:
                 if ids!=[child.pid]:raise RuntimeError('foreign listener')
                 view=request(child,'/api/controller')
+                if 'authorized_catalog' in packet:
+                    catalog=request(child,'/api/controller/authorized-sources')
+                    if not catalog['configured'] or len(catalog['sources'])!=1 or catalog['sources'][0]['source_sha256']!=packet['request']['selection']['source_sha256']:raise RuntimeError('catalog readiness mismatch')
                 if view['publishing_connected'] or not view['manual_native_enabled'] or view['total_jobs']!=1:raise RuntimeError('headless scope')
                 request(child,'/api/controller/ui-lifetime',{'action':'ready'})
                 return view
@@ -172,5 +195,6 @@ def run(packet_path,pin):
         log.close()
 
 if __name__=='__main__':
+    if len(sys.argv)==4:run(sys.argv[1],sys.argv[2],sys.argv[3]);raise SystemExit(0)
     if len(sys.argv)!=3:raise SystemExit('exact packet path and independent digest required')
     run(sys.argv[1],sys.argv[2])
