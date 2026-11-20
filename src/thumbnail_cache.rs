@@ -1018,6 +1018,7 @@ where
     );
 }
 fn sweep(app: &App) {
+    if !crate::controller_headless::cache_deletion_allowed(){return;}
     sweep_with(app, timed_plan);
 }
 
@@ -1035,6 +1036,8 @@ async fn worker_with_delays(app: App, initial: std::time::Duration, period: std:
 }
 
 pub(crate) async fn worker(app: App) {
+    // Adapted delivery: never start cleanup timers or delete generated files.
+    if !crate::controller_headless::cache_deletion_allowed(){return;}
     worker_with_delays(
         app,
         std::time::Duration::from_secs(INITIAL_DELAY_SECONDS),
@@ -1572,6 +1575,10 @@ mod tests {
         fixture_cache_base(Some(base));
         let db = std::mem::replace(&mut f.db, Connection::open_in_memory().unwrap());
         let app = App {
+            controller_ui: std::sync::Arc::new(crate::controller_ui_lifetime::Lifetime::new(false)),
+            controller_catalog:None,controller_manual: std::sync::Arc::new(crate::controller_manual::Unavailable),
+            controller_ops: std::sync::Arc::new(crate::controller_ops::Unavailable),
+            controller_worker: std::sync::Arc::new(crate::controller_worker::Unavailable),
             db: Arc::new(Mutex::new(db)),
             media: f.dir.clone(),
             log_dir: f.dir.clone(),
@@ -1765,5 +1772,18 @@ mod tests {
             assert!(!message.contains('\\'));
             assert!(!message.contains(":"));
         }
+    }
+}
+
+#[cfg(test)]
+mod adapted_policy_tests {
+    #[tokio::test]
+    async fn cache_deletion_worker_and_sweep_are_inert_on_every_platform(){
+        let app=crate::controller::tests::app();
+        let before=app.db.lock().unwrap().total_changes();
+        tokio::time::timeout(std::time::Duration::from_millis(100),super::worker(app.clone())).await.expect("disabled worker must return before any timer");
+        super::sweep(&app);
+        assert_eq!(app.db.lock().unwrap().total_changes(),before);
+        assert!(!crate::controller_headless::cache_deletion_allowed());
     }
 }

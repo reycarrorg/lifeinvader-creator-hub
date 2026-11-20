@@ -17,5 +17,7 @@ uuid = { version = "1", features = ["v4"] }
 
 csv = "1.4"
 
+sha2 = "=0.10.9"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

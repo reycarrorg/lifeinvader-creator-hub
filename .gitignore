@@ -19,3 +19,7 @@
 *.webm
 .env
 .env.*
+
+# Disposable Controller/bridge test state; never source or release inputs.
+/controller-test-data/
+/bridge-test-data/
