@@ -421,99 +421,6 @@ function updateGuides(){
  $('grid').hidden=!$('grid-toggle').checked;$('zones').hidden=!$('safe-toggle').checked;
  const [ratios,name,right,bottom]=guides[$('platform-zone').value];$('zones').style.setProperty('--zone',ratios);$('zones').style.setProperty('--right',right);$('zones').style.setProperty('--bottom',bottom);$('zone-label').textContent=name;
 }
-let localImportMax=0,localImportReady=false,localImportBusy=false;
-function refreshLocalImport(){
- if(localImportBusy)return;
- get('/api/workspace/import-mp4').then(d=>{
-  localImportMax=d.max_bytes;
-  localImportReady=d.import_enabled===true;
-  $('import-mp4-submit').disabled=!localImportReady;
-  $('import-mp4-state').textContent=localImportReady
-    ?'MP4 only, up to '+Math.floor(localImportMax/1048576)+' MiB. Nothing gets posted.'+(d.watcher_enabled?' The staging inbox watches for a matching ready manifest; use this picker for a regular MP4 or MP4 + JSON.':'')
-    :'Local MP4 import is held until its validation worker is configured.';
- }).catch(()=>{$('import-mp4-state').textContent='Local import availability is not verified.';});
-}
-async function localSidecar(file){
- if(!file)return null;
- if(!file.name.toLowerCase().endsWith('.json')||file.size<2||file.size>256*1024)throw Error('sidecar_size_or_type_invalid');
- let x;try{x=JSON.parse(await file.text());}catch{throw Error('sidecar_json_invalid');}
- if(!x||typeof x!=='object'||Array.isArray(x))throw Error('sidecar_json_invalid');
- const cap=(s,max)=>typeof s==='string'&&!/https?:|:\/\/|www\.|cookie|bearer |authorization|token|password|api_key|sessionid|eyj/i.test(s)?Array.from(s.trim()).slice(0,max).join(''):null;
- const safe={
-  title:cap(x.title,62),description:cap(x.description,200),
-  uploader:typeof x.uploader==='string'&&/^[A-Za-z0-9@_.]{1,64}$/.test(x.uploader)?x.uploader:null,
-  upload_date:typeof x.upload_date==='string'&&/^\d{8}$/.test(x.upload_date)?x.upload_date:null,
-  id:typeof x.id==='string'&&/^\d{15,22}$/.test(x.id)?x.id:null,
-  tags:Array.isArray(x.tags)?x.tags.filter(t=>typeof t==='string'&&/^[#_\p{L}\p{N}]{1,24}$/u.test(t)).slice(0,10):[],
- };
- const raw=new TextEncoder().encode(JSON.stringify(safe));
- if(raw.length>2000)throw Error('sidecar_metadata_too_large');
- return Array.from(raw,b=>b.toString(16).padStart(2,'0')).join('');
-}
-$('import-mp4-form').onsubmit=async e=>{
- e.preventDefault();const f=$('import-mp4-file').files[0],btn=$('import-mp4-submit'),out=$('import-mp4-state');
- if(!localImportReady||localImportBusy||!f||!$('import-mp4-rights').checked)return;
- if(!f.name.toLowerCase().endsWith('.mp4')||f.size<12||f.size>localImportMax){out.textContent='Choose a non-empty MP4 within the size limit.';return;}
- localImportBusy=true;btn.disabled=true;out.textContent='Copying and validating this MP4 locally.';
- try{
-  const safeSidecar=await localSidecar($('import-mp4-sidecar').files[0]);
-  const headers={'Content-Type':'video/mp4','X-Snapmatic-Import':'authorized-local-mp4'};
-  if(safeSidecar)headers['X-Snapmatic-Sidecar']=safeSidecar;
-  const d=await get('/api/workspace/import-mp4',{method:'POST',headers,body:f});
-  if(d.state==='pending_review'||d.state==='duplicate'){
-   out.textContent=d.state==='duplicate'?'This exact video is already in Film Roll. No duplicate added.':'Validated. The clip is in Film Roll → Pending Review.';
-   $('import-mp4-form').reset();await reload();
-  }else out.textContent='Import did not produce a verified review item.';
- }catch(e){
-  const hints={import_protected_artifact:'This is a protected previous clip; it cannot be imported again.',import_media_validation_failed:'The file did not pass full local playback validation.',import_already_running:'Another local import is in progress.',local_import_not_configured:'The validation worker is not available.'};
-  out.textContent=hints[e.message]||'Local import held: '+e.message;
- }finally{localImportBusy=false;btn.disabled=!localImportReady;}
-};
-const sv2=$('sources-v2-filter');
-let sv2Load=null;
-const providerLabels={tiktok:'TikTok',youtube_shorts:'YouTube Shorts',instagram_reels:'Instagram Reels'};
-let sv2Registered=[];
-function showSourceDownloadBoundary(){
- const source=sv2Registered.find(v=>String(v.id)===$('sources-v2-account').value);
- const labels={
-   youtube_shorts:'YouTube Studio can download a video from your own channel. Snapmatic cannot yet verify that browser transfer or link it to this selection.',
-   instagram_reels:'Instagram Reel selection is not download permission. No verified local transfer from an approved Instagram source is configured.',
-   tiktok:'Selecting a public TikTok does not establish download permission. A creator-enabled download and an exact verified transfer are required.'
- };
- $('sources-v2-transfer-note').textContent=labels[source?.provider]||'Selecting posts never downloads them. A verified permission-bearing transfer is required.';
-}
-$('sources-v2-account').addEventListener('change',showSourceDownloadBoundary);
-function refreshSourceTools(){
- if(sv2Load)return sv2Load;
- sv2Load=get('/api/workspace/sources-v2').then(data=>{
-  const acct=$('sources-v2-account'),value=acct.value;
-  const empty=node('option','Choose a registered source');empty.value='';
-  acct.replaceChildren(empty,...data.sources.map(s=>{const e=node('option',s.name+' - '+(providerLabels[s.provider]||'Unknown'));e.value=String(s.id);return e;}));
-  if(data.sources.some(s=>String(s.id)===value))acct.value=value;sv2Registered=data.sources;showSourceDownloadBoundary();
-  const ready=data.discovery_state==='ready';
-  $('sources-v2-preview').disabled=!ready;
-  $('sources-v2-download').disabled=true;
-  $('sources-v2-state').textContent=ready?'Select source and preview matches. No download starts automatically.':
-    data.reason==='stock_extractor_requests_impersonation' ? 'TikTok scan and download are off. The verified stock extractor requests browser impersonation, which is disabled. Use Import authorized MP4; your saved selection is unchanged.' : 'Live discovery and download are held. Selecting a public post does not verify permission or an authorized download path. Your saved selection is unchanged.';
- }).catch(()=>{$('sources-v2-state').textContent='Discovery availability is unverified. No download is enabled.';}).finally(()=>{sv2Load=null;});
- return sv2Load;
-}
-sv2.onsubmit=async e=>{
- e.preventDefault();
- const f=new FormData(sv2),id=f.get('source'),nullable=k=>f.get(k)===''?null:Number(f.get(k));
- if(!/^\d+$/.test(id||'')||$('sources-v2-preview').disabled)return;
- const body={browse_latest:nullable('browse_latest'),maximum:nullable('maximum'),within_days:nullable('within_days'),central_from:sv2.elements.central_from.value||null,central_through:sv2.elements.central_through.value||null,
-  min_duration_ms:nullable('min_duration')==null?null:Math.round(nullable('min_duration')*1000),
-  max_duration_ms:nullable('max_duration')==null?null:Math.round(nullable('max_duration')*1000),
-  min_views:nullable('min_views'),min_likes:nullable('min_likes'),keyword:f.get('keyword').trim()||null,
-  hashtag:f.get('hashtag').trim()||null,duplicates:f.get('duplicates')};
- $('sources-v2-download').disabled=true;
- try{
-  const data=await get('/api/workspace/sources-v2/'+id+'/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  $('sources-v2-matches').replaceChildren(...(data.rows||[]).map(r=>node('div',(r.title||r.post_id)+' - '+r.state.replaceAll('_',' '))));
-  $('sources-v2-state').textContent='Preview only. Missing metadata must be verified before confirmation.';
- }catch{$('sources-v2-state').textContent='Discovery held or filter not accepted. Nothing downloaded.';}
-};
 function showView(mode,push=false){
  if(!['studio','gallery','ledger','system','profiles','sources','controller'].includes(mode))mode='studio';
  activeView=mode;
@@ -524,7 +431,6 @@ function showView(mode,push=false){
  if(mode!=='studio')video.pause();
  if(mode==='profiles')renderShellProfile();
  if(mode==='sources'||mode==='controller'){const frame=$(mode).querySelector('iframe');if(!frame.hasAttribute('src'))frame.src=frame.dataset.embed;}
- if(mode==='sources'){updatePhase4();refreshSourceTools();refreshLocalImport();}
  if(mode==='gallery'){renderGallery();inspectMetadata();if(indexReady)reload();}
  if(mode==='ledger'){renderLedger();if(ledgerReady)loadLedger();}
  if(mode==='system'){renderSystem();updatePhase4();cacheUsage();}
@@ -612,7 +518,7 @@ function updatePhase4(){
  phase4Read=get('/api/workspace/intake').then(d=>{
   const status=$('phase4-source'),watch=d.watcher?.state||'unknown';
   $('sm-live-source').textContent='Source · '+(d.admission_enabled?'Local Media mounted, pending review only':(d.source_state||'unverified'));
-  $('sm-source-summary').textContent=d.admission_enabled?'Local Media is mounted. Source stays read-only.':'Local Media · '+(d.source_state||'not verified');
+  if($('sm-source-summary'))$('sm-source-summary').textContent=d.admission_enabled?'Local Media is mounted. Source stays read-only.':'Local Media · '+(d.source_state||'not verified');
   const readable={held_unconfigured:'Not configured',read_only_no_observer_authority:'Read-only sidecar; observer not authorized',not_started:'Not started',
         observer_starting:'Starting bounded observer',fixture_verified:'Fixture observer finished',observed_read_only:'Read-only metadata observation recorded',
         checking_pending_only:'Checking for pending review',pending_only_checked:d.admission_enabled?'Active · pending review only':'Pending-only: source unavailable'};

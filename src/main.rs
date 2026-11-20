@@ -520,11 +520,6 @@ async fn add_profile(
     Json(p): Json<ProfileInput>,
 ) -> ApiResult<impl IntoResponse> {
     let (url, tags) = validate_profile(&p)?;
-    #[cfg(feature="snapmatic-hud")]
-    if std::env::var_os("LIFEINVADER_DRIVE_INTAKE_ENABLED").as_deref()==Some(std::ffi::OsStr::new("1"))
-        &&p.role=="source"&&p.platform!="tiktok"{
-        return Err(bad("Snapmatic profile downloading supports TikTok sources only."));
-    }
     let mut db = app.db.lock().map_err(internal)?;
     if db
         .query_row("SELECT id FROM profiles WHERE url=?", [&url], |r| {
@@ -791,11 +786,21 @@ async fn metadata(
 }
 async fn owner_review_policy(request: axum::extract::Request,next:axum::middleware::Next)->axum::response::Response {
     let target=request.uri().path();
-    let workspace_local=target=="/api/workspace/import-mp4"||target=="/api/workspace/publish"
+    let lifeinvader_local=target=="/api/items"||target.starts_with("/api/items/")
+        ||target=="/api/profiles"||target.starts_with("/api/profiles/")
+        ||target=="/api/categories"||target.starts_with("/api/categories/")
+        ||target=="/api/source-settings"||target.starts_with("/api/source-settings/")
+        ||target=="/api/source-durations"||target=="/api/solo-posts"
+        ||target=="/api/source-schedules"||target=="/api/source-batches"
+        ||target.starts_with("/api/sources/")
+        ||target=="/api/date-audit"||target.starts_with("/api/date-audit/")
+        ||target=="/api/editor/render"||target=="/api/settings"
+        ||target.starts_with("/api/bridge/");
+    let workspace_local=lifeinvader_local||target=="/api/workspace/publish"
         ||target=="/api/workspace/triage"||target=="/api/controller/ui-lifetime"
         ||(target.starts_with("/api/clips/")&&(target.ends_with("/draft")||target.ends_with("/platform-draft")));
     if target.starts_with("/api/")&&((request.method()!=axum::http::Method::GET&&request.method()!=axum::http::Method::HEAD&&!workspace_local)
-        ||target.starts_with("/api/bridge/")||target.starts_with("/api/posting-handoff")
+        ||target.starts_with("/api/posting-handoff")
         ||target.starts_with("/api/controller/youtube")||target.starts_with("/api/controller/instagram")||target.starts_with("/api/controller/tiktok")){
         return (axum::http::StatusCode::FORBIDDEN,Json(serde_json::json!({"reason":"owner_review_local_only","publishing_enabled":false}))).into_response();
     }
@@ -1151,7 +1156,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let review_only = true; // Owner-review builds never start background posting or sync.
     #[cfg(all(windows,feature="snapmatic-hud"))]
     let triage_fixture=server_only&&port==43850&&review_only&&args.iter().any(|a|a=="--snapmatic-triage-fixture")&&workspace_triage::fixture_enabled(&app);
-    let scheduler = (!review_only).then(|| tokio::spawn(scheduler::worker(app.clone())));
+    let scheduler = (!drive_intake).then(|| tokio::spawn(scheduler::worker(app.clone())));
     let auto_scheduler = (!review_only).then(|| tokio::spawn(auto_queue::worker(app.clone())));
     #[cfg(all(windows,feature="snapmatic-hud"))]
     let phase4_fixture=server_only&&args.iter().any(|s|s=="--phase4-fixture")&&workspace_phase4::fixture_enabled(&app);

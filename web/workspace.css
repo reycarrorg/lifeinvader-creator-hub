@@ -49,7 +49,6 @@
 .utility-cards a{display:grid;gap:4px;padding:12px 16px}
 .utility-cards small{color:#bbc7d4;font-size:12px}
 
-.sources-v2{padding:16px;margin-bottom:16px}.sources-v2-grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin:12px 0}.sources-v2 label{display:grid;gap:3px}.sources-v2 input,.sources-v2 select{max-width:100%}
 /* Snapmatic theme: a small utility rail, never the legacy application shell. */
 .snapmatic-shell {min-width:0;display:grid;grid-template-columns:176px minmax(0,1fr);grid-template-rows:auto 1fr auto;min-height:100dvh}
 .snapmatic-shell>.top,.snapmatic-shell>.shell-status{grid-column:1/-1}
@@ -71,8 +70,10 @@
 .snapmatic-shell .gallery-card img,.snapmatic-shell .gallery-placeholder{aspect-ratio:9/16}
 .snapmatic-shell .inspector-trim .trim-tools{padding:9px 0;border:0}
 .snapmatic-shell .trim-tools output,.snapmatic-shell .telemetry output{overflow-wrap:anywhere}
-.snapmatic-shell .sources-v2 :is(input,select),.snapmatic-shell .searchbar :is(input,select){width:100%;min-width:0}
+.snapmatic-shell .searchbar :is(input,select){width:100%;min-width:0}
 .snapmatic-shell .shell-manage iframe{max-width:100%}
+.snapmatic-shell .shell-sources{padding:0;max-width:none;align-self:stretch}
+.snapmatic-shell .shell-sources iframe{height:calc(100dvh - 104px);min-height:760px;border:0;border-radius:0;background:#f8f8fb}
 @media(max-width:1100px){.snapmatic-shell{grid-template-columns:145px minmax(0,1fr)}.snapmatic-shell .desk{grid-template-columns:minmax(150px,.8fr) minmax(220px,1.4fr)}.snapmatic-shell .inspector{grid-column:1/-1}}
 @media(max-width:760px){.snapmatic-shell{display:block}.snapmatic-main-rail{border-right:0;border-bottom:1px solid #273140;padding:4px 10px}.snapmatic-main-rail .view-nav,.snapmatic-main-rail .utility-strip{display:flex;flex-wrap:wrap}.snapmatic-shell .desk{grid-template-columns:minmax(0,1fr);padding:10px}.snapmatic-shell .wide-view{padding:14px 10px}.snapmatic-shell .viewfinder{width:min(100%,260px,42vh)}.snapmatic-shell .top{padding:10px}.snapmatic-shell .credentials{width:auto}.snapmatic-shell .top>.posting-lock{margin-left:0}.snapmatic-shell .shell-status{padding:10px}}
 /* Local-only typography; no font network requests. */

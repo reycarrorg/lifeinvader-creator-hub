@@ -18,10 +18,6 @@ pub fn routes(app:App)->Router<App>{
         .route("/api/workspace/media-facts",get(||async{([(header::CONTENT_TYPE,"application/json"),(header::CACHE_CONTROL,"no-store")],include_str!("../web/workspace-media-facts.json"))}))
         .route("/api/workspace",get(data))
         .route("/api/workspace/intake",get(phase4_state))
-        .route("/api/workspace/import-mp4",get(crate::workspace_local_import::status).post(crate::workspace_local_import::submit))
-        .route("/api/workspace/sources-v2",get(crate::workspace_sources_v2::catalogue))
-        .route("/api/workspace/sources-v2/{id}/preview",post(crate::workspace_sources_v2::preview).layer(axum::extract::DefaultBodyLimit::max(8192)))
-        .route("/api/workspace/source-download/{id}",get(crate::workspace_source_download::status).post(crate::workspace_source_download::start).layer(axum::extract::DefaultBodyLimit::max(2048)))
         .route("/api/workspace/tiktok/export/{id}",get(crate::workspace_tiktok_export::status).post(crate::workspace_tiktok_export::export).layer(axum::extract::DefaultBodyLimit::max(5*1024*1024)))
         .route("/api/workspace/tiktok/export-folder",post(crate::workspace_tiktok_export::open_folder))
         .route("/api/workspace/tiktok/inbox-draft",post(crate::controller_tiktok_inbox::draft).layer(axum::extract::DefaultBodyLimit::max(4096)))
@@ -42,7 +38,7 @@ pub fn routes(app:App)->Router<App>{
         .route("/api/workspace/publish",post(block_publish)).route("/api/events",get(workspace_events::sse))
         .layer(Extension(workspace_events::Feed::start(app)))
 }
-async fn manage()->Html<String>{Html(include_str!("../web/index.html").replace("<body>","<body class=\"sm-embedded\">"))}
+async fn manage()->Html<String>{Html(include_str!("../web/index.html").replace("</head>","<style>.layout>.sidebar,#sidebar-toggle{display:none!important}.layout{display:block!important}</style></head>"))}
 async fn page()->Html<&'static str>{Html(include_str!("../web/workspace.html"))}
 async fn css()->impl IntoResponse{([(header::CONTENT_TYPE,"text/css; charset=utf-8")],include_str!("../web/workspace.css"))}
 async fn js()->impl IntoResponse{([(header::CONTENT_TYPE,"text/javascript; charset=utf-8")],include_str!("../web/workspace.js"))}

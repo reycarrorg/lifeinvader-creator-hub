@@ -3,6 +3,7 @@
 /media/
 /tools/
 /Lifeinvader*.exe
+/Snapmatic*.exe
 /READINESS.md
 **/__pycache__/
 *.py[cod]

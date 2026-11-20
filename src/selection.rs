@@ -44,11 +44,6 @@ pub async fn preview(
     let (platform, url, tool) = {
         let db = app.db.lock().map_err(internal)?;
         let (platform, url, _) = source::source_profile(&db, id)?;
-        #[cfg(feature="snapmatic-hud")]
-        if std::env::var_os("LIFEINVADER_DRIVE_INTAKE_ENABLED").as_deref()==Some(std::ffi::OsStr::new("1"))
-            &&platform!="tiktok"{
-            return Err(bad("Snapmatic profile downloading supports TikTok sources only."));
-        }
         if url == crate::solo::SOLO_URL {
             return Err(bad("Solo posts have no account feed."));
         }
@@ -173,13 +168,7 @@ pub async fn choose(
     Json(input): Json<Choice>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let mut db = app.db.lock().map_err(internal)?;
-    let (platform,_url,_folder)=source::source_profile(&db, id)?;
-    #[cfg(feature="snapmatic-hud")]
-    if std::env::var_os("LIFEINVADER_DRIVE_INTAKE_ENABLED").as_deref()==Some(std::ffi::OsStr::new("1"))
-        &&platform!="tiktok"{
-        return Err(bad("Snapmatic profile downloading supports TikTok sources only."));
-    }
-    #[cfg(not(feature="snapmatic-hud"))] let _=platform;
+    source::source_profile(&db, id)?;
     let value: Option<String> = db
         .query_row(
             "SELECT value FROM settings WHERE key=?",
