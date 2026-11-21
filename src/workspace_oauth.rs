@@ -731,7 +731,7 @@ pub(crate) async fn start_oauth(
             "https://www.facebook.com/v21.0/dialog/oauth?client_id={}&redirect_uri={}&response_type=code&auth_type=rerequest&scope={}&state={}",
             url_encode(client_id),
             url_encode(&redirect_uri),
-            url_encode("instagram_basic,pages_show_list,pages_read_engagement,instagram_content_publish"),
+            url_encode("instagram_basic,pages_show_list,pages_read_engagement,instagram_content_publish,business_management"),
             url_encode(&state),
         ),
         _ => return Err(bad("Unsupported provider.")),
@@ -858,6 +858,24 @@ fn refresh_youtube_access_token() -> Result<(String, i64), String> {
     Ok((new_access, new_exp))
 }
 
+fn parse_ig_node(ig: &Value) -> Option<(String, String, String, Option<i64>, Option<i64>)> {
+    let id = ig["id"].as_str().filter(|s| !s.is_empty())?;
+    let username = ig["username"].as_str().unwrap_or("").to_owned();
+    let name = ig["name"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(if username.is_empty() { "Instagram Account" } else { &username })
+        .to_owned();
+    let handle = if username.is_empty() {
+        String::new()
+    } else {
+        format!("@{username}")
+    };
+    let followers = ig["followers_count"].as_i64();
+    let media = ig["media_count"].as_i64();
+    Some((id.to_owned(), name, handle, followers, media))
+}
+
 fn fetch_instagram_business_account(access_token: &str) -> Result<(String, String, String, Option<i64>, Option<i64>), String> {
     let path = format!(
         "/v21.0/me/accounts?fields=id,name,instagram_business_account%7Bid,username,name,followers_count,media_count%7D,connected_instagram_account%7Bid,username,name,followers_count,media_count%7D&access_token={}",
@@ -878,34 +896,59 @@ fn fetch_instagram_business_account(access_token: &str) -> Result<(String, Strin
         if let Some(pname) = page["name"].as_str().filter(|s| !s.is_empty()) {
             page_names.push(pname.to_owned());
         }
-        let ig_opt = page
+        if let Some(found) = page
             .get("instagram_business_account")
-            .filter(|v| v["id"].is_string())
-            .or_else(|| page.get("connected_instagram_account").filter(|v| v["id"].is_string()));
-        if let Some(ig) = ig_opt
-            && let Some(id) = ig["id"].as_str()
+            .and_then(parse_ig_node)
+            .or_else(|| page.get("connected_instagram_account").and_then(parse_ig_node))
         {
-            let username = ig["username"].as_str().unwrap_or("").to_owned();
-            let name = ig["name"]
-                .as_str()
-                .filter(|s| !s.is_empty())
-                .unwrap_or(if username.is_empty() { "Instagram Account" } else { &username })
-                .to_owned();
-            let handle = if username.is_empty() {
-                String::new()
-            } else {
-                format!("@{username}")
-            };
-            let followers = ig["followers_count"].as_i64();
-            let media = ig["media_count"].as_i64();
-            return Ok((id.to_owned(), name, handle, followers, media));
+            return Ok(found);
         }
     }
+
+    // Fallback: check Meta Business Portfolios (owned_pages / owned_instagram_accounts / instagram_accounts)
+    let biz_path = format!(
+        "/v21.0/me/businesses?fields=id,name,owned_pages%7Bid,name,instagram_business_account%7Bid,username,name,followers_count,media_count%7D,connected_instagram_account%7Bid,username,name,followers_count,media_count%7D%7D,owned_instagram_accounts%7Bid,username,name,followers_count,media_count%7D,instagram_accounts%7Bid,username,name,followers_count,media_count%7D&access_token={}",
+        url_encode(access_token)
+    );
+    if let Ok(bresp) = platform::https_request("graph.facebook.com", "GET", &biz_path, &[], &[], 15_000)
+        && bresp.status == 200
+        && let Ok(bparsed) = serde_json::from_slice::<Value>(&bresp.body)
+        && let Some(businesses) = bparsed["data"].as_array()
+    {
+        for biz in businesses {
+            if let Some(opages) = biz["owned_pages"]["data"].as_array() {
+                for page in opages {
+                    if let Some(pname) = page["name"].as_str().filter(|s| !s.is_empty())
+                        && !page_names.iter().any(|x| x == pname)
+                    {
+                        page_names.push(pname.to_owned());
+                    }
+                    if let Some(found) = page
+                        .get("instagram_business_account")
+                        .and_then(parse_ig_node)
+                        .or_else(|| page.get("connected_instagram_account").and_then(parse_ig_node))
+                    {
+                        return Ok(found);
+                    }
+                }
+            }
+            for key in ["owned_instagram_accounts", "instagram_accounts"] {
+                if let Some(igs) = biz[key]["data"].as_array() {
+                    for ig in igs {
+                        if let Some(found) = parse_ig_node(ig) {
+                            return Ok(found);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if page_names.is_empty() {
-        Err("Facebook login succeeded, but Meta returned 0 Facebook Pages. Make sure you have a Facebook Page linked to your Instagram Professional (Creator/Business) account and check that Page on the Facebook login permission screen.".to_owned())
+        Err("Facebook login succeeded, but Meta returned 0 Facebook Pages. Make sure you check your Facebook Page (e.g. CJ 4 Prez) and Business Portfolio on the Facebook permission screen.".to_owned())
     } else {
         Err(format!(
-            "Facebook login succeeded and found Page(s): {}, but none have an Instagram Professional (Creator/Business) account linked. In the Instagram app go to Settings → Account type and tools → Switch to professional account, then link it to one of those Facebook Pages and reconnect.",
+            "Facebook login succeeded and found Page(s): {}, but none returned a linked Instagram account. Make sure you check both your Facebook Page and Instagram account on the Facebook permission screen.",
             page_names.join(", ")
         ))
     }
