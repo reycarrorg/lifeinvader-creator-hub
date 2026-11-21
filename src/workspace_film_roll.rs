@@ -130,7 +130,7 @@ pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
             [],
         )?;
     }
-    for col in ["yt_video_id", "ig_media_id", "ig_permalink", "tt_publish_id"] {
+    for col in ["yt_video_id", "yt_publish_at", "ig_media_id", "ig_permalink", "tt_publish_id", "x_tweet_id"] {
         if !cols.iter().any(|c| c == col) {
             db.execute(
                 &format!("ALTER TABLE workspace_film_roll ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"),
@@ -143,7 +143,7 @@ pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
         let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
-    for col in ["youtube_video_id", "ig_permalink", "tiktok_publish_id"] {
+    for col in ["youtube_video_id", "ig_permalink", "tiktok_publish_id", "x_tweet_id"] {
         if !hcols.iter().any(|c| c == col) {
             db.execute(
                 &format!("ALTER TABLE workspace_export_history ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"),
@@ -245,6 +245,16 @@ pub(crate) struct ExportRequest {
     watermark_text: Option<String>,
     #[serde(default = "default_wm_pos")]
     watermark_pos: String,
+    #[serde(default)]
+    fade_io: bool,
+    #[serde(default)]
+    vivid_filter: bool,
+    #[serde(default)]
+    speed: Option<f64>,
+    #[serde(default)]
+    srt_text: Option<String>,
+    #[serde(default)]
+    subtitle_style: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -271,6 +281,12 @@ pub(crate) struct BatchExportRequest {
     watermark_text: Option<String>,
     #[serde(default = "default_wm_pos")]
     watermark_pos: String,
+    #[serde(default)]
+    fade_io: bool,
+    #[serde(default)]
+    vivid_filter: bool,
+    #[serde(default)]
+    speed: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -896,6 +912,13 @@ pub(crate) async fn probe_clip(
     })))
 }
 
+fn escape_ffmpeg_subtitles_path(p: &Path) -> String {
+    p.to_string_lossy()
+        .replace('\\', "/")
+        .replace(':', "\\:")
+        .replace('\'', "\\'")
+}
+
 fn run_ffmpeg_once(
     ffmpeg: &Path,
     src: &Path,
@@ -905,9 +928,9 @@ fn run_ffmpeg_once(
     in_ms: Option<u64>,
     out_ms: Option<u64>,
     mute: bool,
-    normalize_audio: bool,
+    audio_filters: &[String],
     encoder: &str,
-    drawtext_filters: &[String],
+    video_filters: &[String],
     target_duration_us: u64,
 ) -> Result<(), String> {
     let mut cmd = std::process::Command::new(ffmpeg);
@@ -931,10 +954,10 @@ fn run_ffmpeg_once(
                 .arg(format!("{:.3}", (end - start) as f64 / 1000.0));
         }
     }
-    let dt_chain = if drawtext_filters.is_empty() {
+    let dt_chain = if video_filters.is_empty() {
         String::new()
     } else {
-        format!(",{}", drawtext_filters.join(","))
+        format!(",{}", video_filters.join(","))
     };
     match framing {
         "center_crop" => {
@@ -943,12 +966,12 @@ fn run_ffmpeg_once(
             ));
         }
         "blurred_fit" => {
-            let fc = if drawtext_filters.is_empty() {
+            let fc = if video_filters.is_empty() {
                 "[0:v]split[bg][fg];[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[b];[fg]scale=1080:1920:force_original_aspect_ratio=decrease[f];[b][f]overlay=(W-w)/2:(H-h)/2[v]".to_owned()
             } else {
                 format!(
                     "[0:v]split[bg][fg];[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[b];[fg]scale=1080:1920:force_original_aspect_ratio=decrease[f];[b][f]overlay=(W-w)/2:(H-h)/2,{}[v]",
-                    drawtext_filters.join(",")
+                    video_filters.join(",")
                 )
             };
             cmd.arg("-filter_complex").arg(fc).arg("-map").arg("[v]");
@@ -957,8 +980,8 @@ fn run_ffmpeg_once(
             }
         }
         _ => {
-            if !drawtext_filters.is_empty() {
-                cmd.arg("-vf").arg(drawtext_filters.join(","));
+            if !video_filters.is_empty() {
+                cmd.arg("-vf").arg(video_filters.join(","));
             }
         }
     }
@@ -1026,8 +1049,8 @@ fn run_ffmpeg_once(
     if mute {
         cmd.arg("-an");
     } else {
-        if normalize_audio {
-            cmd.args(["-af", "loudnorm=I=-14:TP=-1.5:LRA=11"]);
+        if !audio_filters.is_empty() {
+            cmd.args(["-af", &audio_filters.join(",")]);
         }
         cmd.args(["-c:a", "aac", "-b:a", "192k"]);
     }
@@ -1179,7 +1202,6 @@ async fn render_clip_internal(
             .unwrap_or(15_000),
         _ => 15_000,
     };
-    let target_us = target_ms.max(100) * 1000;
 
     if manage_state {
         export_cancel_flag().store(false, Ordering::Relaxed);
@@ -1208,18 +1230,71 @@ async fn render_clip_internal(
     let mute = input.mute;
     let normalize_audio = input.normalize_audio && !mute;
     let use_hw = input.use_hw_encode;
-    let drawtext_filters = build_drawtext_filters(
+    let speed = input
+        .speed
+        .filter(|s| s.is_finite() && *s >= 0.75 && *s <= 1.5)
+        .unwrap_or(1.0);
+    let out_dur_s = (target_ms as f64 / 1000.0) / speed;
+    let effective_target_us = ((out_dur_s * 1_000_000.0).round() as u64).max(100_000);
+
+    let mut video_filters = Vec::new();
+    if input.vivid_filter {
+        video_filters.push("eq=contrast=1.08:saturation=1.18:brightness=0.02,unsharp=3:3:0.5:3:3:0.0".to_owned());
+    }
+    if (speed - 1.0).abs() > 0.01 {
+        video_filters.push(format!("setpts=PTS/{speed:.4}"));
+    }
+    if input.fade_io && out_dur_s > 1.2 {
+        let fade_out_st = (out_dur_s - 0.35).max(0.1);
+        video_filters.push(format!("fade=t=in:st=0:d=0.35,fade=t=out:st={fade_out_st:.3}:d=0.35"));
+    }
+    video_filters.extend(build_drawtext_filters(
         input.hook_text.as_deref(),
         input.watermark_text.as_deref(),
         &input.watermark_pos,
-    );
+    ));
+
+    let temp_srt_path = if let Some(raw_srt) = input.srt_text.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        let srt_file = out_dir.join(format!("sub-{short_id}-{}.srt", chrono::Utc::now().timestamp_millis()));
+        if std::fs::write(&srt_file, raw_srt).is_ok() {
+            let style = match input.subtitle_style.as_deref() {
+                Some("clean_white") => "FontName=Arial,FontSize=20,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=70",
+                _ => "FontName=Arial,FontSize=24,Bold=1,PrimaryColour=&H0000EAFF,OutlineColour=&H00000000,BorderStyle=1,Outline=3,Shadow=1,Alignment=2,MarginV=85",
+            };
+            video_filters.push(format!(
+                "subtitles='{}':force_style='{style}'",
+                escape_ffmpeg_subtitles_path(&srt_file)
+            ));
+            Some(srt_file)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let mut audio_filters = Vec::new();
+    if !mute {
+        if (speed - 1.0).abs() > 0.01 {
+            audio_filters.push(format!("atempo={speed:.4}"));
+        }
+        if normalize_audio {
+            audio_filters.push("loudnorm=I=-14:TP=-1.5:LRA=11".to_owned());
+        }
+        if input.fade_io && out_dur_s > 1.2 {
+            let fade_out_st = (out_dur_s - 0.35).max(0.1);
+            audio_filters.push(format!("afade=t=in:st=0:d=0.35,afade=t=out:st={fade_out_st:.3}:d=0.35"));
+        }
+    }
+
     let src_clone = source_path.clone();
     let tmp_clone = tmp_path.clone();
     let final_clone = final_path.clone();
+    let srt_cleanup = temp_srt_path.clone();
 
     let render = tokio::task::spawn_blocking(move || -> Result<(u64, String), String> {
         let mut chosen_encoder = "libx264".to_owned();
-        if use_hw && let Some(hw) = cached_hw_encoder() {
+        let res = if use_hw && let Some(hw) = cached_hw_encoder() {
             match run_ffmpeg_once(
                 &ffmpeg,
                 &src_clone,
@@ -1229,21 +1304,22 @@ async fn render_clip_internal(
                 in_ms,
                 out_ms,
                 mute,
-                normalize_audio,
+                &audio_filters,
                 &hw,
-                &drawtext_filters,
-                target_us,
+                &video_filters,
+                effective_target_us,
             ) {
                 Ok(()) => {
                     chosen_encoder = hw;
+                    Ok(())
                 }
-                Err(e) if e == "Export cancelled." => return Err(e),
+                Err(e) if e == "Export cancelled." => Err(e),
                 Err(_) => {
-                    // Automatic CPU fallback if GPU encoder fails on this input format/resolution.
                     if let Ok(mut st) = export_state().lock() {
                         st.message = format!("{hw} unavailable for this clip — falling back to libx264…");
                         st.percent = 0;
                     }
+                    chosen_encoder = "libx264 (CPU fallback)".to_owned();
                     run_ffmpeg_once(
                         &ffmpeg,
                         &src_clone,
@@ -1253,12 +1329,11 @@ async fn render_clip_internal(
                         in_ms,
                         out_ms,
                         mute,
-                        normalize_audio,
+                        &audio_filters,
                         "libx264",
-                        &drawtext_filters,
-                        target_us,
-                    )?;
-                    chosen_encoder = "libx264 (CPU fallback)".to_owned();
+                        &video_filters,
+                        effective_target_us,
+                    )
                 }
             }
         } else {
@@ -1271,12 +1346,16 @@ async fn render_clip_internal(
                 in_ms,
                 out_ms,
                 mute,
-                normalize_audio,
+                &audio_filters,
                 "libx264",
-                &drawtext_filters,
-                target_us,
-            )?;
+                &video_filters,
+                effective_target_us,
+            )
+        };
+        if let Some(p) = srt_cleanup {
+            let _ = std::fs::remove_file(p);
         }
+        res?;
         std::fs::rename(&tmp_clone, &final_clone)
             .map_err(|e| format!("Could not finalize exported MP4: {e}"))?;
         let len = std::fs::metadata(&final_clone)
@@ -1511,6 +1590,9 @@ pub(crate) async fn export_batch(
     let hook_text = input.hook_text.clone();
     let watermark_text = input.watermark_text.clone();
     let watermark_pos = input.watermark_pos.clone();
+    let fade_io = input.fade_io;
+    let vivid_filter = input.vivid_filter;
+    let speed = input.speed;
     let app_clone = app.clone();
 
     tokio::spawn(async move {
@@ -1556,6 +1638,11 @@ pub(crate) async fn export_batch(
                 hook_text: hook_text.clone(),
                 watermark_text: watermark_text.clone(),
                 watermark_pos: watermark_pos.clone(),
+                fade_io,
+                vivid_filter,
+                speed,
+                srt_text: None,
+                subtitle_style: None,
             };
             match render_clip_internal(&app_clone, &clip_id, &req, false).await {
                 Ok(_) => completed += 1,
@@ -1668,7 +1755,7 @@ pub(crate) async fn export_history(State(app): State<App>) -> ApiResult<Json<Val
             .prepare(
                 "SELECT id, clip_id, title, source_name, file_name, caption_file, cover_file,
                         framing, quality, in_ms, out_ms, muted, normalized_audio, bytes, exported_at,
-                        youtube_video_id, ig_permalink, tiktok_publish_id
+                        youtube_video_id, ig_permalink, tiktok_publish_id, x_tweet_id
                  FROM workspace_export_history
                  ORDER BY exported_at DESC, id DESC
                  LIMIT 200",
@@ -1682,6 +1769,7 @@ pub(crate) async fn export_history(State(app): State<App>) -> ApiResult<Json<Val
                 let yt_id: String = r.get(15)?;
                 let ig_link: String = r.get(16)?;
                 let tt_id: String = r.get(17)?;
+                let x_id: String = r.get(18)?;
                 Ok(json!({
                     "id": r.get::<_, i64>(0)?,
                     "clip_id": r.get::<_, String>(1)?,
@@ -1702,6 +1790,7 @@ pub(crate) async fn export_history(State(app): State<App>) -> ApiResult<Json<Val
                     "youtube_video_id": if yt_id.is_empty() { None } else { Some(yt_id) },
                     "ig_permalink": if ig_link.is_empty() { None } else { Some(ig_link) },
                     "tiktok_publish_id": if tt_id.is_empty() { None } else { Some(tt_id) },
+                    "x_tweet_id": if x_id.is_empty() { None } else { Some(x_id) },
                 }))
             })
             .map_err(internal)?;
@@ -1993,9 +2082,11 @@ pub(crate) fn rows(app: &App) -> store::Result<Vec<Value>> {
         source_name: String,
         source_platform: String,
         yt_video_id: String,
+        yt_publish_at: String,
         ig_media_id: String,
         ig_permalink: String,
         tt_publish_id: String,
+        x_tweet_id: String,
     }
     let entries: Vec<RollRow> = {
         let db = app.db.lock().map_err(|_| store::Error("storage_unavailable"))?;
@@ -2003,7 +2094,8 @@ pub(crate) fn rows(app: &App) -> store::Result<Vec<Value>> {
             .prepare(
                 "SELECT f.clip_id, f.source_id, f.path, f.title, f.description, f.bytes,
                         f.review_state, f.exported_path, p.name, p.platform,
-                        f.yt_video_id, f.ig_media_id, f.ig_permalink, f.tt_publish_id
+                        f.yt_video_id, f.yt_publish_at, f.ig_media_id, f.ig_permalink,
+                        f.tt_publish_id, f.x_tweet_id
                  FROM workspace_film_roll f
                  JOIN profiles p ON p.id = f.source_id
                  WHERE p.archived = 0 AND p.role = 'source'
@@ -2025,9 +2117,11 @@ pub(crate) fn rows(app: &App) -> store::Result<Vec<Value>> {
                     source_name: r.get(8)?,
                     source_platform: r.get(9)?,
                     yt_video_id: r.get(10)?,
-                    ig_media_id: r.get(11)?,
-                    ig_permalink: r.get(12)?,
-                    tt_publish_id: r.get(13)?,
+                    yt_publish_at: r.get(11)?,
+                    ig_media_id: r.get(12)?,
+                    ig_permalink: r.get(13)?,
+                    tt_publish_id: r.get(14)?,
+                    x_tweet_id: r.get(15)?,
                 })
             })
             .map_err(|_| store::Error("storage_unavailable"))?;
@@ -2069,9 +2163,11 @@ pub(crate) fn rows(app: &App) -> store::Result<Vec<Value>> {
             "exported_file": if has_export { Some(e.exported_path) } else { None },
             "export_url": if has_export { Some(format!("/api/workspace/film-roll/{}/export", e.clip_id)) } else { None },
             "yt_video_id": if e.yt_video_id.is_empty() { None } else { Some(e.yt_video_id) },
+            "yt_publish_at": if e.yt_publish_at.is_empty() { None } else { Some(e.yt_publish_at) },
             "ig_media_id": if e.ig_media_id.is_empty() { None } else { Some(e.ig_media_id) },
             "ig_permalink": if e.ig_permalink.is_empty() { None } else { Some(e.ig_permalink) },
             "tt_publish_id": if e.tt_publish_id.is_empty() { None } else { Some(e.tt_publish_id) },
+            "x_tweet_id": if e.x_tweet_id.is_empty() { None } else { Some(e.x_tweet_id) },
             "from_sources": true,
         });
         if !e.description.is_empty() {
@@ -2103,4 +2199,176 @@ pub(crate) fn resolve_video(app: &App, clip_id: &str) -> Option<PathBuf> {
 
 pub(crate) fn exists(app: &App, clip_id: &str) -> bool {
     resolve_source_ref(app, clip_id).is_some()
+}
+
+pub(crate) async fn filmstrip(
+    State(app): State<App>,
+    AxumPath(clip_id): AxumPath<String>,
+) -> Response {
+    if !crate::workspace_media::hex(&clip_id) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let Some(video_path) = resolve_video(&app, &clip_id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let cache_dir = app.media.join("thumbnail-cache");
+    let strip_path = cache_dir.join(format!("filmstrip_{clip_id}.jpg"));
+    if let Ok(bytes) = std::fs::read(&strip_path)
+        && bytes.len() > 256
+    {
+        return (
+            [
+                (header::CONTENT_TYPE, "image/jpeg"),
+                (header::CACHE_CONTROL, "public, max-age=3600"),
+            ],
+            bytes,
+        )
+            .into_response();
+    }
+    let Some(ffmpeg) = find_ffmpeg() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let dur_ms = probed_duration_ms(&app, &clip_id).unwrap_or(16_000);
+    let dur_s = (dur_ms as f64 / 1000.0).max(1.0);
+    let fps = (8.0 / dur_s).clamp(0.05, 8.0);
+    let out_clone = strip_path.clone();
+    let ok = tokio::task::spawn_blocking(move || -> Option<Vec<u8>> {
+        let _ = std::fs::create_dir_all(&cache_dir);
+        let tmp = cache_dir.join(format!("filmstrip_{clip_id}.tmp.jpg"));
+        let vf = format!(
+            "fps={fps:.4},scale=96:54:force_original_aspect_ratio=increase,crop=96:54,tile=8x1"
+        );
+        let mut cmd = std::process::Command::new(&ffmpeg);
+        cmd.args(["-y", "-hide_banner", "-loglevel", "error", "-i"])
+            .arg(&video_path)
+            .args(["-vf", &vf, "-frames:v", "1", "-q:v", "6"])
+            .arg(&tmp)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        let status = cmd.status().ok()?;
+        if !status.success() {
+            let _ = std::fs::remove_file(&tmp);
+            return None;
+        }
+        let bytes = std::fs::read(&tmp).ok()?;
+        let _ = std::fs::rename(&tmp, &out_clone);
+        Some(bytes)
+    })
+    .await
+    .ok()
+    .flatten();
+    match ok {
+        Some(bytes) if bytes.len() > 256 => (
+            [
+                (header::CONTENT_TYPE, "image/jpeg"),
+                (header::CACHE_CONTROL, "public, max-age=3600"),
+            ],
+            bytes,
+        )
+            .into_response(),
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+pub(crate) async fn detect_silence(
+    State(app): State<App>,
+    AxumPath(clip_id): AxumPath<String>,
+) -> ApiResult<Json<Value>> {
+    if !crate::workspace_media::hex(&clip_id) {
+        return Err(bad("Invalid clip ID."));
+    }
+    let Some(video_path) = resolve_video(&app, &clip_id) else {
+        return Err((StatusCode::NOT_FOUND, "Source video is unavailable.".into()));
+    };
+    let Some(ffmpeg) = find_ffmpeg() else {
+        return Err(bad("FFmpeg was not found."));
+    };
+    let known_dur_ms = probed_duration_ms(&app, &clip_id);
+    let result = tokio::task::spawn_blocking(move || -> Result<Value, String> {
+        let mut cmd = std::process::Command::new(&ffmpeg);
+        cmd.args(["-hide_banner", "-i"])
+            .arg(&video_path)
+            .args(["-af", "silencedetect=noise=-35dB:d=0.35", "-f", "null", "-"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        let out = cmd
+            .output()
+            .map_err(|e| format!("Failed to run silence detection: {e}"))?;
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let mut segments: Vec<(f64, Option<f64>)> = Vec::new();
+        let mut parsed_dur_s: Option<f64> = known_dur_ms.map(|d| d as f64 / 1000.0);
+        for line in stderr.lines() {
+            if parsed_dur_s.is_none()
+                && let Some(pos) = line.find("Duration:")
+            {
+                let rest = line[pos + 9..].trim();
+                if let Some(hms) = rest.split(',').next() {
+                    let parts: Vec<f64> = hms.trim().split(':').filter_map(|p| p.parse().ok()).collect();
+                    if parts.len() == 3 {
+                        parsed_dur_s = Some(parts[0] * 3600.0 + parts[1] * 60.0 + parts[2]);
+                    }
+                }
+            }
+            if let Some(idx) = line.find("silence_start:") {
+                if let Some(num) = line[idx + 14..].split_whitespace().next().and_then(|s| s.parse::<f64>().ok()) {
+                    segments.push((num.max(0.0), None));
+                }
+            } else if let Some(idx) = line.find("silence_end:")
+                && let Some(num) = line[idx + 12..].split_whitespace().next().and_then(|s| s.parse::<f64>().ok())
+                && let Some(last) = segments.last_mut()
+                && last.1.is_none()
+            {
+                last.1 = Some(num.max(last.0));
+            }
+        }
+        let dur_s = parsed_dur_s.unwrap_or(0.0);
+        let dur_ms = (dur_s * 1000.0).round() as u64;
+        let mut in_ms = 0u64;
+        let mut out_ms = dur_ms;
+        if let Some((s, Some(e))) = segments.first()
+            && *s <= 0.25
+            && *e < dur_s - 0.5
+        {
+            in_ms = ((*e - 0.08).max(0.0) * 1000.0).round() as u64;
+        }
+        if let Some((s, end_opt)) = segments.last() {
+            let touches_end = end_opt.map(|e| e >= dur_s - 0.35).unwrap_or(true);
+            if touches_end && *s > (in_ms as f64 / 1000.0) + 0.5 {
+                out_ms = ((*s + 0.08).min(dur_s) * 1000.0).round() as u64;
+            }
+        }
+        let seg_json: Vec<Value> = segments
+            .iter()
+            .map(|(s, e)| {
+                json!({
+                    "start_ms": (*s * 1000.0).round() as u64,
+                    "end_ms": (e.unwrap_or(dur_s) * 1000.0).round() as u64
+                })
+            })
+            .collect();
+        Ok(json!({
+            "duration_ms": dur_ms,
+            "suggested_in_ms": in_ms,
+            "suggested_out_ms": out_ms,
+            "trimmed_start_ms": in_ms,
+            "trimmed_end_ms": dur_ms.saturating_sub(out_ms),
+            "silence_segments": seg_json
+        }))
+    })
+    .await
+    .map_err(internal)?
+    .map_err(bad)?;
+    Ok(Json(result))
 }

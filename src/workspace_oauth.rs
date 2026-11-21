@@ -108,6 +108,23 @@ fn base64url(bytes: &[u8]) -> String {
     out
 }
 
+fn base64_std(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    let mut i = 0;
+    while i < bytes.len() {
+        let b0 = bytes[i];
+        let b1 = if i + 1 < bytes.len() { bytes[i + 1] } else { 0 };
+        let b2 = if i + 2 < bytes.len() { bytes[i + 2] } else { 0 };
+        out.push(TABLE[(b0 >> 2) as usize] as char);
+        out.push(TABLE[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
+        out.push(if i + 1 < bytes.len() { TABLE[(((b1 & 0x0f) << 2) | (b2 >> 6)) as usize] as char } else { '=' });
+        out.push(if i + 2 < bytes.len() { TABLE[(b2 & 0x3f) as usize] as char } else { '=' });
+        i += 3;
+    }
+    out
+}
+
 fn random_token() -> String {
     format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple())
 }
@@ -421,6 +438,7 @@ fn client_target(provider: &str) -> Option<&'static str> {
         "youtube" => Some("Snapmatic/OAuth/YouTube/Client"),
         "instagram" => Some("Snapmatic/OAuth/Instagram/Client"),
         "tiktok" => Some("Snapmatic/OAuth/TikTok/Client"),
+        "x" => Some("Snapmatic/OAuth/X/Client"),
         _ => None,
     }
 }
@@ -430,6 +448,7 @@ fn token_target(provider: &str) -> Option<&'static str> {
         "youtube" => Some("Snapmatic/OAuth/YouTube/Tokens"),
         "instagram" => Some("Snapmatic/OAuth/Instagram/Tokens"),
         "tiktok" => Some("Snapmatic/OAuth/TikTok/Tokens"),
+        "x" => Some("Snapmatic/OAuth/X/Tokens"),
         _ => None,
     }
 }
@@ -569,6 +588,16 @@ pub(crate) struct TikTokDraftUploadInput {
     use_source: bool,
 }
 
+#[derive(Deserialize)]
+pub(crate) struct XVideoPostInput {
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    use_source: bool,
+    #[serde(default)]
+    confirm_publish: bool,
+}
+
 fn default_true() -> bool {
     true
 }
@@ -618,6 +647,8 @@ pub(crate) async fn status(State(app): State<App>, headers: HeaderMap) -> ApiRes
     let ig_tokens = platform::vault_read(token_target("instagram").unwrap());
     let tt_client = platform::vault_read(client_target("tiktok").unwrap());
     let tt_tokens = platform::vault_read(token_target("tiktok").unwrap());
+    let x_client = platform::vault_read(client_target("x").unwrap());
+    let x_tokens = platform::vault_read(token_target("x").unwrap());
 
     let build_provider = |id: &str, client: Option<Value>, tokens: Option<Value>| -> Value {
         let meta = rows.get(id);
@@ -646,6 +677,7 @@ pub(crate) async fn status(State(app): State<App>, headers: HeaderMap) -> ApiRes
             "account_id": meta.and_then(|m| m["account_id"].as_str()).unwrap_or(""),
             "account_name": meta.and_then(|m| m["account_name"].as_str()).unwrap_or(""),
             "handle": meta.and_then(|m| m["handle"].as_str()).unwrap_or(""),
+            "avatar_url": meta.and_then(|m| m["avatar_url"].as_str()).unwrap_or(""),
             "subscribers": meta.and_then(|m| m["subscribers"].as_i64()),
             "media_count": meta.and_then(|m| m["media_count"].as_i64()),
             "expires_at": meta.and_then(|m| m["expires_at"].as_i64()),
@@ -659,6 +691,7 @@ pub(crate) async fn status(State(app): State<App>, headers: HeaderMap) -> ApiRes
         "youtube": build_provider("youtube", yt_client, yt_tokens),
         "instagram": build_provider("instagram", ig_client, ig_tokens),
         "tiktok": build_provider("tiktok", tt_client, tt_tokens),
+        "x": build_provider("x", x_client, x_tokens),
         "public_posting_enabled": false
     })))
 }
@@ -668,7 +701,7 @@ pub(crate) async fn save_config(
     Json(input): Json<ConfigInput>,
 ) -> ApiResult<Json<Value>> {
     let Some(target) = client_target(&provider) else {
-        return Err(bad("Choose youtube, instagram, or tiktok."));
+        return Err(bad("Choose youtube, instagram, tiktok, or x."));
     };
     let (client_id, client_secret) = if let Some(raw) = input
         .client_json
@@ -707,9 +740,11 @@ pub(crate) async fn save_config(
             .client_secret
             .as_deref()
             .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| bad("Client Secret / App Secret is required."))?
+            .unwrap_or("")
             .to_owned();
+        if provider != "x" && secret.is_empty() {
+            return Err(bad("Client Secret / App Secret is required."));
+        }
         (id, secret)
     };
 
@@ -739,7 +774,7 @@ pub(crate) async fn start_oauth(
     headers: HeaderMap,
 ) -> ApiResult<Json<Value>> {
     let Some(target) = client_target(&provider) else {
-        return Err(bad("Choose youtube, instagram, or tiktok."));
+        return Err(bad("Choose youtube, instagram, tiktok, or x."));
     };
     let client = platform::vault_read(target)
         .ok_or_else(|| bad("Save your OAuth Client ID and Secret first."))?;
@@ -792,6 +827,14 @@ pub(crate) async fn start_oauth(
             url_encode(&state),
             url_encode(&challenge_hex),
         ),
+        "x" => format!(
+            "https://x.com/i/oauth2/authorize?response_type=code&client_id={}&redirect_uri={}&scope={}&state={}&code_challenge={}&code_challenge_method=S256",
+            url_encode(client_id),
+            url_encode(&redirect_uri),
+            url_encode("tweet.read tweet.write users.read media.write offline.access"),
+            url_encode(&state),
+            url_encode(&challenge),
+        ),
         _ => return Err(bad("Unsupported provider.")),
     };
 
@@ -824,7 +867,7 @@ a{{display:inline-block;padding:9px 16px;border-radius:7px;border:1px solid #29B
     ))
 }
 
-fn fetch_youtube_channel(access_token: &str) -> Result<(String, String, String, Option<i64>, Option<i64>), String> {
+fn fetch_youtube_channel(access_token: &str) -> Result<(String, String, String, String, Option<i64>, Option<i64>), String> {
     let auth = format!("Bearer {access_token}");
     let resp = platform::https_request(
         "www.googleapis.com",
@@ -849,13 +892,18 @@ fn fetch_youtube_channel(access_token: &str) -> Result<(String, String, String, 
     let id = ch["id"].as_str().unwrap_or("").to_owned();
     let title = ch["snippet"]["title"].as_str().unwrap_or("YouTube Channel").to_owned();
     let handle = ch["snippet"]["customUrl"].as_str().unwrap_or("").to_owned();
+    let avatar = ch["snippet"]["thumbnails"]["default"]["url"]
+        .as_str()
+        .or_else(|| ch["snippet"]["thumbnails"]["medium"]["url"].as_str())
+        .unwrap_or("")
+        .to_owned();
     let subs = ch["statistics"]["subscriberCount"]
         .as_str()
         .and_then(|s| s.parse::<i64>().ok());
     let vids = ch["statistics"]["videoCount"]
         .as_str()
         .and_then(|s| s.parse::<i64>().ok());
-    Ok((id, title, handle, subs, vids))
+    Ok((id, title, handle, avatar, subs, vids))
 }
 
 fn refresh_youtube_access_token() -> Result<(String, i64), String> {
@@ -916,7 +964,7 @@ fn refresh_youtube_access_token() -> Result<(String, i64), String> {
     Ok((new_access, new_exp))
 }
 
-fn fetch_tiktok_user(access_token: &str) -> Result<(String, String, String, Option<i64>, Option<i64>), String> {
+fn fetch_tiktok_user(access_token: &str) -> Result<(String, String, String, String, Option<i64>, Option<i64>), String> {
     let auth = format!("Bearer {access_token}");
     let paths = [
         "/v2/user/info/?fields=open_id,display_name,username,avatar_url,follower_count,likes_count,video_count",
@@ -946,9 +994,10 @@ fn fetch_tiktok_user(access_token: &str) -> Result<(String, String, String, Opti
             } else {
                 format!("@{}", username.trim_start_matches('@'))
             };
+            let avatar = user["avatar_url"].as_str().unwrap_or("").to_owned();
             let followers = user["follower_count"].as_i64();
             let videos = user["video_count"].as_i64();
-            return Ok((open_id, display, handle, followers, videos));
+            return Ok((open_id, display, handle, avatar, followers, videos));
         }
         last_err = parsed["error"]["message"]
             .as_str()
@@ -1038,7 +1087,100 @@ fn parse_tiktok_upload_url(url: &str) -> Result<(String, String), String> {
     Ok((host.to_owned(), format!("/{path_part}")))
 }
 
-fn parse_ig_node(ig: &Value) -> Option<(String, String, String, Option<i64>, Option<i64>)> {
+fn fetch_x_user(access_token: &str) -> Result<(String, String, String, String, Option<i64>, Option<i64>), String> {
+    let auth = format!("Bearer {access_token}");
+    let resp = platform::https_request(
+        "api.x.com",
+        "GET",
+        "/2/users/me?user.fields=profile_image_url,public_metrics,username,name",
+        &[("Authorization", &auth)],
+        &[],
+        15_000,
+    )?;
+    let parsed: Value = serde_json::from_slice(&resp.body)
+        .map_err(|_| "Unreadable response from X API.".to_owned())?;
+    if resp.status != 200 {
+        let msg = parsed["detail"]
+            .as_str()
+            .or_else(|| parsed["title"].as_str())
+            .unwrap_or("X API rejected the request.");
+        return Err(msg.to_owned());
+    }
+    let u = &parsed["data"];
+    let id = u["id"].as_str().unwrap_or("").to_owned();
+    let name = u["name"].as_str().unwrap_or("X Account").to_owned();
+    let uname = u["username"].as_str().unwrap_or("");
+    let handle = if uname.is_empty() {
+        String::new()
+    } else {
+        format!("@{}", uname.trim_start_matches('@'))
+    };
+    let avatar = u["profile_image_url"].as_str().unwrap_or("").to_owned();
+    let followers = u["public_metrics"]["followers_count"].as_i64();
+    let tweets = u["public_metrics"]["tweet_count"].as_i64();
+    Ok((id, name, handle, avatar, followers, tweets))
+}
+
+fn refresh_x_access_token() -> Result<(String, i64), String> {
+    let client = platform::vault_read(client_target("x").unwrap())
+        .ok_or_else(|| "X OAuth client not configured.".to_owned())?;
+    let tokens = platform::vault_read(token_target("x").unwrap())
+        .ok_or_else(|| "X is not connected.".to_owned())?;
+    let expires_at = tokens["expires_at"].as_i64().unwrap_or(0);
+    if expires_at > now_unix() + 120
+        && let Some(tok) = tokens["access_token"].as_str().filter(|s| !s.is_empty())
+    {
+        return Ok((tok.to_owned(), expires_at));
+    }
+    let refresh = tokens["refresh_token"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Missing X refresh token. Please reconnect X.".to_owned())?;
+    let cid = client["client_id"].as_str().unwrap_or("");
+    let csec = client["client_secret"].as_str().unwrap_or("");
+    let body = format!(
+        "refresh_token={}&grant_type=refresh_token&client_id={}",
+        url_encode(refresh),
+        url_encode(cid),
+    );
+    let basic_hdr = if !csec.is_empty() {
+        Some(format!("Basic {}", base64_std(format!("{cid}:{csec}").as_bytes())))
+    } else {
+        None
+    };
+    let mut hdrs: Vec<(&str, &str)> = vec![("Content-Type", "application/x-www-form-urlencoded")];
+    if let Some(ref b) = basic_hdr {
+        hdrs.push(("Authorization", b.as_str()));
+    }
+    let resp = platform::https_request("api.x.com", "POST", "/2/oauth2/token", &hdrs, body.as_bytes(), 15_000)?;
+    let parsed: Value = serde_json::from_slice(&resp.body)
+        .map_err(|_| "Unreadable response from X token refresh.".to_owned())?;
+    if resp.status != 200 || parsed["access_token"].as_str().unwrap_or("").is_empty() {
+        let msg = parsed["error_description"]
+            .as_str()
+            .or_else(|| parsed["error"].as_str())
+            .unwrap_or("X rejected token refresh.");
+        return Err(msg.to_owned());
+    }
+    let new_access = parsed["access_token"].as_str().unwrap_or("").to_owned();
+    let new_refresh = parsed["refresh_token"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(refresh)
+        .to_owned();
+    let new_exp = now_unix() + parsed["expires_in"].as_i64().unwrap_or(7200);
+    platform::vault_write(
+        token_target("x").unwrap(),
+        &json!({
+            "access_token": new_access,
+            "refresh_token": new_refresh,
+            "expires_at": new_exp,
+        }),
+    )?;
+    Ok((new_access, new_exp))
+}
+
+fn parse_ig_node(ig: &Value) -> Option<(String, String, String, String, Option<i64>, Option<i64>)> {
     let id = ig["id"].as_str().filter(|s| !s.is_empty())?;
     let username = ig["username"].as_str().unwrap_or("").to_owned();
     let name = ig["name"]
@@ -1051,14 +1193,15 @@ fn parse_ig_node(ig: &Value) -> Option<(String, String, String, Option<i64>, Opt
     } else {
         format!("@{username}")
     };
+    let avatar = ig["profile_picture_url"].as_str().unwrap_or("").to_owned();
     let followers = ig["followers_count"].as_i64();
     let media = ig["media_count"].as_i64();
-    Some((id.to_owned(), name, handle, followers, media))
+    Some((id.to_owned(), name, handle, avatar, followers, media))
 }
 
-fn fetch_instagram_business_account(access_token: &str) -> Result<(String, String, String, Option<i64>, Option<i64>), String> {
+fn fetch_instagram_business_account(access_token: &str) -> Result<(String, String, String, String, Option<i64>, Option<i64>), String> {
     let path = format!(
-        "/v21.0/me/accounts?fields=id,name,instagram_business_account%7Bid,username,name,followers_count,media_count%7D,connected_instagram_account%7Bid,username,name,followers_count,media_count%7D&access_token={}",
+        "/v21.0/me/accounts?fields=id,name,instagram_business_account%7Bid,username,name,profile_picture_url,followers_count,media_count%7D,connected_instagram_account%7Bid,username,name,profile_picture_url,followers_count,media_count%7D&access_token={}",
         url_encode(access_token)
     );
     let resp = platform::https_request("graph.facebook.com", "GET", &path, &[], &[], 15_000)?;
@@ -1087,7 +1230,7 @@ fn fetch_instagram_business_account(access_token: &str) -> Result<(String, Strin
 
     // Fallback: check Meta Business Portfolios (owned_pages / owned_instagram_accounts / instagram_accounts)
     let biz_path = format!(
-        "/v21.0/me/businesses?fields=id,name,owned_pages%7Bid,name,instagram_business_account%7Bid,username,name,followers_count,media_count%7D,connected_instagram_account%7Bid,username,name,followers_count,media_count%7D%7D,owned_instagram_accounts%7Bid,username,name,followers_count,media_count%7D,instagram_accounts%7Bid,username,name,followers_count,media_count%7D&access_token={}",
+        "/v21.0/me/businesses?fields=id,name,owned_pages%7Bid,name,instagram_business_account%7Bid,username,name,profile_picture_url,followers_count,media_count%7D,connected_instagram_account%7Bid,username,name,profile_picture_url,followers_count,media_count%7D%7D,owned_instagram_accounts%7Bid,username,name,profile_picture_url,followers_count,media_count%7D,instagram_accounts%7Bid,username,name,profile_picture_url,followers_count,media_count%7D&access_token={}",
         url_encode(access_token)
     );
     if let Ok(bresp) = platform::https_request("graph.facebook.com", "GET", &biz_path, &[], &[], 15_000)
@@ -1217,7 +1360,7 @@ pub(crate) async fn callback(
                     "expires_at": exp_at,
                 }),
             )?;
-            let (ch_id, ch_name, ch_handle, subs, vids) = fetch_youtube_channel(&access)?;
+            let (ch_id, ch_name, ch_handle, ch_avatar, subs, vids) = fetch_youtube_channel(&access)?;
             save_account_row(
                 &app_clone,
                 "youtube",
@@ -1225,7 +1368,7 @@ pub(crate) async fn callback(
                 &ch_id,
                 &ch_name,
                 &ch_handle,
-                "",
+                &ch_avatar,
                 subs,
                 vids,
                 Some(exp_at),
@@ -1282,8 +1425,8 @@ pub(crate) async fn callback(
                     "open_id": open_id,
                 }),
             )?;
-            let (uid, display, handle, followers, vids) = fetch_tiktok_user(&access)
-                .unwrap_or_else(|_| (open_id.clone(), "TikTok Account".to_owned(), String::new(), None, None));
+            let (uid, display, handle, avatar, followers, vids) = fetch_tiktok_user(&access)
+                .unwrap_or_else(|_| (open_id.clone(), "TikTok Account".to_owned(), String::new(), String::new(), None, None));
             let acct_id = if uid.is_empty() { open_id } else { uid };
             save_account_row(
                 &app_clone,
@@ -1292,7 +1435,7 @@ pub(crate) async fn callback(
                 &acct_id,
                 &display,
                 &handle,
-                "",
+                &avatar,
                 followers,
                 vids,
                 Some(exp_at),
@@ -1306,6 +1449,54 @@ pub(crate) async fn callback(
                 "Connected TikTok account {display}{}.",
                 if handle.is_empty() { String::new() } else { format!(" ({handle})") }
             ))
+        } else if provider_clone == "x" {
+            let body = format!(
+                "code={}&grant_type=authorization_code&client_id={}&redirect_uri={}&code_verifier={}",
+                url_encode(&code),
+                url_encode(&client_id),
+                url_encode(&pending.redirect_uri),
+                url_encode(&pending.code_verifier),
+            );
+            let basic_hdr = if !client_secret.is_empty() {
+                Some(format!("Basic {}", base64_std(format!("{client_id}:{client_secret}").as_bytes())))
+            } else {
+                None
+            };
+            let mut hdrs: Vec<(&str, &str)> = vec![("Content-Type", "application/x-www-form-urlencoded")];
+            if let Some(ref b) = basic_hdr {
+                hdrs.push(("Authorization", b.as_str()));
+            }
+            let resp = platform::https_request("api.x.com", "POST", "/2/oauth2/token", &hdrs, body.as_bytes(), 15_000)?;
+            let parsed: Value = serde_json::from_slice(&resp.body)
+                .map_err(|_| "Unreadable response from X OAuth.".to_owned())?;
+            let access = parsed["access_token"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    parsed["error_description"]
+                        .as_str()
+                        .or_else(|| parsed["error"].as_str())
+                        .unwrap_or("X rejected the authorization code.")
+                        .to_owned()
+                })?
+                .to_owned();
+            let refresh = parsed["refresh_token"].as_str().unwrap_or("").to_owned();
+            let exp_at = now_unix() + parsed["expires_in"].as_i64().unwrap_or(7200);
+            platform::vault_write(
+                t_target,
+                &json!({
+                    "access_token": access,
+                    "refresh_token": refresh,
+                    "expires_at": exp_at,
+                }),
+            )?;
+            let (uid, name, handle, avatar, followers, tweets) = fetch_x_user(&access)?;
+            save_account_row(&app_clone, "x", "connected", &uid, &name, &handle, &avatar, followers, tweets, Some(exp_at), "")?;
+            if !handle.is_empty() {
+                let x_url = format!("https://x.com/{}", handle.trim_start_matches('@'));
+                ensure_destination_profile(&app_clone, "x", &name, &x_url);
+            }
+            Ok(format!("Connected X account {name} ({handle})."))
         } else {
             let path = format!(
                 "/v21.0/oauth/access_token?client_id={}&redirect_uri={}&client_secret={}&code={}",
@@ -1348,7 +1539,7 @@ pub(crate) async fn callback(
                 t_target,
                 &json!({ "access_token": final_tok, "expires_at": exp_at }),
             )?;
-            let (ig_id, ig_name, ig_handle, followers, media) = fetch_instagram_business_account(&final_tok)?;
+            let (ig_id, ig_name, ig_handle, ig_avatar, followers, media) = fetch_instagram_business_account(&final_tok)?;
             save_account_row(
                 &app_clone,
                 "instagram",
@@ -1356,7 +1547,7 @@ pub(crate) async fn callback(
                 &ig_id,
                 &ig_name,
                 &ig_handle,
-                "",
+                &ig_avatar,
                 followers,
                 media,
                 Some(exp_at),
@@ -1383,30 +1574,35 @@ pub(crate) async fn refresh(
     State(app): State<App>,
     AxumPath(provider): AxumPath<String>,
 ) -> ApiResult<Json<Value>> {
-    if !matches!(provider.as_str(), "youtube" | "instagram" | "tiktok") {
-        return Err(bad("Choose youtube, instagram, or tiktok."));
+    if !matches!(provider.as_str(), "youtube" | "instagram" | "tiktok" | "x") {
+        return Err(bad("Choose youtube, instagram, tiktok, or x."));
     }
     let app_clone = app.clone();
     let prov = provider.clone();
     let result = tokio::task::spawn_blocking(move || -> Result<Value, String> {
         if prov == "youtube" {
             let (tok, exp) = refresh_youtube_access_token()?;
-            let (id, name, handle, subs, vids) = fetch_youtube_channel(&tok)?;
-            save_account_row(&app_clone, "youtube", "connected", &id, &name, &handle, "", subs, vids, Some(exp), "")?;
-            Ok(json!({ "provider": "youtube", "connected": true, "account_name": name, "handle": handle, "subscribers": subs, "media_count": vids, "expires_at": exp }))
+            let (id, name, handle, avatar, subs, vids) = fetch_youtube_channel(&tok)?;
+            save_account_row(&app_clone, "youtube", "connected", &id, &name, &handle, &avatar, subs, vids, Some(exp), "")?;
+            Ok(json!({ "provider": "youtube", "connected": true, "account_name": name, "handle": handle, "avatar_url": avatar, "subscribers": subs, "media_count": vids, "expires_at": exp }))
         } else if prov == "tiktok" {
             let (tok, exp) = refresh_tiktok_access_token()?;
-            let (id, name, handle, followers, vids) = fetch_tiktok_user(&tok)?;
-            save_account_row(&app_clone, "tiktok", "connected", &id, &name, &handle, "", followers, vids, Some(exp), "")?;
-            Ok(json!({ "provider": "tiktok", "connected": true, "account_name": name, "handle": handle, "subscribers": followers, "media_count": vids, "expires_at": exp }))
+            let (id, name, handle, avatar, followers, vids) = fetch_tiktok_user(&tok)?;
+            save_account_row(&app_clone, "tiktok", "connected", &id, &name, &handle, &avatar, followers, vids, Some(exp), "")?;
+            Ok(json!({ "provider": "tiktok", "connected": true, "account_name": name, "handle": handle, "avatar_url": avatar, "subscribers": followers, "media_count": vids, "expires_at": exp }))
+        } else if prov == "x" {
+            let (tok, exp) = refresh_x_access_token()?;
+            let (id, name, handle, avatar, followers, tweets) = fetch_x_user(&tok)?;
+            save_account_row(&app_clone, "x", "connected", &id, &name, &handle, &avatar, followers, tweets, Some(exp), "")?;
+            Ok(json!({ "provider": "x", "connected": true, "account_name": name, "handle": handle, "avatar_url": avatar, "subscribers": followers, "media_count": tweets, "expires_at": exp }))
         } else {
             let tokens = platform::vault_read(token_target("instagram").unwrap())
                 .ok_or_else(|| "Instagram is not connected.".to_owned())?;
             let tok = tokens["access_token"].as_str().ok_or_else(|| "Missing Instagram token.".to_owned())?;
             let exp = tokens["expires_at"].as_i64();
-            let (id, name, handle, followers, media) = fetch_instagram_business_account(tok)?;
-            save_account_row(&app_clone, "instagram", "connected", &id, &name, &handle, "", followers, media, exp, "")?;
-            Ok(json!({ "provider": "instagram", "connected": true, "account_name": name, "handle": handle, "subscribers": followers, "media_count": media, "expires_at": exp }))
+            let (id, name, handle, avatar, followers, media) = fetch_instagram_business_account(tok)?;
+            save_account_row(&app_clone, "instagram", "connected", &id, &name, &handle, &avatar, followers, media, exp, "")?;
+            Ok(json!({ "provider": "instagram", "connected": true, "account_name": name, "handle": handle, "avatar_url": avatar, "subscribers": followers, "media_count": media, "expires_at": exp }))
         }
     })
     .await
@@ -1427,7 +1623,7 @@ pub(crate) async fn disconnect(
     Json(input): Json<DisconnectInput>,
 ) -> ApiResult<Json<Value>> {
     let Some(t_target) = token_target(&provider) else {
-        return Err(bad("Choose youtube, instagram, or tiktok."));
+        return Err(bad("Choose youtube, instagram, tiktok, or x."));
     };
     platform::vault_delete(t_target);
     if input.clear_config
@@ -1698,10 +1894,11 @@ pub(crate) async fn upload_youtube_private_draft(
     .map_err(bad)?;
 
     let studio_url = format!("https://studio.youtube.com/video/{video_id}/edit");
+    let sched_str = publish_at.as_deref().unwrap_or("");
     if let Ok(db) = app.db.lock() {
         let _ = db.execute(
-            "UPDATE workspace_film_roll SET yt_video_id=?1 WHERE clip_id=?2",
-            params![video_id, clip_id],
+            "UPDATE workspace_film_roll SET yt_video_id=?1, yt_publish_at=?2 WHERE clip_id=?3",
+            params![video_id, sched_str, clip_id],
         );
         let _ = db.execute(
             "UPDATE workspace_export_history SET youtube_video_id=?1 WHERE id=(SELECT id FROM workspace_export_history WHERE clip_id=?2 ORDER BY id DESC LIMIT 1)",
@@ -2073,6 +2270,181 @@ pub(crate) async fn upload_tiktok_inbox_draft(
     })))
 }
 
+pub(crate) async fn post_x_video(
+    State(app): State<App>,
+    AxumPath(clip_id): AxumPath<String>,
+    Json(input): Json<XVideoPostInput>,
+) -> ApiResult<Json<Value>> {
+    if !input.confirm_publish {
+        return Err(bad("Explicit publish confirmation is required before posting to X."));
+    }
+    if !crate::workspace_media::hex(&clip_id) {
+        return Err(bad("Invalid clip ID."));
+    }
+    let (file_path, fallback_title) = resolve_upload_file(&app, &clip_id, input.use_source)?;
+    let meta = std::fs::metadata(&file_path).map_err(internal)?;
+    if meta.len() == 0 || meta.len() > 250 * 1024 * 1024 {
+        return Err(bad("X video must be between 1 byte and 250 MiB."));
+    }
+    let text: String = input
+        .text
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&fallback_title)
+        .chars()
+        .take(280)
+        .collect();
+
+    let tweet_id = tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let (access_token, _) = refresh_x_access_token()?;
+        let auth = format!("Bearer {access_token}");
+        let video_bytes = std::fs::read(&file_path).map_err(|e| format!("Could not read MP4: {e}"))?;
+        let total = video_bytes.len();
+
+        // Step 1: Initialize X v2 chunked media upload
+        let init_body = serde_json::to_vec(&json!({
+            "media_type": "video/mp4",
+            "total_bytes": total,
+            "media_category": "tweet_video"
+        }))
+        .map_err(|e| e.to_string())?;
+        let init_resp = platform::https_request(
+            "api.x.com",
+            "POST",
+            "/2/media/upload/initialize",
+            &[
+                ("Authorization", &auth),
+                ("Content-Type", "application/json"),
+            ],
+            &init_body,
+            20_000,
+        )?;
+        let init_val: Value = serde_json::from_slice(&init_resp.body).unwrap_or_default();
+        if !matches!(init_resp.status, 200 | 201 | 202) {
+            let msg = init_val["detail"]
+                .as_str()
+                .or_else(|| init_val["title"].as_str())
+                .unwrap_or("X rejected media upload initialization.");
+            return Err(msg.to_owned());
+        }
+        let media_id = init_val["data"]["id"]
+            .as_str()
+            .or_else(|| init_val["media_id_string"].as_str())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "X did not return a media ID.".to_owned())?
+            .to_owned();
+
+        // Step 2: Append 4 MiB chunks as multipart/form-data
+        let chunk_size = 4 * 1024 * 1024;
+        let boundary = format!("SnapmaticX{}", random_token());
+        let mut seg_idx = 0usize;
+        let mut offset = 0usize;
+        while offset < total {
+            let end = (offset + chunk_size).min(total);
+            let mut body = Vec::with_capacity((end - offset) + 512);
+            body.extend_from_slice(
+                format!(
+                    "--{boundary}\r\nContent-Disposition: form-data; name=\"segment_index\"\r\n\r\n{seg_idx}\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"media\"; filename=\"clip.mp4\"\r\nContent-Type: video/mp4\r\n\r\n"
+                )
+                .as_bytes(),
+            );
+            body.extend_from_slice(&video_bytes[offset..end]);
+            body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+            let ct = format!("multipart/form-data; boundary={boundary}");
+            let ap_path = format!("/2/media/upload/{}/append", url_encode(&media_id));
+            let ap_resp = platform::https_request(
+                "api.x.com",
+                "POST",
+                &ap_path,
+                &[("Authorization", &auth), ("Content-Type", &ct)],
+                &body,
+                120_000,
+            )?;
+            if !matches!(ap_resp.status, 200..=299) {
+                return Err(format!("X media chunk upload failed (HTTP {}).", ap_resp.status));
+            }
+            offset = end;
+            seg_idx += 1;
+        }
+
+        // Step 3: Finalize upload
+        let fin_path = format!("/2/media/upload/{}/finalize", url_encode(&media_id));
+        let fin_resp = platform::https_request("api.x.com", "POST", &fin_path, &[("Authorization", &auth)], &[], 20_000)?;
+        if !matches!(fin_resp.status, 200..=299) {
+            return Err(format!("X media finalize failed (HTTP {}).", fin_resp.status));
+        }
+
+        // Step 4: Poll processing status (up to 45s)
+        let st_path = format!("/2/media/upload?command=STATUS&media_id={}", url_encode(&media_id));
+        for _ in 0..15 {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            if let Ok(sr) = platform::https_request("api.x.com", "GET", &st_path, &[("Authorization", &auth)], &[], 15_000)
+                && sr.status == 200
+                && let Ok(sv) = serde_json::from_slice::<Value>(&sr.body)
+            {
+                let state = sv["data"]["processing_info"]["state"]
+                    .as_str()
+                    .or_else(|| sv["processing_info"]["state"].as_str());
+                match state {
+                    None | Some("succeeded") => break,
+                    Some("failed") => return Err("X video processing failed.".to_owned()),
+                    _ => {}
+                }
+            }
+        }
+
+        // Step 5: Publish post with attached video
+        let post_body = serde_json::to_vec(&json!({
+            "text": text,
+            "media": { "media_ids": [media_id] }
+        }))
+        .map_err(|e| e.to_string())?;
+        let post_resp = platform::https_request(
+            "api.x.com",
+            "POST",
+            "/2/tweets",
+            &[("Authorization", &auth), ("Content-Type", "application/json")],
+            &post_body,
+            20_000,
+        )?;
+        let post_val: Value = serde_json::from_slice(&post_resp.body).unwrap_or_default();
+        if !matches!(post_resp.status, 200 | 201) {
+            let msg = post_val["detail"]
+                .as_str()
+                .or_else(|| post_val["title"].as_str())
+                .unwrap_or("X rejected post creation.");
+            return Err(msg.to_owned());
+        }
+        let tid = post_val["data"]["id"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "X did not return a post ID.".to_owned())?
+            .to_owned();
+        Ok(tid)
+    })
+    .await
+    .map_err(internal)?
+    .map_err(bad)?;
+
+    let post_url = format!("https://x.com/i/web/status/{tweet_id}");
+    if let Ok(db) = app.db.lock() {
+        let _ = db.execute(
+            "UPDATE workspace_film_roll SET x_tweet_id=?1 WHERE clip_id=?2",
+            params![tweet_id, clip_id],
+        );
+        let _ = db.execute(
+            "UPDATE workspace_export_history SET x_tweet_id=?1 WHERE id=(SELECT id FROM workspace_export_history WHERE clip_id=?2 ORDER BY id DESC LIMIT 1)",
+            params![tweet_id, clip_id],
+        );
+    }
+    sync_posting_queue_url(&app, &clip_id, "x", &post_url);
+    Ok(Json(json!({
+        "tweet_id": tweet_id,
+        "post_url": post_url
+    })))
+}
+
 pub(crate) async fn extend_instagram_token(State(app): State<App>) -> ApiResult<Json<Value>> {
     let client = platform::vault_read(client_target("instagram").unwrap())
         .ok_or_else(|| bad("Instagram App ID & Secret are not configured."))?;
@@ -2153,10 +2525,14 @@ pub(crate) async fn sync_analytics(State(app): State<App>) -> ApiResult<Json<Val
                         let ch_id = ch["id"].as_str().unwrap_or("");
                         let ch_name = ch["snippet"]["title"].as_str().unwrap_or("YouTube");
                         let ch_handle = ch["snippet"]["customUrl"].as_str().unwrap_or("");
+                        let ch_avatar = ch["snippet"]["thumbnails"]["default"]["url"]
+                            .as_str()
+                            .or_else(|| ch["snippet"]["thumbnails"]["medium"]["url"].as_str())
+                            .unwrap_or("");
                         let subs = ch["statistics"]["subscriberCount"].as_str().and_then(|s| s.parse::<i64>().ok());
                         let total_views = ch["statistics"]["viewCount"].as_str().and_then(|s| s.parse::<i64>().ok());
                         let vid_count = ch["statistics"]["videoCount"].as_str().and_then(|s| s.parse::<i64>().ok());
-                        let _ = save_account_row(&app_clone, "youtube", "connected", ch_id, ch_name, ch_handle, "", subs, vid_count, Some(exp), "");
+                        let _ = save_account_row(&app_clone, "youtube", "connected", ch_id, ch_name, ch_handle, ch_avatar, subs, vid_count, Some(exp), "");
 
                         let mut sum_likes = 0i64;
                         let mut sum_comments = 0i64;
@@ -2231,8 +2607,8 @@ pub(crate) async fn sync_analytics(State(app): State<App>) -> ApiResult<Json<Val
         {
             let exp = tokens["expires_at"].as_i64();
             match fetch_instagram_business_account(tok) {
-                Ok((ig_id, ig_name, ig_handle, followers, media_count)) => {
-                    let _ = save_account_row(&app_clone, "instagram", "connected", &ig_id, &ig_name, &ig_handle, "", followers, media_count, exp, "");
+                Ok((ig_id, ig_name, ig_handle, ig_avatar, followers, media_count)) => {
+                    let _ = save_account_row(&app_clone, "instagram", "connected", &ig_id, &ig_name, &ig_handle, &ig_avatar, followers, media_count, exp, "");
                     let mpath = format!(
                         "/v21.0/{}/media?fields=id,caption,media_type,permalink,thumbnail_url,media_url,timestamp,like_count,comments_count&limit=25&access_token={}",
                         url_encode(&ig_id),
@@ -2285,8 +2661,8 @@ pub(crate) async fn sync_analytics(State(app): State<App>) -> ApiResult<Json<Val
             match refresh_tiktok_access_token() {
                 Ok((tok, exp)) => {
                     match fetch_tiktok_user(&tok) {
-                        Ok((uid, name, handle, followers, vids)) => {
-                            let _ = save_account_row(&app_clone, "tiktok", "connected", &uid, &name, &handle, "", followers, vids, Some(exp), "");
+                        Ok((uid, name, handle, avatar, followers, vids)) => {
+                            let _ = save_account_row(&app_clone, "tiktok", "connected", &uid, &name, &handle, &avatar, followers, vids, Some(exp), "");
                             let auth = format!("Bearer {tok}");
                             let vpath = "/v2/video/list/?fields=id,title,video_description,cover_image_url,share_url,create_time,view_count,like_count,comment_count";
                             let mut sum_views = 0i64;
@@ -2372,7 +2748,7 @@ pub(crate) async fn get_analytics(State(app): State<App>) -> ApiResult<Json<Valu
     {
         let mut stmt = db
             .prepare(
-                "SELECT provider, status, account_name, handle, subscribers, media_count, expires_at, last_checked_at
+                "SELECT provider, status, account_name, handle, avatar_url, subscribers, media_count, expires_at, last_checked_at
                  FROM workspace_oauth_accounts",
             )
             .map_err(internal)?;
@@ -2384,10 +2760,11 @@ pub(crate) async fn get_analytics(State(app): State<App>) -> ApiResult<Json<Valu
                         "status": r.get::<_, String>(1)?,
                         "account_name": r.get::<_, String>(2)?,
                         "handle": r.get::<_, String>(3)?,
-                        "subscribers": r.get::<_, Option<i64>>(4)?,
-                        "media_count": r.get::<_, Option<i64>>(5)?,
-                        "expires_at": r.get::<_, Option<i64>>(6)?,
-                        "last_checked_at": r.get::<_, Option<i64>>(7)?,
+                        "avatar_url": r.get::<_, String>(4)?,
+                        "subscribers": r.get::<_, Option<i64>>(5)?,
+                        "media_count": r.get::<_, Option<i64>>(6)?,
+                        "expires_at": r.get::<_, Option<i64>>(7)?,
+                        "last_checked_at": r.get::<_, Option<i64>>(8)?,
                     }),
                 ))
             })
@@ -2426,7 +2803,105 @@ pub(crate) async fn get_analytics(State(app): State<App>) -> ApiResult<Json<Valu
             .map_err(internal)?;
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(internal)?
     };
-    Ok(Json(json!({ "accounts": accounts, "posts": posts })))
+    let snapshots: Vec<Value> = {
+        let mut stmt = db
+            .prepare(
+                "SELECT p.platform, s.date, s.followers, s.views, s.likes, s.comments
+                 FROM analytics_snapshots s
+                 JOIN profiles p ON p.id = s.profile_id
+                 WHERE s.post_id = '' AND p.archived = 0
+                 ORDER BY s.date ASC
+                 LIMIT 180",
+            )
+            .map_err(internal)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(json!({
+                    "provider": r.get::<_, String>(0)?,
+                    "date": r.get::<_, String>(1)?,
+                    "followers": r.get::<_, Option<i64>>(2)?,
+                    "views": r.get::<_, Option<i64>>(3)?,
+                    "likes": r.get::<_, Option<i64>>(4)?,
+                    "comments": r.get::<_, Option<i64>>(5)?,
+                }))
+            })
+            .map_err(internal)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(internal)?
+    };
+    Ok(Json(json!({ "accounts": accounts, "posts": posts, "snapshots": snapshots })))
+}
+
+pub(crate) async fn get_calendar(State(app): State<App>) -> ApiResult<Json<Value>> {
+    let db = app.db.lock().map_err(internal)?;
+    let mut items: Vec<Value> = Vec::new();
+    // 1. Published posts from YouTube, Instagram, TikTok
+    if let Ok(mut stmt) = db.prepare(
+        "SELECT provider, post_id, title, permalink, thumbnail_url, published_at, views, likes, comments
+         FROM workspace_channel_posts
+         WHERE published_at != ''
+         ORDER BY published_at DESC
+         LIMIT 200",
+    ) && let Ok(rows) = stmt.query_map([], |r| {
+        Ok(json!({
+            "kind": "published",
+            "provider": r.get::<_, String>(0)?,
+            "id": r.get::<_, String>(1)?,
+            "title": r.get::<_, String>(2)?,
+            "permalink": r.get::<_, String>(3)?,
+            "thumbnail_url": r.get::<_, String>(4)?,
+            "date": r.get::<_, String>(5)?,
+            "views": r.get::<_, i64>(6)?,
+            "likes": r.get::<_, i64>(7)?,
+            "comments": r.get::<_, i64>(8)?,
+        }))
+    }) {
+        items.extend(rows.flatten());
+    }
+    // 2. Scheduled YouTube drafts from Film Roll
+    if let Ok(mut stmt) = db.prepare(
+        "SELECT clip_id, title, yt_video_id, yt_publish_at
+         FROM workspace_film_roll
+         WHERE yt_publish_at != ''
+         ORDER BY yt_publish_at DESC
+         LIMIT 100",
+    ) && let Ok(rows) = stmt.query_map([], |r| {
+        let vid: String = r.get(2)?;
+        Ok(json!({
+            "kind": "scheduled",
+            "provider": "youtube",
+            "id": r.get::<_, String>(0)?,
+            "title": r.get::<_, String>(1)?,
+            "permalink": if vid.is_empty() { String::new() } else { format!("https://studio.youtube.com/video/{vid}/edit") },
+            "date": r.get::<_, String>(3)?,
+        }))
+    }) {
+        items.extend(rows.flatten());
+    }
+    // 3. Queued items from posting_queue
+    if let Ok(mut stmt) = db.prepare(
+        "SELECT q.id, p.platform, p.name, q.state, q.caption, q.post_url, COALESCE(NULLIF(q.scheduled_at,''), q.created_at)
+         FROM posting_queue q
+         JOIN profiles p ON p.id = q.profile_id
+         WHERE p.archived = 0
+         ORDER BY COALESCE(NULLIF(q.scheduled_at,''), q.created_at) DESC
+         LIMIT 150",
+    ) && let Ok(rows) = stmt.query_map([], |r| {
+        let cap: String = r.get(4)?;
+        let title: String = cap.lines().next().unwrap_or("Queued clip").chars().take(80).collect();
+        Ok(json!({
+            "kind": "queued",
+            "provider": r.get::<_, String>(1)?,
+            "profile_name": r.get::<_, String>(2)?,
+            "state": r.get::<_, String>(3)?,
+            "id": r.get::<_, i64>(0)?.to_string(),
+            "title": title,
+            "permalink": r.get::<_, String>(5)?,
+            "date": r.get::<_, String>(6)?,
+        }))
+    }) {
+        items.extend(rows.flatten());
+    }
+    Ok(Json(json!({ "items": items })))
 }
 
 pub(crate) async fn connect_instagram_token(
@@ -2464,7 +2939,7 @@ pub(crate) async fn connect_instagram_token(
         } else {
             (raw_token, now_unix() + 3600)
         };
-        let (ig_id, ig_name, ig_handle, followers, media) = fetch_instagram_business_account(&final_tok)?;
+        let (ig_id, ig_name, ig_handle, ig_avatar, followers, media) = fetch_instagram_business_account(&final_tok)?;
         platform::vault_write(
             token_target("instagram").unwrap(),
             &json!({ "access_token": final_tok, "expires_at": exp_at }),
@@ -2476,7 +2951,7 @@ pub(crate) async fn connect_instagram_token(
             &ig_id,
             &ig_name,
             &ig_handle,
-            "",
+            &ig_avatar,
             followers,
             media,
             Some(exp_at),
