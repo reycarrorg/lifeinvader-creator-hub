@@ -798,6 +798,7 @@ async fn owner_review_policy(request: axum::extract::Request,next:axum::middlewa
     let workspace_local=lifeinvader_local||target=="/api/workspace/publish"
         ||target=="/api/workspace/film-roll"||target.starts_with("/api/workspace/film-roll/")
         ||target=="/api/workspace/thumbnail-cache/clear"
+        ||target=="/api/workspace/caption-presets"||target.starts_with("/api/workspace/caption-presets/")
         ||target=="/api/workspace/triage"||target=="/api/controller/ui-lifetime"
         ||(target.starts_with("/api/clips/")&&(target.ends_with("/draft")||target.ends_with("/platform-draft")));
     if target.starts_with("/api/")&&((request.method()!=axum::http::Method::GET&&request.method()!=axum::http::Method::HEAD&&!workspace_local)
