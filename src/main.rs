@@ -14,6 +14,7 @@
 #[cfg(feature="snapmatic-hud")] #[allow(dead_code)] mod workspace_phase4;
 #[cfg(feature="snapmatic-hud")] mod workspace_triage;
 #[cfg(feature="snapmatic-hud")] mod workspace_film_roll;
+#[cfg(feature="snapmatic-hud")] mod workspace_oauth;
 #[cfg(feature="snapmatic-hud")] mod workspace_tiktok_export;
 #[cfg(feature="snapmatic-hud")] mod controller_tiktok_inbox;
 #[cfg(windows)] #[allow(dead_code)] mod controller_youtube;
@@ -799,6 +800,7 @@ async fn owner_review_policy(request: axum::extract::Request,next:axum::middlewa
         ||target=="/api/workspace/film-roll"||target.starts_with("/api/workspace/film-roll/")
         ||target=="/api/workspace/thumbnail-cache/clear"
         ||target=="/api/workspace/caption-presets"||target.starts_with("/api/workspace/caption-presets/")
+        ||target.starts_with("/api/oauth/")
         ||target=="/api/workspace/triage"||target=="/api/controller/ui-lifetime"
         ||(target.starts_with("/api/clips/")&&(target.ends_with("/draft")||target.ends_with("/platform-draft")));
     if target.starts_with("/api/")&&((request.method()!=axum::http::Method::GET&&request.method()!=axum::http::Method::HEAD&&!workspace_local)
@@ -1127,6 +1129,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     init(&db)?;
     #[cfg(feature="snapmatic-hud")]
     workspace_film_roll::init(&db)?;
+    #[cfg(feature="snapmatic-hud")]
+    workspace_oauth::init(&db)?;
     controller_store::init(&db).map_err(|e|std::io::Error::other(e.0))?;
     controller_store::recover(&mut db, chrono::Utc::now().timestamp()).map_err(|e|std::io::Error::other(e.0))?;
     let cache_scope = {

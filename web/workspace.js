@@ -122,12 +122,140 @@ function refreshScope(){
  if(!activeProfile()){saveDraft();selected=null;pdState=null;editState=null;generation++;cancelFrameWatch();stopVideo();refreshDraftEditor();updateTrim();$('approve').disabled=true;mediaEmpty('CHANNEL NOT CONFIGURED','NO CREDENTIAL OR SOURCE ALIAS VERIFIED');}
 }
 $('channel-scope').onchange=()=>{scope=$('channel-scope').value;sessionStorage.setItem('snapmatic-profile',scope);refreshScope();};
-get('/api/workspace/channel-profiles').then(d=>{
- channelProfiles=d.profiles;
- const saved=sessionStorage.getItem('snapmatic-profile');if(channelProfiles.some(p=>p.profile_id===saved))scope=saved;
- $('channel-scope').replaceChildren(...channelProfiles.map(p=>{const o=node('option',p.channel_alias+(p.configured?'':' (not configured)'));o.value=p.profile_id;return o;}));
- $('channel-scope').value=scope;renderQueueProfiles();refreshScope();
-}).catch(()=>{});
+function loadChannelProfiles(){
+ return get('/api/workspace/channel-profiles').then(d=>{
+  channelProfiles=d.profiles;
+  const saved=sessionStorage.getItem('snapmatic-profile');if(channelProfiles.some(p=>p.profile_id===saved))scope=saved;
+  $('channel-scope').replaceChildren(...channelProfiles.map(p=>{const o=node('option',p.channel_alias+(p.configured?'':' (not configured)'));o.value=p.profile_id;return o;}));
+  $('channel-scope').value=scope;renderQueueProfiles();refreshScope();
+ }).catch(()=>{});
+}
+loadChannelProfiles();
+
+let oauthStatus=null;
+function syncYoutubeDraftButton(){
+ const btn=$('yt-upload-draft'),out=$('yt-upload-result');
+ if(!btn)return;
+ const connected=Boolean(oauthStatus?.youtube?.connected);
+ btn.disabled=!connected||!selected?.from_sources;
+ if(out&&!out.dataset.busy){
+  out.textContent=!connected?'Connect YouTube in Connections & System to upload private drafts (never public).':selected?.from_sources?'Uploads '+(selected.exported?'your exported MP4':'this source clip')+' strictly as a Private draft in YouTube Studio.':'Select a Film Roll clip to upload a Private draft.';
+ }
+}
+function renderOAuthCard(prefix,info,label){
+ const badge=$(prefix+'-oauth-badge'),meta=$(prefix+'-oauth-meta'),conn=$(prefix+'-connect');
+ const ref=$(prefix+'-refresh'),disc=$(prefix+'-disconnect'),uri=$(prefix+'-redirect-uri'),setup=$(prefix+'-oauth-setup');
+ if(!badge||!info)return;
+ if(uri&&info.redirect_uri)uri.textContent=info.redirect_uri;
+ if(info.connected){
+  badge.textContent='CONNECTED';badge.className='flag ready';
+  const parts=[info.account_name,info.handle].filter(Boolean).join(' · ');
+  const stats=[];
+  if(Number.isSafeInteger(info.subscribers))stats.push(info.subscribers.toLocaleString()+' '+(prefix==='yt'?'subscribers':'followers'));
+  if(Number.isSafeInteger(info.media_count))stats.push(info.media_count.toLocaleString()+' '+(prefix==='yt'?'videos':'posts'));
+  meta.textContent=(parts||label+' connected')+(stats.length?' ('+stats.join(' · ')+')':'')+(info.expires_at?' · Token valid until '+new Date(info.expires_at*1000).toLocaleString():'');
+  if(conn){conn.textContent='Reconnect '+label;conn.disabled=false;}
+  if(ref)ref.hidden=false;
+  if(disc)disc.hidden=false;
+  if(setup&&!setup.dataset.touched)setup.open=false;
+ }else if(info.client_configured){
+  badge.textContent='READY TO CONNECT';badge.className='flag warn';
+  meta.textContent='Credentials saved ('+(info.client_id_preview||'configured')+'). Click Connect '+label+' to sign in.'+(info.last_error?' Last error: '+info.last_error:'');
+  if(conn){conn.textContent='Connect '+label;conn.disabled=false;}
+  if(ref)ref.hidden=true;
+  if(disc)disc.hidden=true;
+ }else{
+  badge.textContent='NOT CONFIGURED';badge.className='flag warn';
+  meta.textContent='Save your OAuth credentials below, then click Connect '+label+'.'+(info.last_error?' Last error: '+info.last_error:'');
+  if(conn){conn.textContent='Connect '+label;conn.disabled=true;}
+  if(ref)ref.hidden=true;
+  if(disc)disc.hidden=true;
+ }
+}
+function refreshOAuthStatus(){
+ return get('/api/oauth/status').then(s=>{
+  oauthStatus=s;
+  renderOAuthCard('yt',s.youtube,'YouTube');
+  renderOAuthCard('ig',s.instagram,'Instagram');
+  renderProviders();
+  syncYoutubeDraftButton();
+ }).catch(()=>{});
+}
+for(const [prefix,prov] of [['yt','youtube'],['ig','instagram']]){
+ if($(prefix+'-oauth-setup'))$(prefix+'-oauth-setup').addEventListener('toggle',e=>{e.currentTarget.dataset.touched='1';});
+ if($(prefix+'-copy-uri'))$(prefix+'-copy-uri').onclick=async()=>{
+  const text=$(prefix+'-redirect-uri')?.textContent||'';
+  try{await navigator.clipboard.writeText(text);note('Copied redirect URI.');}catch{note(text);}
+ };
+ if($(prefix+'-save-config'))$(prefix+'-save-config').onclick=async()=>{
+  const btn=$(prefix+'-save-config'),out=$(prefix+'-config-msg');btn.disabled=true;
+  try{
+   const body={
+    client_json:prefix==='yt'?($(prefix+'-client-json')?.value||''):'',
+    client_id:$(prefix+'-client-id')?.value||'',
+    client_secret:$(prefix+'-client-secret')?.value||'',
+   };
+   await get('/api/oauth/'+prov+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+   if($(prefix+'-client-json'))$(prefix+'-client-json').value='';
+   if($(prefix+'-client-secret'))$(prefix+'-client-secret').value='';
+   if(out)out.textContent='Saved securely in Windows Credential Manager. Click Connect above.';
+   note('Saved '+prov+' OAuth credentials.');
+   await refreshOAuthStatus();
+  }catch(e){if(out)out.textContent='Error: '+e.message;note(e.message);}
+  finally{btn.disabled=false;}
+ };
+ if($(prefix+'-connect'))$(prefix+'-connect').onclick=async()=>{
+  const btn=$(prefix+'-connect'),link=$(prefix+'-auth-link');btn.disabled=true;
+  try{
+   const r=await get('/api/oauth/'+prov+'/start',{method:'POST'});
+   if(link&&r.auth_url){link.href=r.auth_url;link.hidden=false;}
+   note(r.browser_opened?'Opened sign-in in your browser. Complete login there to finish connecting.':'Click the sign-in link to connect your account.');
+  }catch(e){note(e.message);}
+  finally{btn.disabled=false;}
+ };
+ if($(prefix+'-refresh'))$(prefix+'-refresh').onclick=async()=>{
+  const btn=$(prefix+'-refresh');btn.disabled=true;
+  try{
+   await get('/api/oauth/'+prov+'/refresh',{method:'POST'});
+   note('Refreshed '+prov+' account status.');
+   await refreshOAuthStatus();loadChannelProfiles();
+  }catch(e){note('Refresh failed: '+e.message);await refreshOAuthStatus();}
+  finally{btn.disabled=false;}
+ };
+ if($(prefix+'-disconnect'))$(prefix+'-disconnect').onclick=async()=>{
+  const btn=$(prefix+'-disconnect');btn.disabled=true;
+  try{
+   await get('/api/oauth/'+prov+'/disconnect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clear_config:false})});
+   note('Disconnected '+prov+' account.');
+   await refreshOAuthStatus();
+  }catch(e){note(e.message);}
+  finally{btn.disabled=false;}
+ };
+}
+if($('tt-sys-exports'))$('tt-sys-exports').onclick=()=>{$('edit-open-exports')?.click();};
+if($('yt-upload-draft'))$('yt-upload-draft').onclick=async()=>{
+ const row=selected,btn=$('yt-upload-draft'),out=$('yt-upload-result');
+ if(!row?.from_sources||btn.disabled)return;
+ btn.disabled=true;if(out){out.dataset.busy='1';out.textContent='Uploading Private draft to YouTube Studio…';}
+ try{
+  const common={title:$('title').value.trim()||row.name,caption:$('caption').value.trim(),tags:$('tags').value.trim()};
+  const mats=pd.materialize(common,pdState?.overrides||{},pdState||{});
+  const res=await get('/api/oauth/youtube/upload-draft/'+encodeURIComponent(row.clip_id),{
+   method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({title:common.title,description:mats.youtube,tags:$('draft-yt-api-tags')?.value||common.tags,use_source:!row.exported})
+  });
+  if(out){
+   delete out.dataset.busy;
+   const a=node('a','Open Private Draft in YouTube Studio ↗');a.href=res.studio_url;a.target='_blank';a.rel='noopener noreferrer';a.className='oauth-link';
+   out.replaceChildren('Uploaded PRIVATE draft ('+res.video_id+'). ',a);
+  }
+  note('Uploaded Private draft to YouTube Studio ('+res.video_id+').');
+  loadExportHistory();
+ }catch(e){
+  if(out){delete out.dataset.busy;out.textContent='Upload failed: '+e.message;}
+  note('YouTube upload failed: '+e.message);
+ }finally{syncYoutubeDraftButton();}
+};
 $('export-diagnostics').onclick=async()=>{
  const b=$('export-diagnostics'),out=$('diagnostics-result');b.disabled=true;
  try{const r=await get('/api/workspace/diagnostics',{method:'POST'});out.textContent='Saved '+r.file+' to '+r.location+'. Nothing shared.';}catch(e){out.textContent=e.message;}finally{b.disabled=false;}
@@ -800,7 +928,7 @@ function showView(mode,push=false){
  if(mode==='studio')refreshLocalStatus();
  if(mode==='gallery'){renderGallery();inspectMetadata();refreshLocalStatus();if(indexReady)reload();}
  if(mode==='ledger'){renderExportHistory();loadExportHistory();renderLedger();if(ledgerReady)loadLedger();}
- if(mode==='system'){renderSystem();updatePhase4();cacheUsage();refreshLocalStatus();}
+ if(mode==='system'){renderSystem();updatePhase4();cacheUsage();refreshLocalStatus();refreshOAuthStatus();}
 }
 let gallerySource='all', gallerySort='recent';
 function renderGallery(){
@@ -1033,16 +1161,29 @@ function renderShellProfile(){
 function renderProviders(){
  renderShellProfile();
  $('credentials').replaceChildren(...['youtube','instagram','tiktok'].map(id=>{
+  if(id==='tiktok'){
+   const badge=node('a','TIKTOK · MANUAL EXPORT','');
+   badge.href='/workspace?view=system';badge.onclick=e=>{e.preventDefault();showView('system',true);};return badge;
+  }
+  const oa=oauthStatus?.[id];
+  if(oa?.connected){
+   const tag=oa.handle||oa.account_name||'';
+   const badge=node('a',providerNames[id].toUpperCase()+(tag?' '+tag:'')+' · CONNECTED','ready');
+   badge.title=providerNames[id]+' connected ('+tag+') · Public auto-posting OFF';
+   badge.href='/workspace?view=system';badge.onclick=e=>{e.preventDefault();showView('system',true);};return badge;
+  }
   const p=(activeProfile()?providers:[]).find(x=>x.provider===id), health=p?.health||'unknown';
-  const badge=node('a',providerNames[id].toUpperCase()+' · '+(id==='tiktok'?'MANUAL EXPORT':health.toUpperCase()),health==='ready'?'ready':health==='held'||health==='expired'?'hold':'');
-  const seconds=Number.isSafeInteger(p?.access_expires_at_unix)&&Number.isSafeInteger(p?.checked_at_unix)?p.access_expires_at_unix-p.checked_at_unix:null;
-  badge.title='Last verified refresh attempt: '+healthTime(p?.last_refresh_at_unix)+' | Access expiry: '+healthTime(p?.access_expires_at_unix)+(seconds>0?' ('+Math.ceil(seconds/60)+' min left)':'')+' | Data access expiry: '+healthTime(p?.data_access_expires_at_unix);
-  badge.href='/workspace?view=system';badge.onclick=e=>{e.preventDefault();showView('system',true);};if(seconds>0&&seconds<=14*86400)badge.classList.add('warn');return badge;
+  const label=oa?.client_configured?'READY TO CONNECT':(health==='ready'?'READY':'CONNECT');
+  const badge=node('a',providerNames[id].toUpperCase()+' · '+label,health==='ready'?'ready':oa?.client_configured?'warn':'');
+  badge.title='Click to connect your '+providerNames[id]+' account in Connections & System';
+  badge.href='/workspace?view=system';badge.onclick=e=>{e.preventDefault();showView('system',true);};return badge;
  }));
  $('platforms').replaceChildren(...['tiktok','instagram','youtube'].map(id=>{
   const l=node('label'),i=node('input');i.type='checkbox';i.checked=inspected.get(id);i.onchange=()=>{inspected.set(id,i.checked);if(i.checked){$('platform-zone').value={instagram:'reels',youtube:'shorts',tiktok:'tiktok'}[id];updateGuides();}};
+  const oa=oauthStatus?.[id];
   const p=(activeProfile()?providers:[]).find(x=>x.provider===id),health=p?.health||'unknown';
-  l.append(i,node('span',providerNames[id]),node('small',id==='tiktok'?'MANUAL EXPORT':health==='ready'?'AUTH READY · POST HELD':health.toUpperCase()+' · POST HELD'));return l;
+  const statusText=id==='tiktok'?'MANUAL EXPORT':oa?.connected?'CONNECTED · PRIVATE DRAFTS ONLY':health==='ready'?'AUTH READY · POST HELD':'NOT CONNECTED';
+  l.append(i,node('span',providerNames[id]),node('small',statusText));return l;
  }));
  renderSystem();
 }
@@ -1124,6 +1265,7 @@ function select(row){workflowFlush();saveDraft();selected=row;derivedMode=false;
  if(row.from_sources)probeFilmRoll(row,generation);
  syncReviewButtons(row);
  renderQueueProfiles();
+ syncYoutubeDraftButton();
  $('drive').textContent=row.from_sources?(row.exported?'EXPORT READY':'LOCAL SOURCE'):row.state==='BACKED_UP'?'BACKUP VERIFIED':row.kind==='original'?'SOURCE INDEXED':'BACKUP NOT VERIFIED';$('drive').className='flag '+(row.state==='BACKED_UP'||row.exported?'ready':'warn');
  $('drive-detail').textContent=row.from_sources?(row.exported?'Exported MP4 saved to local exports folder. Original file untouched.':'Linked directly to downloaded file in Sources (original untouched).'):row.state==='BACKED_UP'?'Controller recorded a verified restored-media receipt.':'This is not a backup receipt.';
  if(row.preview_available){mediaEmpty('LOADING PREVIEW','READ-ONLY PLAYBACK');if(row.poster_available)video.poster=endpoint(row,'poster');video.src=endpoint(row,'stream');video.load();}
@@ -1343,11 +1485,13 @@ if($('gallery-export-approved'))$('gallery-export-approved').onclick=async()=>{
 const params=new URLSearchParams(location.search);
 renderProviders();updateGuides();showView(params.get('view'));
 $('ledger-notice').textContent='Loading verified local receipts...';
-Promise.all([reload(),loadLedger(),loadExportHistory(),loadPresets(),loadNvenc(),refreshLocalStatus()]).then(()=>{
+Promise.all([reload(),loadLedger(),loadExportHistory(),loadPresets(),loadNvenc(),refreshLocalStatus(),refreshOAuthStatus()]).then(()=>{
  feedEnabled=true;syncFeed();
  get('/api/workspace/film-roll/export-progress').then(p=>{if(p?.active){updateExportProgressUI(p);startExportPoll();}}).catch(()=>{});
  if(params.get('verify-workspace')==='1')verifyGalleryThenStudio();else if(verifyRequested)verifyVisibleFilmRoll();
 });
+window.addEventListener('message',e=>{if(e.origin===location.origin&&e.data?.type==='snapmatic:oauth-updated'){refreshOAuthStatus();loadChannelProfiles();}});
+window.addEventListener('focus',()=>{if(activeView==='system')refreshOAuthStatus();});
 
 const p5Labels=new Map();
 const p5Key=row=>scope+':'+row.clip_id+':'+(row.media_sha256||row.preview_sha256);
