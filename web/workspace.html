@@ -195,11 +195,10 @@
           <div class="eyebrow">02 / SNAPMATIC LENS</div>
           <h2 id="stage-title" class="font-display">Viewfinder</h2>
         </div>
-        <div class="flex items-center gap-2">
-          <span class="hud-rec-badge hidden sm:inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider">
-            <span class="h-1.5 w-1.5 rounded-full bg-vice-pink animate-pulse"></span>9:16 CAM
-          </span>
+        <div class="stage-head-actions">
           <output id="stage-state" class="flag" aria-live="polite">STANDBY</output>
+          <button type="button" id="approve" class="stage-pill-approve" disabled title="Approve clip (Ctrl+Enter or A)">✓ Approve</button>
+          <button type="button" id="hold-clip" class="stage-pill-hold" disabled title="Hold clip (H)">Hold</button>
         </div>
       </header>
 
@@ -248,10 +247,10 @@
       <div class="p5-playback" role="group" aria-label="Playback source and frame controls">
         <button type="button" id="p5-source" disabled>Source</button>
         <button type="button" id="p5-render" disabled>Exported</button>
-        <button type="button" id="p5-split" aria-pressed="false" disabled>Split comparison</button>
-        <button type="button" id="p5-step-back" disabled aria-label="Previous frame">−1 frame</button>
-        <button type="button" id="p5-step-next" disabled aria-label="Next frame">+1 frame</button>
-        <label class="inline-flex items-center gap-1.5 text-xs"><input type="checkbox" id="p5-loop" disabled> Loop In/Out</label>
+        <button type="button" id="p5-split" aria-pressed="false" disabled>Split</button>
+        <button type="button" id="p5-step-back" disabled aria-label="Previous frame">−1f</button>
+        <button type="button" id="p5-step-next" disabled aria-label="Next frame">+1f</button>
+        <label class="inline-flex items-center gap-1.5 text-xs"><input type="checkbox" id="p5-loop" disabled> Loop</label>
         <label class="speed-ctrl">Speed
           <select id="sm-speed" aria-label="Playback speed">
             <option value="0.5">0.5×</option>
@@ -288,46 +287,12 @@
           <output id="trim-visual-range">00:00.000 → 00:00.000</output>
           <output id="trim-visual-dur">Clip: 00:00.000</output>
         </div>
-        <div class="marker-bar">
-          <input id="marker-label" type="text" maxlength="40" placeholder="Add marker at playhead (e.g. Glitch starts)…">
-          <button type="button" id="marker-add">+ Marker</button>
-          <div id="marker-list" class="marker-list"></div>
-        </div>
-      </div>
-
-      <div class="p5-waveform">
-        <div id="p5-scrub" aria-hidden="true"></div>
-        <small id="p5-scrub-note">Waveform and speech metadata unavailable</small>
-        <button id="p5-waveform-load" type="button" disabled class="mini-btn ml-1">Load local waveform</button>
-      </div>
-
-      <div class="cover-tools">
-        <div class="export-btn-row">
-          <button type="button" class="shutter" id="cover-shutter" disabled>Set Frame as Cover</button>
-          <button type="button" id="cover-auto-btn" disabled>Auto-Pick 3 Best Covers</button>
-        </div>
-        <output id="cover-offset" aria-live="polite">Cover not captured</output>
-        <div id="cover-candidates" class="cover-candidates w-full" hidden></div>
-        <img id="cover-image" alt="Captured 1080 by 1920 cover frame" class="rounded-lg" hidden>
-        <a id="cover-download" hidden>Save 1080 × 1920 cover PNG locally</a>
-        <details class="overlay-box w-full" id="cover-designer-box">
-          <summary>Cover Thumbnail Designer (Text + Vignette + Border)</summary>
-          <label>Cover headline <input id="cover-design-title" type="text" maxlength="50" placeholder="e.g. GTA 6 SECRET FOUND!"></label>
-          <div class="export-checks">
-            <label class="inline-check"><input type="checkbox" id="cover-design-vignette" checked> Contrast vignette</label>
-            <label class="inline-check"><input type="checkbox" id="cover-design-border"> Vice Neon accent border</label>
-          </div>
-          <div class="export-btn-row"><button type="button" id="cover-design-apply" disabled>Stamp Cover PNG</button></div>
-        </details>
-        <small>Manual cover suggestion; never sent automatically.</small>
       </div>
 
       <div class="guides">
         <label class="inline-flex items-center gap-1.5"><input id="grid-toggle" type="checkbox" checked> Grid</label>
         <label class="inline-flex items-center gap-1.5"><input id="safe-toggle" type="checkbox"> Safe zones</label>
         <label class="inline-flex items-center gap-1.5"><input id="mock-ui-toggle" type="checkbox"> Platform UI</label>
-        <label class="inline-flex items-center gap-1.5"><input id="live-fx-preview" type="checkbox" checked> Live FX/Crop</label>
-        <button type="button" id="live-fx-hold" class="mini-btn" title="Hold to compare raw original">Hold: Original</button>
         <select id="platform-zone" aria-label="Safe zone platform" title="Guide approximation">
           <option value="tiktok">TikTok</option>
           <option value="reels">Reels</option>
@@ -336,57 +301,6 @@
         </select>
       </div>
 
-      <div class="clip-rating-bar" id="clip-rating-bar">
-        <span class="rating-stars" id="rating-stars" role="group" aria-label="Clip star rating">
-          <button type="button" data-star="1">★</button>
-          <button type="button" data-star="2">★</button>
-          <button type="button" data-star="3">★</button>
-          <button type="button" data-star="4">★</button>
-          <button type="button" data-star="5">★</button>
-        </span>
-        <div class="mood-pills" id="mood-pills">
-          <button type="button" data-mood="Banger">🔥 Banger</button>
-          <button type="button" data-mood="Funny">😂 Funny</button>
-          <button type="button" data-mood="Glitch">⚡ Glitch</button>
-          <button type="button" data-mood="Needs Edit">✂ Needs Edit</button>
-        </div>
-        <small class="muted">Keys 1–5 rate · A approve · H hold · N/P next/prev</small>
-      </div>
-
-      <div class="telemetry">
-        <div><small>FRAME</small><output id="frame">—</output></div>
-        <div><small>AVG BITRATE</small><output id="bitrate">—</output></div>
-        <div><small>SHA-256</small><output id="digest">—</output></div>
-        <div><small>CODEC</small><output id="codec">—</output></div>
-        <div><small>ENCODER</small><output id="encoder">—</output></div>
-        <div><small>RECEIPT</small><output id="receipt">—</output></div>
-      </div>
-
-      <div class="telemetry telemetry-audio">
-        <div><small>INTEGRATED LOUDNESS</small><output id="edit-lufs">Not measured</output></div>
-        <div><small>TRUE PEAK</small><output id="edit-peak">Not measured</output></div>
-      </div>
-
-      <div class="stage-actions flex-wrap">
-        <section class="workflow flex-1" aria-label="Clip workflow">
-          <div class="text-xs font-semibold"><strong id="wf-stage" class="text-vice-cyan">Review</strong> &rarr; Export</div>
-          <output id="wf-count" class="block font-mono text-[10px] opacity-75"></output>
-          <p id="wf-reason" class="my-1 text-xs opacity-80">Select a clip.</p>
-          <div class="mt-2 flex flex-wrap gap-1.5">
-            <button type="button" id="wf-primary" class="vice-btn-primary rounded-lg px-3 py-1.5 text-xs font-bold transition-all duration-200" disabled>Choose a clip</button>
-            <button type="button" id="wf-next" class="mini-btn" disabled>Save &amp; Next</button>
-            <button type="button" id="wf-undo" class="mini-btn" disabled>Undo</button>
-          </div>
-          <output id="wf-saved" role="status" class="mt-1 block font-mono text-[10px] opacity-70"></output>
-        </section>
-        <div class="flex flex-wrap items-center gap-2">
-          <button type="button" id="approve" class="shutter inline-flex items-center gap-2 transition-all duration-200 hover:-translate-y-0.5" disabled>
-            <img src="/icon-192.png?v=aperture-1" alt="" width="24" height="24" class="rounded-full"> Approve
-          </button>
-          <button type="button" id="hold-clip" class="hold-btn transition-all duration-200 hover:-translate-y-0.5" disabled>Hold</button>
-        </div>
-        <small class="w-full">Ctrl+Enter · Local review only. Approval never posts.</small>
-      </div>
       <output id="message" role="status"></output>
       <ol id="playback-proof" class="proof" aria-label="Film Roll playback check" hidden></ol>
     </section>
@@ -395,28 +309,29 @@
     <aside class="inspector panel flex flex-col" aria-labelledby="inspect-title">
       <header class="panel-head">
         <div class="eyebrow">03 / STUDIO CONTROLS</div>
-        <h2 id="inspect-title" class="font-display">Inspector</h2>
+        <h2 id="inspect-title" class="font-display">Studio Controls</h2>
         <p id="inspect-description" class="muted" hidden></p>
         <p id="inspect-state">No clip selected</p>
       </header>
 
-      <div class="inspector-tabs" id="inspector-tabs" role="tablist" aria-label="Inspector sections">
+      <div class="inspector-tabs" id="inspector-tabs" role="tablist" aria-label="Studio control sections">
         <button type="button" role="tab" data-itab="captions" aria-selected="true">Captions</button>
         <button type="button" role="tab" data-itab="create" aria-selected="false">Create ✨ <span id="itab-create-badge" class="itab-badge" hidden></span></button>
         <button type="button" role="tab" data-itab="export" aria-selected="false">Export</button>
         <button type="button" role="tab" data-itab="upload" aria-selected="false">Upload <span id="itab-upload-badge" class="itab-badge" hidden></span></button>
-        <button type="button" role="tab" data-itab="checks" aria-selected="false">Checks</button>
       </div>
 
       <div class="inspector-body flex-1">
 
         <!-- TAB 1: CAPTIONS -->
         <div class="itab-pane" data-itab-pane="captions">
-          <section aria-labelledby="draft-head">
-            <h3 id="draft-head" class="font-display">Caption desk</h3>
-            <p class="muted">Local draft · not sent or saved.</p>
+          <section aria-labelledby="draft-head" class="space-y-3">
+            <div>
+              <h3 id="draft-head" class="font-display">Caption Desk</h3>
+              <p class="muted">Title, caption &amp; hashtags synced across your exports and uploads.</p>
+            </div>
             <label>Title<input id="title" type="text" maxlength="200" placeholder="Clip title"></label>
-            <label>Caption<textarea id="caption" maxlength="10000" rows="5" placeholder="Write a caption…"></textarea></label>
+            <label>Caption<textarea id="caption" maxlength="10000" rows="4" placeholder="Write a caption…"></textarea></label>
             <label>Hashtags<input id="tags" type="text" maxlength="1000" placeholder="#GTA6 #GTAVI #ViceCity #snapmatic"></label>
 
             <div class="preset-box">
@@ -431,76 +346,55 @@
               </div>
             </div>
 
-            <div id="platform-draft-tools">
-              <details>
-                <summary>YouTube Shorts draft</summary>
-                <output id="draft-yt-title" class="muted"></output>
-                <output id="draft-yt-shorts" class="muted"></output>
-                <label>YouTube keyword tags, comma separated <input id="draft-yt-api-tags" maxlength="1600"></label>
-                <output id="draft-yt-api-count" class="muted" aria-live="polite"></output>
-                <label class="inline-check"><input id="draft-shorts" type="checkbox"> Include #Shorts</label>
-                <label class="inline-check"><input id="draft-youtube-override" type="checkbox"> Override YouTube description</label>
-                <textarea id="draft-youtube" maxlength="10000" rows="3" aria-label="YouTube description"></textarea>
-                <output id="draft-youtube-count" class="muted" aria-live="polite"></output>
-                <p class="warn" id="draft-yt-audio" hidden>Over 60 seconds: an active Content ID claim can block a Short. Check audio rights and Shorts Audio Library usage limits before posting.</p>
-              </details>
-              <details>
-                <summary>Instagram Reels draft</summary>
-                <label class="inline-check"><input id="draft-ig-share" type="checkbox"> Also share to Feed, if available (local preference only)</label>
-                <p id="draft-ig-placement" class="muted" hidden>Over 90 seconds: Instagram determines where this Reel appears. Placement is not guaranteed.</p>
-                <label class="inline-check"><input id="draft-trial" type="checkbox"> Trial Reel, manual graduation (local draft only)</label>
-                <label class="inline-check"><input id="draft-instagram-override" type="checkbox"> Override Instagram caption</label>
-                <textarea id="draft-instagram" maxlength="10000" rows="3" aria-label="Instagram caption"></textarea>
-                <output id="draft-instagram-count" class="muted" aria-live="polite"></output>
-                <p class="warn" id="draft-ig-discovery" hidden>Over 180 seconds: may not be recommended to new audiences.</p>
-              </details>
-              <details>
-                <summary>TikTok Manual Export</summary>
-                <label class="inline-check"><input id="draft-tiktok-override" type="checkbox"> Override TikTok editor text</label>
-                <textarea id="draft-tiktok" maxlength="10000" rows="3" aria-label="TikTok editor caption"></textarea>
-                <output id="draft-tiktok-count" class="muted" aria-live="polite"></output>
-                <p class="muted">Copy this caption for manual use. A captured cover can accompany a verified export; nothing is sent to TikTok.</p>
-                <output id="draft-tt-capacity" class="muted" aria-live="polite"></output>
-                <div class="export-btn-row">
-                  <button type="button" id="tt-copy">Copy caption + hashtags</button>
-                  <button type="button" id="tt-export" disabled>Create local export</button>
-                  <button type="button" id="tt-folder">Open export folder</button>
-                  <a href="/workspace?view=ledger" data-shell-link="ledger" class="oauth-link self-center">Verified backup links</a>
-                </div>
-                <output id="tt-result" aria-live="polite"></output>
-              </details>
-              <details>
-                <summary>X (Twitter) Post draft</summary>
-                <textarea id="draft-x" maxlength="280" rows="3" placeholder="Auto-filled from Title + Caption + Hashtags (280 chars max)…" aria-label="X post text"></textarea>
-                <output id="draft-x-count" class="muted" aria-live="polite">0/280 characters</output>
-                <div class="export-btn-row"><button type="button" id="x-copy">Copy X post text</button></div>
-              </details>
-              <details class="overlay-box">
-                <summary>Viral Hook &amp; Title Formula Helper</summary>
-                <div id="hook-helper-list" class="hook-helper-list"></div>
-              </details>
-              <div class="export-btn-row">
-                <button type="button" id="platform-draft-save" disabled>Save local draft</button>
-                <button type="button" id="auto-format-all" class="vice-btn-primary">Auto-Format All Platforms</button>
-                <button type="button" id="copy-all-captions">Copy All Captions</button>
+            <div class="export-btn-row">
+              <button type="button" id="platform-draft-save" class="vice-btn-primary" disabled>Save Draft</button>
+              <button type="button" id="copy-all-captions">Copy Caption</button>
+            </div>
+            <p id="platform-draft-result" class="muted" role="status">Select a clip to edit captions.</p>
+
+            <!-- PRO VIRAL HOOK & TITLE GENERATOR -->
+            <div class="queue-handoff hook-gen-card" id="hook-gen-card">
+              <div class="hook-gen-head">
+                <h4>⚡ Viral Hook &amp; Title Generator</h4>
+                <span class="flag ready">PRO</span>
               </div>
-              <p id="platform-draft-result" class="muted" role="status">Select a verified preview.</p>
+              <p class="muted">Generates high-CTR scroll-stopping hooks &amp; titles tailored to your clip or transcript.</p>
+              <div class="export-grid">
+                <label>Hook Style
+                  <select id="hook-gen-vibe">
+                    <option value="curiosity">Curiosity / Secret</option>
+                    <option value="shock">Shock / WTF Moment</option>
+                    <option value="gta6">GTA 6 / Gaming Breakdown</option>
+                    <option value="funny">Funny / Chaos</option>
+                    <option value="debate">Hot Take / Debate</option>
+                    <option value="story">Storytime / POV</option>
+                  </select>
+                </label>
+                <label>Topic / Focus
+                  <input id="hook-gen-topic" type="text" maxlength="80" placeholder="Auto-detected from clip…">
+                </label>
+              </div>
+              <div class="export-btn-row">
+                <button type="button" id="hook-gen-go" class="vice-btn-primary">✨ Generate Hooks &amp; Titles</button>
+                <button type="button" id="hook-gen-from-transcript" hidden>Use Speech Transcript</button>
+              </div>
+              <div id="hook-gen-results" class="hook-gen-results"></div>
             </div>
           </section>
         </div>
 
-        <!-- TAB 1B: CREATE ✨ (AUTOCAPTION AI & PRO STUDIO — 6 PRO TOOLS) -->
+        <!-- TAB 2: CREATE ✨ (PRO AUTOCAPTION AI & STUDIO) -->
         <div class="itab-pane" data-itab-pane="create" hidden>
           <section aria-label="AutoCaption and Pro Studio" class="space-y-3">
             <div class="queue-handoff multi-ship-card">
               <h4>✨ AutoCaption &amp; Pro Studio</h4>
-              <p class="muted">Real word-by-word AI captions (Whisper + animated .ass karaoke), mid-clip jump-cuts, viral highlight finder, studio voice polish &amp; .cube LUTs.</p>
+              <p class="muted">Pro word-by-word karaoke captions (AutoCaption.io / TikTokCaptions.io style), jump-cuts, viral highlights, voice polish &amp; .cube LUTs.</p>
               <div id="studio-no-clip-banner" class="dup-warning" style="margin:8px 0;">
                 <span>👆 Select a clip in Film Roll (left) to start captioning &amp; exporting.</span>
                 <div><button type="button" id="studio-pick-first" class="mini-btn">Select First Clip</button></div>
               </div>
               <div class="export-btn-row">
-                <button type="button" id="studio-export-now" class="vice-btn-primary" disabled>🚀 Export MP4 with Pro Studio</button>
+                <button type="button" id="studio-export-now" class="vice-btn-primary" disabled>🚀 Export MP4 with Captions</button>
                 <button type="button" id="studio-reset-all" class="cancel-btn">Reset</button>
               </div>
               <div class="export-progress-wrap" id="studio-export-progress-wrap" hidden>
@@ -511,12 +405,12 @@
               <output id="studio-active-summary" class="muted" role="status">No Pro Studio effects active yet.</output>
             </div>
 
-            <!-- TOOL 1: AUTOCAPTION.IO-STYLE WORD-BY-WORD AI CAPTION STUDIO -->
+            <!-- TOOL 1: PRO AUTOCAPTION AI STUDIO -->
             <details class="overlay-box" open>
-              <summary>✨ AutoCaption AI Studio (Word-by-Word Karaoke)</summary>
+              <summary>✨ Pro AutoCaption AI (Word-by-Word Karaoke)</summary>
               <div class="ac-whisper-bar" id="ac-whisper-bar">
-                <span id="ac-whisper-badge" class="flag warn">CHECKING WHISPER AI…</span>
-                <button type="button" id="ac-whisper-install" class="mini-btn" hidden>⬇ Install Local Whisper AI (142 MB)</button>
+                <span id="ac-whisper-badge" class="flag warn">CHECKING ENGINE…</span>
+                <button type="button" id="ac-whisper-install" class="mini-btn" hidden>⬇ Upgrade to Pro Model (488 MB)</button>
               </div>
               <div class="export-progress-wrap" id="ac-install-progress-wrap" hidden>
                 <progress id="ac-install-progress" max="100" value="0"></progress>
@@ -524,16 +418,41 @@
               </div>
 
               <div class="export-btn-row">
-                <button type="button" id="ac-transcribe-go" class="vice-btn-primary" disabled>✨ Auto-Generate Word Captions</button>
-                <button type="button" id="ac-clear-words" class="cancel-btn" hidden>Clear Captions</button>
+                <button type="button" id="ac-transcribe-go" class="vice-btn-primary" disabled>✨ Auto-Generate Captions</button>
+                <button type="button" id="ac-clear-words" class="cancel-btn" hidden>Clear</button>
               </div>
-              <output id="ac-transcribe-status" class="muted" role="status">Transcribes exact spoken word timestamps locally via Whisper AI.</output>
+              <output id="ac-transcribe-status" class="muted" role="status">Uses vocal-isolated Whisper AI + DTW word alignment for tight karaoke sync.</output>
 
-              <label style="margin-top:10px;">Caption Style Preset</label>
+              <details class="ac-cloud-box" id="ac-cloud-box">
+                <summary>⚡ Optional: Cloud Whisper Large-v3-Turbo (~99% Accuracy in 2s)</summary>
+                <p class="muted">Optional free Groq or OpenAI key stored securely in Windows Credential Manager for studio-grade 99% accuracy.</p>
+                <div class="export-grid">
+                  <label>Provider
+                    <select id="ac-cloud-provider">
+                      <option value="groq">Groq (Free Tier · Large-v3-Turbo)</option>
+                      <option value="openai">OpenAI (Whisper-1)</option>
+                    </select>
+                  </label>
+                  <label>API Key
+                    <input id="ac-cloud-key" type="password" placeholder="gsk_… or sk-…">
+                  </label>
+                </div>
+                <div class="export-btn-row">
+                  <button type="button" id="ac-cloud-save" class="mini-btn">Save Key</button>
+                  <button type="button" id="ac-cloud-clear" class="cancel-btn" hidden>Remove Key</button>
+                </div>
+                <output id="ac-cloud-status" class="muted" role="status"></output>
+              </details>
+
+              <label style="margin-top:10px;">Viral Caption Style</label>
               <div class="ac-style-grid" id="ac-style-grid">
                 <button type="button" data-ac-preset="hormozi" aria-pressed="true" class="ac-style-card">
                   <span class="ac-swatch ac-sw-hormozi">WAIT <b style="color:#FFE600">FOR</b> IT</span>
                   <small>Hormozi Pop</small>
+                </button>
+                <button type="button" data-ac-preset="tiktok_bounce" aria-pressed="false" class="ac-style-card">
+                  <span class="ac-swatch ac-sw-tiktok">NO <b style="color:#FF2E93">CAP</b></span>
+                  <small>TikTok Bounce</small>
                 </button>
                 <button type="button" data-ac-preset="mrbeast" aria-pressed="false" class="ac-style-card">
                   <span class="ac-swatch ac-sw-mrbeast">NO <b style="color:#00F5A0">WAY</b></span>
@@ -577,29 +496,23 @@
                 </label>
               </div>
 
-              <label>Vertical Position (<output id="ac-posy-val">74%</output> — drag to clear bottom UI)
+              <label>Vertical Position (<output id="ac-posy-val">74%</output>)
                 <input id="ac-posy" type="range" min="18" max="86" step="2" value="74">
               </label>
 
               <div class="export-checks">
                 <label class="inline-check"><input type="checkbox" id="ac-uppercase" checked> ALL CAPS styling</label>
-                <label class="inline-check"><input type="checkbox" id="ac-pop" checked> Word-by-word pop bounce animation</label>
+                <label class="inline-check"><input type="checkbox" id="ac-pop" checked> Word-by-word pop bounce</label>
                 <label class="inline-check"><input type="checkbox" id="ac-emojis" checked> Smart keyword emojis (🔥 💀 👀 💰)</label>
               </div>
 
-              <!-- Interactive Word-by-Word Editor -->
+              <!-- Pro Line-by-Line Timed Transcript Editor (AutoCaption.io / TikTokCaptions.io style) -->
               <div id="ac-editor-wrap" hidden>
                 <div class="ac-editor-head">
-                  <strong id="ac-word-count">0 words</strong>
-                  <small class="muted">Click any word to seek &amp; edit</small>
+                  <strong id="ac-word-count">0 lines</strong>
+                  <small class="muted">Click timestamp to seek · edit text inline</small>
                 </div>
-                <div id="ac-word-chips" class="ac-word-chips"></div>
-                <div id="ac-word-edit-bar" class="ac-word-edit-bar" hidden>
-                  <input id="ac-word-input" type="text" maxlength="40" placeholder="Edit word…">
-                  <input id="ac-word-emoji" type="text" maxlength="6" placeholder="Emoji" style="width:62px;">
-                  <button type="button" id="ac-word-save" class="mini-btn">Save</button>
-                  <button type="button" id="ac-word-del" class="cancel-btn" title="Delete filler word">✕</button>
-                </div>
+                <div id="ac-lines-list" class="ac-lines-list"></div>
               </div>
             </details>
 
@@ -701,231 +614,57 @@
           </section>
         </div>
 
-        <!-- TAB 2: EDIT & EXPORT -->
+        <!-- TAB 3: EXPORT (CLEAN — EXPORT MP4 ONLY) -->
         <div class="itab-pane" data-itab-pane="export" hidden>
-          <section class="inspector-trim" aria-label="Trim and timing">
-            <h3 class="font-display">Trim and timing</h3>
-            <div class="trim-tools" aria-label="Non-destructive source trim">
-              <label>In <input id="trim-in" type="range" min="0" max="0" step="1" disabled></label>
-              <button id="trim-in-here" type="button" disabled>Set In (I)</button>
-              <label>Out <input id="trim-out" type="range" min="0" max="0" step="1" disabled></label>
-              <button id="trim-out-here" type="button" disabled>Set Out (O)</button>
-              <output id="trim-status" aria-live="polite">Select a verified preview</output>
-            </div>
-            <div class="export-btn-row">
-              <button type="button" id="trim-detect-silence" disabled>Auto-Trim Dead Air</button>
-              <button type="button" id="trim-viral-moment" disabled>⚡ Find Viral Moment (≤56s)</button>
-            </div>
-            <output id="silence-status" class="muted" aria-live="polite"></output>
-          </section>
-
-          <section aria-labelledby="local-edit-heading">
-            <h3 id="local-edit-heading" class="font-display">Export Local MP4</h3>
-            <div class="preset-chips" id="export-presets-bar" aria-label="1-click platform export presets">
-              <button type="button" data-epreset="universal">Universal 9:16</button>
-              <button type="button" data-epreset="reels">IG Reels Safe</button>
-              <button type="button" data-epreset="shorts">YT Shorts Max</button>
-              <button type="button" data-epreset="x">X Crisp ≤140s</button>
-            </div>
-
-            <div class="export-grid">
-              <label>Framing
-                <select id="edit-framing" disabled>
-                  <option value="original">Original shape</option>
-                  <option value="center_crop">9:16 Center Crop</option>
-                  <option value="blurred_fit">Blurred-Background Fit</option>
-                  <option value="split_top_right">9:16 Split-Screen (Cam Top-Right)</option>
-                  <option value="split_top_left">9:16 Split-Screen (Cam Top-Left)</option>
-                  <option value="split_bottom_right">9:16 Split-Screen (Cam Bottom-Right)</option>
-                  <option value="split_bottom_left">9:16 Split-Screen (Cam Bottom-Left)</option>
-                </select>
-              </label>
-              <label>Quality
-                <select id="edit-quality" disabled>
-                  <option value="balanced">Balanced (CRF 20)</option>
-                  <option value="high">High Quality (CRF 16)</option>
-                  <option value="fast">Fast (CRF 23)</option>
-                </select>
-              </label>
-            </div>
-
-            <div id="crop-pan-row" class="pan-row" hidden>
-              <label>9:16 Crop Horizontal Pan <output id="crop-pan-val">Center</output>
-                <input id="edit-crop-pan" type="range" min="-100" max="100" value="0" step="2">
-              </label>
-            </div>
-
-            <div class="export-grid">
-              <label>Export Speed
-                <select id="edit-export-speed" disabled>
-                  <option value="1">1× Normal</option>
-                  <option value="1.1">1.1× Snappy</option>
-                  <option value="1.25">1.25× Fast</option>
-                </select>
-              </label>
-              <label>Rotate
-                <select id="edit-rotate" disabled>
-                  <option value="0">0°</option>
-                  <option value="90">90° CW</option>
-                  <option value="180">180°</option>
-                  <option value="270">270° CCW</option>
-                </select>
-              </label>
-            </div>
-
-            <div class="export-checks">
-              <label class="inline-check"><input type="checkbox" id="edit-hw" disabled> <span id="edit-hw-label">Hardware encode (checking GPU…)</span></label>
-              <label class="inline-check"><input type="checkbox" id="edit-norm" disabled> Normalize audio (−14 LUFS)</label>
-              <label class="inline-check"><input type="checkbox" id="edit-fade-io" disabled> Smooth Fade In / Out (0.35s)</label>
-              <label class="inline-check"><input type="checkbox" id="edit-vivid" disabled> Vivid Color Pop (gaming contrast)</label>
-              <label class="inline-check"><input type="checkbox" id="edit-mirror" disabled> Mirror horizontal</label>
-              <label class="inline-check"><input type="checkbox" id="edit-zoom" disabled> Subtle Zoom (1.06×)</label>
-              <label class="inline-check"><input type="checkbox" id="edit-force-30fps" disabled> Lock 30fps (Reels safe)</label>
-              <label class="inline-check"><input type="checkbox" id="edit-mute" disabled> Mute audio</label>
-              <label class="inline-check"><input type="checkbox" id="edit-pack" checked disabled> Save caption .txt + cover .png pack</label>
-            </div>
-
-            <details class="overlay-box">
-              <summary>Audio Enhancer &amp; Background Music Bed</summary>
-              <div class="export-grid">
-                <label>Audio Preset
-                  <select id="edit-audio-preset">
-                    <option value="none">Original</option>
-                    <option value="voice">Voice Clarity</option>
-                    <option value="punch">Gameplay Punch</option>
-                    <option value="denoise">Noise Reduction</option>
-                  </select>
-                </label>
-                <label>Gain (<output id="edit-gain-val">0 dB</output>)
-                  <input id="edit-audio-gain" type="range" min="-12" max="12" value="0" step="1">
-                </label>
+          <section aria-labelledby="local-edit-heading" class="space-y-3">
+            <div class="queue-handoff multi-ship-card">
+              <h3 id="local-edit-heading" class="font-display">Export MP4</h3>
+              <p class="muted">Renders a platform-ready 9:16 H.264 MP4 with your Viewfinder trim and any active Pro Studio captions, voice polish, or color grades.</p>
+              <div class="export-btn-row" style="margin-top:10px;">
+                <button type="button" id="edit-transcode" class="vice-btn-primary" disabled>Export MP4</button>
+                <button type="button" id="edit-open-derived" hidden>Play Exported MP4</button>
+                <button type="button" id="edit-open-exports">Open Exports Folder</button>
               </div>
-              <div class="export-btn-row">
-                <button type="button" id="edit-music-pick">Choose Music Track…</button>
-                <button type="button" id="edit-music-clear" hidden>Remove</button>
+              <div class="export-progress-wrap" id="export-progress-wrap" hidden>
+                <progress id="export-progress" max="100" value="0"></progress>
+                <output id="export-progress-text">0%</output>
+                <button type="button" id="export-cancel" class="cancel-btn">Cancel</button>
               </div>
-              <output id="edit-music-name" class="muted">No background music attached.</output>
-              <label>Music Bed Volume (<output id="edit-music-vol-val">−18 dB</output>)
-                <input id="edit-music-vol" type="range" min="-32" max="-6" value="-18" step="1">
-              </label>
-            </details>
-
-            <details class="overlay-box">
-              <summary>Hook banner, outro CTA &amp; watermark</summary>
-              <label>Top hook banner <input id="edit-hook" type="text" maxlength="80" placeholder="e.g. WAIT FOR THE ENDING…"></label>
-              <label>Outro CTA banner (last 2s) <input id="edit-outro-cta" type="text" maxlength="70" placeholder="e.g. Follow @cj_4_prez for Part 2!"></label>
-              <div class="export-grid">
-                <label>Watermark <input id="edit-watermark" type="text" maxlength="40" placeholder="@yourhandle"></label>
-                <label>Position
-                  <select id="edit-wm-pos">
-                    <option value="bottom_right">Bottom Right</option>
-                    <option value="bottom_left">Bottom Left</option>
-                    <option value="top_right">Top Right</option>
-                    <option value="top_left">Top Left</option>
-                  </select>
-                </label>
-              </div>
-            </details>
-
-            <details class="overlay-box">
-              <summary>Burn-in Subtitles (.srt) &amp; Auto-Captions</summary>
-              <div class="export-grid">
-                <label>Style
-                  <select id="edit-srt-style">
-                    <option value="vice_neon">GTA 6 Vice Neon Pop</option>
-                    <option value="bold_yellow">CapCut Bold Yellow</option>
-                    <option value="clean_white">Clean White Outline</option>
-                  </select>
-                </label>
-                <label>Load .srt file <input id="edit-srt-file" type="file" accept=".srt,text/plain"></label>
-              </div>
-              <div class="export-btn-row">
-                <button type="button" id="edit-auto-captions" disabled>✨ Auto-Generate Timed Captions</button>
-              </div>
-              <output id="auto-captions-status" class="muted" aria-live="polite"></output>
-              <label>SRT content <textarea id="edit-srt-text" rows="4" placeholder="1&#10;00:00:00,000 --> 00:00:02,500&#10;WAIT FOR THIS CLIP!"></textarea></label>
-            </details>
-
-            <details class="overlay-box">
-              <summary>Split Long Clip into Multi-Part Shorts/Reels</summary>
-              <div class="export-grid">
-                <label>Seconds per part <input id="split-part-sec" type="number" min="15" max="180" value="55"></label>
-                <label>Hook prefix <input id="split-part-hook" type="text" maxlength="40" placeholder="e.g. GTA 6 CHAOS"></label>
-              </div>
-              <div class="export-btn-row"><button type="button" id="split-parts-go" disabled>Split &amp; Export Parts</button></div>
-              <p class="muted" id="split-parts-result" role="status"></p>
-            </details>
-
-            <div id="edit-zones" hidden>
-              <p class="muted">Choose each exact source rectangle (left, top, width and height in percent).</p>
-              <fieldset id="edit-facecam">
-                <legend>Facecam</legend>
-                <label>Left % <input type="number" min="0" max="99"></label>
-                <label>Top % <input type="number" min="0" max="99"></label>
-                <label>Width % <input type="number" min="1" max="100"></label>
-                <label>Height % <input type="number" min="1" max="100"></label>
-              </fieldset>
-              <fieldset id="edit-gameplay">
-                <legend>Gameplay</legend>
-                <label>Left % <input type="number" min="0" max="99"></label>
-                <label>Top % <input type="number" min="0" max="99"></label>
-                <label>Width % <input type="number" min="1" max="100"></label>
-                <label>Height % <input type="number" min="1" max="100"></label>
-              </fieldset>
+              <p class="muted" id="edit-state" role="status">Select a clip in Film Roll to export.</p>
             </div>
-
-            <p class="muted" id="edit-transcript-state" hidden></p>
-            <div id="edit-transcript" hidden></div>
-
-            <div class="export-btn-row">
-              <button type="button" id="edit-transcode" class="vice-btn-primary" disabled>Export MP4 (FFmpeg)</button>
-              <button type="button" id="edit-open-derived" hidden>Play exported MP4</button>
-              <button type="button" id="export-zip-kit" disabled>Zip Post Kit</button>
-              <button type="button" id="edit-open-exports">Open exports folder</button>
-            </div>
-            <div class="export-progress-wrap" id="export-progress-wrap" hidden>
-              <progress id="export-progress" max="100" value="0"></progress>
-              <output id="export-progress-text">0%</output>
-              <button type="button" id="export-cancel" class="cancel-btn">Cancel</button>
-            </div>
-            <p class="muted" id="edit-state" role="status">Select a Film Roll clip to trim and export locally.</p>
           </section>
         </div>
 
-        <!-- TAB 3: UPLOAD -->
+        <!-- TAB 4: UPLOAD (CLEAN MULTI-PLATFORM SHIP) -->
         <div class="itab-pane" data-itab-pane="upload" hidden>
           <section aria-label="Multi-platform upload" class="space-y-3">
             <div id="clip-shipped-links" class="shipped-banner" hidden></div>
             <div id="dup-hash-warning" class="dup-warning" hidden></div>
 
             <div class="queue-handoff readiness-card" id="readiness-card">
-              <h4>Platform Readiness &amp; Pre-Upload Check</h4>
+              <h4>Platform Readiness</h4>
               <div id="upload-readiness" class="readiness-grid">Select a clip to check Shorts, Reels, TikTok &amp; X readiness.</div>
-              <div id="upload-unexported-warn" class="warn" hidden>You have unexported edits (trim/crop/overlay/FX). Export first so uploads include your edits!</div>
+              <div id="upload-unexported-warn" class="warn" hidden>You have unexported edits. Export MP4 first so uploads include your edits!</div>
               <div class="export-btn-row">
-                <button type="button" id="upload-autofix-btn" hidden>Auto-Fix &amp; Export Compliant 9:16 MP4</button>
-                <button type="button" id="upload-shorts-cut-btn" hidden>Export ≤59s Guaranteed Short</button>
-                <button type="button" id="upload-reels-cut-btn" hidden>Export Reels-Safe ≤89s Variant</button>
+                <button type="button" id="upload-autofix-btn" hidden>Auto-Fix &amp; Export 9:16 MP4</button>
+                <button type="button" id="upload-shorts-cut-btn" hidden>Export ≤59s Short</button>
+                <button type="button" id="upload-reels-cut-btn" hidden>Export ≤89s Reel</button>
               </div>
               <div class="export-progress-wrap" id="upload-progress-wrap" hidden>
                 <progress id="upload-progress" max="100" value="0"></progress>
                 <output id="upload-progress-text">Uploading…</output>
               </div>
-              <details class="overlay-box">
-                <summary>Pre-Upload Caption &amp; File Preview</summary>
-                <div id="upload-summary-preview" class="muted">Select a clip to preview exact upload metadata.</div>
-              </details>
             </div>
 
             <div class="queue-handoff multi-ship-card" id="ship-recipe-card">
-              <h4>🔥 1-Click Ship Recipe Macro</h4>
-              <p class="muted">Runs Auto-Format Captions → Export 9:16 MP4 (if needed) → Ship Selected Platforms in one automated pipeline.</p>
+              <h4>🔥 1-Click Ship Recipe</h4>
+              <p class="muted">Auto-formats captions → Exports 9:16 MP4 (if needed) → Ships to your selected platforms below.</p>
               <div class="export-checks">
-                <label class="inline-check"><input type="checkbox" id="recipe-autoformat" checked> Auto-format #Shorts, tags &amp; X post</label>
-                <label class="inline-check"><input type="checkbox" id="recipe-autoexport" checked> Export 9:16 48 kHz MP4 first if not exported</label>
+                <label class="inline-check"><input type="checkbox" id="recipe-autoformat" checked> Auto-format #Shorts, tags &amp; X text</label>
+                <label class="inline-check"><input type="checkbox" id="recipe-autoexport" checked> Export 9:16 MP4 first if not exported</label>
               </div>
               <div class="export-btn-row">
-                <button type="button" id="ship-recipe-go" class="vice-btn-primary" disabled>🔥 Ship GTA 6 Drop (All-in-One)</button>
+                <button type="button" id="ship-recipe-go" class="vice-btn-primary" disabled>🔥 Ship Drop (All-in-One)</button>
               </div>
               <output id="ship-recipe-status" class="muted" role="status"></output>
             </div>
@@ -933,134 +672,21 @@
             <div class="queue-handoff multi-ship-card" id="multi-ship-card">
               <h4>One-Click Ship to Multiple Platforms</h4>
               <div class="multi-ship-checks">
-                <label class="inline-check"><input type="checkbox" id="ship-chk-yt"> YouTube Shorts Draft</label>
+                <label class="inline-check"><input type="checkbox" id="ship-chk-yt"> YouTube Shorts (<select id="yt-draft-privacy" aria-label="YouTube privacy"><option value="private" selected>Private</option><option value="unlisted">Unlisted</option></select>)</label>
                 <label class="inline-check"><input type="checkbox" id="ship-chk-ig"> Instagram (<select id="ship-ig-mode" aria-label="Instagram ship mode"><option value="container">Test Container</option><option value="publish">Publish Live</option></select>)</label>
                 <label class="inline-check"><input type="checkbox" id="ship-chk-tt"> TikTok Inbox Draft</label>
                 <label class="inline-check"><input type="checkbox" id="ship-chk-x"> X Video Post (Live)</label>
               </div>
               <div class="export-btn-row">
                 <button type="button" id="multi-ship-go" class="vice-btn-primary" disabled>Ship Selected Platforms</button>
-                <button type="button" id="multi-ship-retry" hidden>↻ Retry Failed Platforms</button>
-                <button type="button" id="batch-queue-add" disabled>+ Add to Batch Upload Queue</button>
+                <button type="button" id="multi-ship-retry" hidden>↻ Retry Failed</button>
               </div>
               <ul id="multi-ship-log" class="multi-ship-log" hidden></ul>
             </div>
-
-            <div class="queue-handoff" id="batch-upload-card">
-              <h4>Batch Multi-Clip Upload Queue (<span id="batch-queue-count">0</span>)</h4>
-              <label class="inline-check"><input type="checkbox" id="batch-space-yt" checked> Auto-space YouTube scheduled drafts (1/day at 6 PM)</label>
-              <ul id="batch-queue-list" class="multi-ship-log"></ul>
-              <div class="export-btn-row">
-                <button type="button" id="batch-queue-run" disabled>Run Batch Upload Queue</button>
-                <button type="button" id="batch-queue-clear" class="cancel-btn" hidden>Clear Queue</button>
-              </div>
-            </div>
-
-            <div class="queue-handoff platform-card-yt">
-              <h4>YouTube Draft Upload</h4>
-              <div class="export-grid">
-                <label>Privacy
-                  <select id="yt-draft-privacy">
-                    <option value="private" selected>Private (default)</option>
-                    <option value="unlisted">Unlisted</option>
-                  </select>
-                </label>
-                <label>Category
-                  <select id="yt-draft-category">
-                    <option value="20" selected>Gaming</option>
-                    <option value="24">Entertainment</option>
-                    <option value="23">Comedy</option>
-                    <option value="22">People &amp; Blogs</option>
-                    <option value="28">Science &amp; Tech</option>
-                  </select>
-                </label>
-              </div>
-              <label>Schedule (optional, forces Private) <input id="yt-draft-schedule" type="datetime-local"></label>
-              <div class="preset-chips" id="yt-quick-sched">
-                <button type="button" data-qsched="today18">Today 6 PM</button>
-                <button type="button" data-qsched="tmrw12">Tmrw 12 PM</button>
-                <button type="button" data-qsched="tmrw18">Tmrw 6 PM</button>
-                <button type="button" data-qsched="nextopen">Next Open Slot</button>
-                <button type="button" data-qsched="clear">Clear</button>
-              </div>
-              <div class="export-checks">
-                <label class="inline-check"><input type="checkbox" id="yt-draft-shorts" checked> YouTube Short (adds #Shorts)</label>
-                <label class="inline-check"><input type="checkbox" id="yt-draft-thumb" checked> Attach captured 1080×1920 Cover PNG</label>
-                <label class="inline-check"><input type="checkbox" id="yt-draft-kids"> Made for Kids</label>
-              </div>
-              <div class="export-btn-row"><button type="button" id="yt-upload-draft" disabled>Upload Draft to YouTube</button></div>
-              <p class="muted" id="yt-upload-result" role="status">Connect YouTube in Connections &amp; System to upload drafts (Private or Unlisted only).</p>
-            </div>
-
-            <div class="queue-handoff platform-card-ig">
-              <h4>Instagram Reel Upload</h4>
-              <p class="muted">Direct upload from your PC via Meta resumable upload (auto-optimized 48 kHz AAC, Share to Feed &amp; Cover frame offset).</p>
-              <label class="inline-check"><input type="checkbox" id="ig-upload-share" checked> Also share Reel to Feed</label>
-              <label>Cover frame offset (<output id="ig-thumb-val">0.0s</output>) <input id="ig-thumb-slider" type="range" min="0" max="1000" value="0" step="100" disabled></label>
-              <details class="overlay-box">
-                <summary>Optional: Full 1080p60 Cloud Relay URL (for 90s+ Reels)</summary>
-                <label>Public HTTPS MP4 URL (Cloudflare R2 / S3) <input id="ig-public-url" type="url" placeholder="https://cdn.yourdomain.com/clip.mp4"></label>
-                <p class="muted">Optional. Leave blank to upload straight from your PC. When set, Meta pulls full 1080p60 asynchronously via video_url.</p>
-              </details>
-              <div class="export-btn-row">
-                <button type="button" id="ig-upload-container" disabled>Upload Test Container (Unpublished)</button>
-                <button type="button" id="ig-publish-arm" disabled>Upload &amp; Publish Reel…</button>
-                <button type="button" id="ig-publish-confirm" class="confirm-publish-btn" hidden>Confirm: Publish Live to Instagram</button>
-              </div>
-              <p class="muted" id="ig-upload-result" role="status">Connect Instagram in Connections &amp; System to upload Reels directly.</p>
-            </div>
-
-            <div class="queue-handoff platform-card-tt">
-              <h4>TikTok Inbox Draft</h4>
-              <p class="muted">Uploads your MP4 straight to your TikTok phone app Inbox as a draft (never auto-posts publicly). Open TikTok Inbox to add sound &amp; post.</p>
-              <label class="inline-check"><input type="checkbox" id="tt-autocopy" checked> Auto-copy formatted TikTok caption on send</label>
-              <div class="export-btn-row"><button type="button" id="tt-upload-draft" disabled>Send Draft to TikTok Inbox</button></div>
-              <p class="muted" id="tt-upload-result" role="status">Connect TikTok in Connections &amp; System to send drafts straight to your TikTok Inbox.</p>
-            </div>
-
-            <div class="queue-handoff platform-card-x">
-              <h4>X (Twitter) Video Post</h4>
-              <textarea id="x-upload-text" maxlength="280" rows="2" placeholder="X post text (auto-filled, max 280 chars)…"></textarea>
-              <div class="export-btn-row">
-                <button type="button" id="x-post-arm" disabled>Upload &amp; Post to X…</button>
-                <button type="button" id="x-post-confirm" class="confirm-publish-btn" hidden>Confirm: Publish Live to X</button>
-              </div>
-              <p class="muted" id="x-upload-result" role="status">Connect X in Connections &amp; System to post video clips directly.</p>
-            </div>
-
-            <div class="queue-handoff">
-              <h4>Send to Profile Queue</h4>
-              <div class="queue-handoff-row">
-                <select id="queue-profile" aria-label="Target posting profile"><option value="">Choose a posting profile…</option></select>
-                <button type="button" id="queue-send" disabled>Send to Queue</button>
-              </div>
-              <p class="muted" id="queue-result" role="status">Queues this clip + caption for manual posting inside Profiles.</p>
-            </div>
           </section>
         </div>
 
-        <!-- TAB 4: CHECKS -->
-        <div class="itab-pane" data-itab-pane="checks" hidden>
-          <section>
-            <h3 class="font-display">Platform preflight</h3>
-            <div id="platform-preflight" aria-live="polite">Select a verified preview to see media checks and live metadata counts.</div>
-            <p class="muted">Advisories are not upload failures. Authorization and review-only rights are separate. Publishing remains off.</p>
-            <h3 class="mt-4 font-display">Connection status</h3>
-            <div id="platforms" class="platforms"></div>
-            <p class="muted">Platform toggles only change this session’s inspection.</p>
-          </section>
-          <section>
-            <h3 class="font-display">Drive verification</h3>
-            <span id="drive" class="flag warn">NOT VERIFIED</span>
-            <p id="drive-detail" class="muted">A source index is not a backup receipt.</p>
-          </section>
-        </div>
       </div>
-
-      <footer>
-        <button class="publish" id="publish" type="button" disabled aria-disabled="true">Publish Selected</button>
-        <small>PUBLIC POSTING LOCKED</small>
-      </footer>
     </aside>
   </main>
 

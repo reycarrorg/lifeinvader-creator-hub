@@ -568,6 +568,16 @@ mod platform {
     }
 }
 
+pub(crate) fn studio_vault_read(target: &str) -> Option<Value> {
+    platform::vault_read(target)
+}
+pub(crate) fn studio_vault_write(target: &str, value: &Value) -> Result<(), String> {
+    platform::vault_write(target, value)
+}
+pub(crate) fn studio_vault_delete(target: &str) {
+    platform::vault_delete(target)
+}
+
 fn client_target(provider: &str) -> Option<&'static str> {
     match provider {
         "youtube" => Some("Snapmatic/OAuth/YouTube/Client"),

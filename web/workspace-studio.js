@@ -14,8 +14,10 @@ const GRADE_CSS = {
 
 const state = {
  whisperReady: false,
+ hasSmall: false,
+ cloudConfigured: false,
+ cloudProvider: null,
  words: [], // [{ text, start_ms, end_ms, emoji, color }]
- selectedWordIdx: -1,
  preset: 'hormozi',
  activeColor: '#FFE600',
  colorGrade: 'none',
@@ -25,6 +27,8 @@ const state = {
 };
 
 let whisperPollTimer = null;
+let captionRaf = null;
+let lastRenderedWordKey = '';
 let voRecorder = null, voChunks = [], voStream = null, voMeterRaf = null, voAudioCtx = null;
 
 function getCaptionStyle() {
@@ -59,15 +63,23 @@ function buildPhrases(words, wpl) {
  return phrases;
 }
 
+function fmtShortTs(ms) {
+ const s = Math.max(0, ms) / 1000;
+ const m = Math.floor(s / 60);
+ const rem = (s % 60).toFixed(1).padStart(4, '0');
+ return String(m).padStart(2, '0') + ':' + rem;
+}
+
 // ==========================================================================
-// LIVE WYSIWYG VIEWFINDER AUTOCAPTION PREVIEW
+// 60FPS LIVE WYSIWYG VIEWFINDER AUTOCAPTION PREVIEW
 // ==========================================================================
-function renderLiveCaptions() {
+function renderLiveCaptions(force = false) {
  const layer = $('vf-autocap-layer');
  if (!layer) return;
  if (!state.words.length) {
   layer.hidden = true;
   layer.replaceChildren();
+  lastRenderedWordKey = '';
   return;
  }
  const cfg = getCaptionStyle();
@@ -77,32 +89,36 @@ function renderLiveCaptions() {
  const curMs = v && Number.isFinite(v.currentTime) ? Math.max(0, Math.round(v.currentTime * 1000) - trimInMs) : 0;
 
  const phrases = buildPhrases(state.words, cfg.words_per_line);
- // Find active phrase (or preview first phrase when paused at 0s so styling changes are immediately visible!)
- let activePhrase = phrases.find(ph => curMs >= ph[0].word.start_ms && curMs <= ph[ph.length - 1].word.end_ms + 250);
+ let phraseIdx = phrases.findIndex(ph => curMs >= ph[0].word.start_ms && curMs <= ph[ph.length - 1].word.end_ms + 240);
  let previewMode = false;
- if (!activePhrase && (!v || v.paused)) {
-  // Show closest phrase or first phrase for live WYSIWYG styling
-  activePhrase = phrases.find(ph => ph[ph.length - 1].word.end_ms >= curMs) || phrases[0];
+ if (phraseIdx < 0 && (!v || v.paused)) {
+  phraseIdx = phrases.findIndex(ph => ph[ph.length - 1].word.end_ms >= curMs);
+  if (phraseIdx < 0) phraseIdx = 0;
   previewMode = true;
  }
- if (!activePhrase) {
+ if (phraseIdx < 0 || !phrases[phraseIdx]) {
   layer.hidden = true;
+  lastRenderedWordKey = 'hidden';
   return;
  }
 
- layer.hidden = false;
- layer.dataset.preset = cfg.preset;
- layer.style.top = cfg.pos_y_pct + '%';
- // Scale 1080p font size down proportionally to the viewfinder width (~275px)
- const vfW = $('viewfinder')?.clientWidth || 275;
- const scaledPx = Math.max(11, Math.round((cfg.font_size / 1080) * vfW * 1.12));
-
+ const activePhrase = phrases[phraseIdx];
  let activeWordIdx = activePhrase[0].idx;
  if (!previewMode) {
   for (const item of activePhrase) {
    if (curMs >= item.word.start_ms) activeWordIdx = item.idx;
   }
  }
+
+ const renderKey = [phraseIdx, activeWordIdx, cfg.preset, cfg.active_color, cfg.font_size, cfg.pos_y_pct, cfg.uppercase, cfg.pop_animation, cfg.show_emojis, cfg.words_per_line].join('|');
+ if (!force && renderKey === lastRenderedWordKey) return;
+ lastRenderedWordKey = renderKey;
+
+ layer.hidden = false;
+ layer.dataset.preset = cfg.preset;
+ layer.style.top = cfg.pos_y_pct + '%';
+ const vfW = $('viewfinder')?.clientWidth || 275;
+ const scaledPx = Math.max(11, Math.round((cfg.font_size / 1080) * vfW * 1.12));
 
  layer.replaceChildren(...activePhrase.map(item => {
   const isAct = item.idx === activeWordIdx;
@@ -123,10 +139,28 @@ function renderLiveCaptions() {
   return sp;
  }));
 
- // Highlight active speaking chip in word editor
- document.querySelectorAll('#ac-word-chips .ac-word-chip.speaking').forEach(el => el.classList.remove('speaking'));
- const speakingChip = document.querySelector('#ac-word-chips .ac-word-chip[data-widx="' + activeWordIdx + '"]');
- if (speakingChip) speakingChip.classList.add('speaking');
+ // Highlight active timed line in the Pro Transcript Editor
+ const rows = document.querySelectorAll('#ac-lines-list .ac-line-row');
+ rows.forEach((rowEl, idx) => rowEl.classList.toggle('speaking', idx === phraseIdx));
+}
+
+function startCaptionRaf() {
+ if (captionRaf !== null) return;
+ const tick = () => {
+  captionRaf = null;
+  const v = app()?.getVideo();
+  if (!v || v.paused || v.ended || !state.words.length) return;
+  renderLiveCaptions(false);
+  captionRaf = requestAnimationFrame(tick);
+ };
+ captionRaf = requestAnimationFrame(tick);
+}
+
+function stopCaptionRaf() {
+ if (captionRaf !== null) {
+  cancelAnimationFrame(captionRaf);
+  captionRaf = null;
+ }
 }
 
 function updateColorPreview() {
@@ -158,35 +192,56 @@ function syncStudioSummary() {
  if (sum) {
   sum.textContent = list.length ? 'Active Pro Studio (' + list.length + '): ' + list.join(' · ') : 'No Pro Studio effects active yet.';
  }
- renderLiveCaptions();
+ if ($('hook-gen-from-transcript')) $('hook-gen-from-transcript').hidden = state.words.length === 0;
+ renderLiveCaptions(true);
  updateColorPreview();
 }
 
 // ==========================================================================
-// TOOL 1: WHISPER AI STATUS, 1-CLICK INSTALLER & WORD-BY-WORD TRANSCRIBER
+// TOOL 1: PRO WHISPER AI STATUS, SMALL.EN UPGRADE, CLOUD TURBO & TRANSCRIBER
 // ==========================================================================
 async function refreshWhisperStatus() {
  try {
   const s = await app().get('/api/workspace/studio/whisper/status');
   state.whisperReady = Boolean(s.ready);
+  state.hasSmall = Boolean(s.has_small);
+  state.cloudConfigured = Boolean(s.cloud_configured);
+  state.cloudProvider = s.cloud_provider || null;
   const badge = $('ac-whisper-badge'), instBtn = $('ac-whisper-install');
   const pWrap = $('ac-install-progress-wrap'), pBar = $('ac-install-progress'), pTxt = $('ac-install-progress-text');
 
-  if (s.ready) {
-   if (badge) { badge.textContent = 'WHISPER AI READY (' + (s.model_name || 'base.en') + ')'; badge.className = 'flag ready'; }
-   if (instBtn) instBtn.hidden = true;
-   if (pWrap) pWrap.hidden = true;
-   if (whisperPollTimer) { clearInterval(whisperPollTimer); whisperPollTimer = null; }
-  } else if (s.installing) {
-   if (badge) { badge.textContent = 'INSTALLING WHISPER AI…'; badge.className = 'flag warn'; }
+  if ($('ac-cloud-clear')) $('ac-cloud-clear').hidden = !state.cloudConfigured;
+  if ($('ac-cloud-status')) {
+   $('ac-cloud-status').textContent = state.cloudConfigured
+    ? '✓ Cloud Turbo active (' + String(state.cloudProvider || 'groq').toUpperCase() + ' Whisper Large-v3-Turbo · saved in Windows Vault).'
+    : 'Not configured — runs 100% locally via Whisper AI + DTW.';
+  }
+
+  if (s.installing) {
+   if (badge) { badge.textContent = 'INSTALLING PRO MODEL…'; badge.className = 'flag warn'; }
    if (instBtn) instBtn.hidden = true;
    if (pWrap) pWrap.hidden = false;
    if (pBar) pBar.value = Number(s.progress_pct) || 5;
    if (pTxt) pTxt.textContent = s.stage || 'Downloading…';
    if (!whisperPollTimer) whisperPollTimer = setInterval(refreshWhisperStatus, 900);
+  } else if (state.cloudConfigured) {
+   if (badge) { badge.textContent = '⚡ CLOUD TURBO (' + String(state.cloudProvider || 'GROQ').toUpperCase() + ')'; badge.className = 'flag ready'; }
+   if (instBtn) instBtn.hidden = true;
+   if (pWrap) pWrap.hidden = true;
+   if (whisperPollTimer) { clearInterval(whisperPollTimer); whisperPollTimer = null; }
+  } else if (s.ready && s.has_small) {
+   if (badge) { badge.textContent = 'PRO WHISPER READY (' + (s.model_tier || 'small.en') + ' · DTW)'; badge.className = 'flag ready'; }
+   if (instBtn) instBtn.hidden = true;
+   if (pWrap) pWrap.hidden = true;
+   if (whisperPollTimer) { clearInterval(whisperPollTimer); whisperPollTimer = null; }
+  } else if (s.ready) {
+   if (badge) { badge.textContent = 'WHISPER (' + (s.model_tier || 'base.en') + ' · DTW)'; badge.className = 'flag warn'; }
+   if (instBtn) { instBtn.hidden = false; instBtn.disabled = false; instBtn.textContent = '⬇ Upgrade to Pro Model (488 MB)'; }
+   if (pWrap) pWrap.hidden = true;
+   if (whisperPollTimer) { clearInterval(whisperPollTimer); whisperPollTimer = null; }
   } else {
    if (badge) { badge.textContent = s.error ? 'WHISPER INSTALL ERROR' : 'WHISPER AI NOT INSTALLED'; badge.className = 'flag warn'; }
-   if (instBtn) { instBtn.hidden = false; instBtn.disabled = false; }
+   if (instBtn) { instBtn.hidden = false; instBtn.disabled = false; instBtn.textContent = '⬇ Install Pro Whisper AI (488 MB)'; }
    if (pWrap) pWrap.hidden = true;
    if (s.error && $('ac-transcribe-status')) $('ac-transcribe-status').textContent = 'Install error: ' + s.error;
    if (whisperPollTimer) { clearInterval(whisperPollTimer); whisperPollTimer = null; }
@@ -199,8 +254,12 @@ if ($('ac-whisper-install')) $('ac-whisper-install').onclick = async () => {
  const btn = $('ac-whisper-install');
  btn.disabled = true;
  try {
-  await app().get('/api/workspace/studio/whisper/install', { method: 'POST' });
-  app().note('Downloading Local Whisper AI (whisper-cli + base.en model)…');
+  await app().get('/api/workspace/studio/whisper/install', {
+   method: 'POST',
+   headers: { 'Content-Type': 'application/json' },
+   body: JSON.stringify({ model: 'small.en' })
+  });
+  app().note('Downloading Pro Whisper AI Small.en model (488 MB) for high-accuracy word detection…');
   refreshWhisperStatus();
  } catch (e) {
   app().note('Whisper install failed: ' + e.message);
@@ -208,62 +267,145 @@ if ($('ac-whisper-install')) $('ac-whisper-install').onclick = async () => {
  }
 };
 
-function renderWordEditor() {
- const wrap = $('ac-editor-wrap'), chips = $('ac-word-chips'), cnt = $('ac-word-count'), clr = $('ac-clear-words');
- if (!wrap || !chips) return;
+if ($('ac-cloud-save')) $('ac-cloud-save').onclick = async () => {
+ const provider = $('ac-cloud-provider')?.value || 'groq';
+ const api_key = ($('ac-cloud-key')?.value || '').trim();
+ if (!api_key) { app().note('Paste your Groq or OpenAI API key first.'); return; }
+ const btn = $('ac-cloud-save');
+ btn.disabled = true;
+ try {
+  await app().get('/api/workspace/studio/cloud-key', {
+   method: 'POST',
+   headers: { 'Content-Type': 'application/json' },
+   body: JSON.stringify({ provider, api_key })
+  });
+  if ($('ac-cloud-key')) $('ac-cloud-key').value = '';
+  app().note('Saved ' + provider.toUpperCase() + ' Whisper Turbo key securely in Windows Credential Manager!');
+  await refreshWhisperStatus();
+ } catch (e) {
+  app().note('Could not save key: ' + e.message);
+ } finally {
+  btn.disabled = false;
+ }
+};
+
+if ($('ac-cloud-clear')) $('ac-cloud-clear').onclick = async () => {
+ try {
+  await app().get('/api/workspace/studio/cloud-key', {
+   method: 'POST',
+   headers: { 'Content-Type': 'application/json' },
+   body: JSON.stringify({ provider: 'groq', api_key: '' })
+  });
+  app().note('Removed Cloud Whisper key (switched back to Local Whisper AI).');
+  await refreshWhisperStatus();
+ } catch (e) {
+  app().note('Could not remove key: ' + e.message);
+ }
+};
+
+// ==========================================================================
+// PRO LINE-BY-LINE TIMED TRANSCRIPT EDITOR (AutoCaption.io / TikTokCaptions.io style)
+// ==========================================================================
+function renderTranscriptLines() {
+ const wrap = $('ac-editor-wrap'), list = $('ac-lines-list'), cnt = $('ac-word-count'), clr = $('ac-clear-words');
+ if (!wrap || !list) return;
  if (!state.words.length) {
   wrap.hidden = true;
   if (clr) clr.hidden = true;
-  if ($('ac-word-edit-bar')) $('ac-word-edit-bar').hidden = true;
+  list.replaceChildren();
   return;
  }
  wrap.hidden = false;
  if (clr) clr.hidden = false;
- if (cnt) cnt.textContent = state.words.length + ' spoken word' + (state.words.length === 1 ? '' : 's');
- chips.replaceChildren(...state.words.map((w, idx) => {
-  const b = app().node('button', w.text + (w.emoji ? ' ' + w.emoji : ''), 'ac-word-chip' + (idx === state.selectedWordIdx ? ' selected' : ''));
-  b.type = 'button';
-  b.dataset.widx = String(idx);
-  b.title = app().time(w.start_ms / 1000).slice(0, 8) + ' — click to seek & edit';
-  b.onclick = () => {
-   state.selectedWordIdx = idx;
+ const cfg = getCaptionStyle();
+ const phrases = buildPhrases(state.words, cfg.words_per_line);
+ if (cnt) cnt.textContent = phrases.length + ' caption line' + (phrases.length === 1 ? '' : 's') + ' · ' + state.words.length + ' words';
+
+ list.replaceChildren(...phrases.map(ph => {
+  const firstIdx = ph[0].idx;
+  const lastIdx = ph[ph.length - 1].idx;
+  const startMs = ph[0].word.start_ms;
+  const endMs = ph[ph.length - 1].word.end_ms;
+  const lineText = ph.map(x => x.word.text).join(' ');
+  const lineEmoji = ph.find(x => x.word.emoji)?.word.emoji || '';
+
+  const row = app().node('div', undefined, 'ac-line-row');
+  const tsBtn = app().node('button', fmtShortTs(startMs), 'ac-line-ts');
+  tsBtn.type = 'button';
+  tsBtn.title = 'Click to seek video to ' + fmtShortTs(startMs);
+  tsBtn.onclick = () => {
    const es = app()?.getEditState();
    const v = app()?.getVideo();
    if (v && Number.isFinite(v.duration)) {
-    v.currentTime = Math.min(v.duration, ((es?.in_ms || 0) + w.start_ms) / 1000);
+    v.currentTime = Math.min(v.duration, ((es?.in_ms || 0) + startMs) / 1000);
    }
-   if ($('ac-word-edit-bar')) $('ac-word-edit-bar').hidden = false;
-   if ($('ac-word-input')) { $('ac-word-input').value = w.text; $('ac-word-input').focus(); }
-   if ($('ac-word-emoji')) $('ac-word-emoji').value = w.emoji || '';
-   renderWordEditor();
-   renderLiveCaptions();
+   renderLiveCaptions(true);
   };
-  return b;
+
+  const txtIn = document.createElement('input');
+  txtIn.type = 'text';
+  txtIn.className = 'ac-line-input';
+  txtIn.value = lineText;
+  txtIn.setAttribute('aria-label', 'Edit caption line at ' + fmtShortTs(startMs));
+
+  const emIn = document.createElement('input');
+  emIn.type = 'text';
+  emIn.className = 'ac-line-emoji';
+  emIn.maxLength = 6;
+  emIn.placeholder = '✨';
+  emIn.value = lineEmoji;
+  emIn.title = 'Optional highlight emoji for this line';
+
+  const commitLine = () => {
+   const nextTokens = txtIn.value.trim().split(/\s+/).filter(Boolean);
+   const nextEmoji = emIn.value.trim() || null;
+   const spanCount = lastIdx - firstIdx + 1;
+   if (!nextTokens.length) {
+    state.words.splice(firstIdx, spanCount);
+   } else if (nextTokens.length === spanCount) {
+    nextTokens.forEach((tok, i) => {
+     state.words[firstIdx + i].text = tok;
+     state.words[firstIdx + i].emoji = i === nextTokens.length - 1 ? nextEmoji : null;
+    });
+   } else {
+    const totalChars = nextTokens.reduce((acc, s) => acc + Math.max(2, s.length), 0);
+    const totalMs = Math.max(200, endMs - startMs);
+    let cursor = startMs;
+    const rebuilt = nextTokens.map((tok, i) => {
+     const share = Math.max(70, Math.round((Math.max(2, tok.length) / totalChars) * totalMs));
+     const we = i === nextTokens.length - 1 ? Math.max(cursor + 80, endMs) : Math.min(endMs, cursor + share);
+     const item = { text: tok, start_ms: cursor, end_ms: we, emoji: i === nextTokens.length - 1 ? nextEmoji : null, color: null };
+     cursor = we;
+     return item;
+    });
+    state.words.splice(firstIdx, spanCount, ...rebuilt);
+   }
+   renderTranscriptLines();
+   syncStudioSummary();
+  };
+
+  txtIn.addEventListener('change', commitLine);
+  emIn.addEventListener('change', commitLine);
+  txtIn.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); txtIn.blur(); } });
+
+  const delBtn = app().node('button', '✕', 'ac-line-del');
+  delBtn.type = 'button';
+  delBtn.title = 'Remove this caption line';
+  delBtn.onclick = () => {
+   state.words.splice(firstIdx, lastIdx - firstIdx + 1);
+   renderTranscriptLines();
+   syncStudioSummary();
+  };
+
+  row.append(tsBtn, txtIn, emIn, delBtn);
+  return row;
  }));
 }
 
-if ($('ac-word-save')) $('ac-word-save').onclick = () => {
- const w = state.words[state.selectedWordIdx];
- if (!w) return;
- const nextTxt = ($('ac-word-input')?.value || '').trim();
- if (!nextTxt) { state.words.splice(state.selectedWordIdx, 1); state.selectedWordIdx = -1; }
- else { w.text = nextTxt; w.emoji = ($('ac-word-emoji')?.value || '').trim() || null; }
- renderWordEditor();
- syncStudioSummary();
-};
-if ($('ac-word-input')) $('ac-word-input').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('ac-word-save')?.click(); } });
-if ($('ac-word-del')) $('ac-word-del').onclick = () => {
- if (state.selectedWordIdx < 0 || !state.words[state.selectedWordIdx]) return;
- state.words.splice(state.selectedWordIdx, 1);
- state.selectedWordIdx = -1;
- if ($('ac-word-edit-bar')) $('ac-word-edit-bar').hidden = true;
- renderWordEditor();
- syncStudioSummary();
-};
 if ($('ac-clear-words')) $('ac-clear-words').onclick = () => {
  state.words = [];
- state.selectedWordIdx = -1;
- renderWordEditor();
+ stopCaptionRaf();
+ renderTranscriptLines();
  syncStudioSummary();
  if ($('ac-transcribe-status')) $('ac-transcribe-status').textContent = 'Cleared word captions.';
 };
@@ -271,25 +413,26 @@ if ($('ac-clear-words')) $('ac-clear-words').onclick = () => {
 if ($('ac-transcribe-go')) $('ac-transcribe-go').onclick = async () => {
  const row = app()?.getSelected?.(), btn = $('ac-transcribe-go'), out = $('ac-transcribe-status');
  if (!row?.from_sources || btn.disabled) return;
- if (!state.whisperReady) {
-  app().note('Click "Install Local Whisper AI (142 MB)" first — takes ~20 seconds once.');
+ if (!state.whisperReady && !state.cloudConfigured) {
+  app().note('Click "Install Pro Whisper AI (488 MB)" first, or add a free Groq key.');
   return;
  }
  btn.disabled = true;
- if (out) out.textContent = 'Transcribing exact word timestamps with Local Whisper AI…';
+ const modeDesc = state.cloudConfigured ? 'Cloud Whisper Large-v3-Turbo' : ('Local Whisper ' + (state.hasSmall ? 'Small.en + DTW' : 'Base.en + DTW'));
+ if (out) out.textContent = 'Isolating vocals & aligning spoken words with ' + modeDesc + '…';
  try {
   const es = app().getEditState();
   const r = await app().get('/api/workspace/studio/transcribe/' + encodeURIComponent(row.clip_id), {
    method: 'POST', headers: { 'Content-Type': 'application/json' },
-   body: JSON.stringify({ in_ms: es?.in_ms || 0, out_ms: es?.out_ms || null, language: 'en' })
+   body: JSON.stringify({ in_ms: es?.in_ms || 0, out_ms: es?.out_ms || null, language: 'en', engine: 'auto' })
   });
   state.words = Array.isArray(r.words) ? r.words : [];
-  state.selectedWordIdx = -1;
-  renderWordEditor();
+  renderTranscriptLines();
   syncStudioSummary();
   if (state.words.length) {
-   if (out) out.textContent = '✓ Transcribed ' + state.words.length + ' spoken words with exact karaoke timing! Press Play to preview live.';
-   app().note('✨ Auto-generated ' + state.words.length + ' animated karaoke caption words!');
+   const eng = r.engine || modeDesc;
+   if (out) out.textContent = '✓ Aligned ' + state.words.length + ' spoken words (' + eng + ')! Press Play to preview 60fps karaoke.';
+   app().note('✨ Auto-generated ' + state.words.length + ' word-aligned captions (' + eng + ')!');
   } else {
    if (out) out.textContent = 'No speech detected in this clip segment.';
    app().note('No speech detected in this clip.');
@@ -323,6 +466,7 @@ for (const id of ['ac-wpl', 'ac-size', 'ac-posy', 'ac-uppercase', 'ac-pop', 'ac-
  const onChg = () => {
   if ($('ac-size-val') && $('ac-size')) $('ac-size-val').textContent = $('ac-size').value + 'px';
   if ($('ac-posy-val') && $('ac-posy')) $('ac-posy-val').textContent = $('ac-posy').value + '%';
+  if (id === 'ac-wpl' && state.words.length) renderTranscriptLines();
   syncStudioSummary();
  };
  el.addEventListener('input', onChg);
@@ -588,7 +732,7 @@ if ($('studio-export-now')) $('studio-export-now').onclick = () => {
 
 if ($('studio-reset-all')) $('studio-reset-all').onclick = () => {
  state.words = [];
- state.selectedWordIdx = -1;
+ stopCaptionRaf();
  state.colorGrade = 'none';
  state.lutPath = '';
  state.voiceoverPath = null;
@@ -599,9 +743,141 @@ if ($('studio-reset-all')) $('studio-reset-all').onclick = () => {
  if ($('studio-vo-clear')) $('studio-vo-clear').hidden = true;
  if ($('ac-highlights-list')) $('ac-highlights-list').replaceChildren();
  document.querySelectorAll('#studio-grade-pills button[data-grade]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.grade === 'none')));
- renderWordEditor();
+ renderTranscriptLines();
  syncStudioSummary();
  app().note('Reset Pro Studio settings.');
+};
+
+// ==========================================================================
+// PRO VIRAL HOOK & TITLE GENERATOR (CAPTIONS TAB)
+// ==========================================================================
+let hookGenSeed = 0;
+const HOOK_TEMPLATES = {
+ curiosity: [
+  { tag: '98 CTR', fn: t => '99% of people completely missed this about ' + t + ' 👀' },
+  { tag: '96 CTR', fn: t => 'Nobody is talking about what actually happened with ' + t },
+  { tag: '95 CTR', fn: t => 'Wait until the last 3 seconds of ' + t + '…' },
+  { tag: '94 CTR', fn: t => 'The hidden detail inside ' + t + ' changes everything' },
+  { tag: '93 CTR', fn: t => 'Stop scrolling — you need to see this ' + t + ' breakdown' },
+  { tag: '92 CTR', fn: t => 'Did you catch the secret in ' + t + '? Most people didn’t' },
+  { tag: '91 CTR', fn: t => 'Here is the real reason ' + t + ' is blowing up right now' },
+  { tag: '90 CTR', fn: t => 'Watch closely — ' + t + ' is NOT what you think' },
+ ],
+ shock: [
+  { tag: '98 CTR', fn: t => 'NO WAY this actually happened in ' + t + ' 💀' },
+  { tag: '96 CTR', fn: t => 'I still can’t believe ' + t + ' is real…' },
+  { tag: '95 CTR', fn: t => 'Wait… HOW did ' + t + ' just pull that off?! ⚡' },
+  { tag: '94 CTR', fn: t => 'This ' + t + ' moment broke my brain 🤯' },
+  { tag: '93 CTR', fn: t => 'Everything went wrong in ' + t + ' in 0.5 seconds' },
+  { tag: '92 CTR', fn: t => 'I paused ' + t + ' at the exact wrong frame 💀' },
+  { tag: '91 CTR', fn: t => 'Bro really thought nobody would notice ' + t },
+  { tag: '90 CTR', fn: t => 'My jaw dropped when ' + t + ' did THIS' },
+ ],
+ gta6: [
+  { tag: '99 CTR', fn: t => 'Rockstar actually put THIS detail in ' + t + ' 🌴' },
+  { tag: '97 CTR', fn: t => 'GTA 6 realism just peaked with ' + t + ' 🔥' },
+  { tag: '96 CTR', fn: t => '99% of GTA fans missed this ' + t + ' Easter egg 👀' },
+  { tag: '95 CTR', fn: t => 'Why ' + t + ' proves GTA 6 is 10 years ahead' },
+  { tag: '94 CTR', fn: t => 'This ' + t + ' leak / detail just confirmed everything' },
+  { tag: '93 CTR', fn: t => 'Vice City is going to be INSANE because of ' + t },
+  { tag: '92 CTR', fn: t => 'Pause at 0:03 — did Rockstar really sneak ' + t + ' in?!' },
+  { tag: '91 CTR', fn: t => 'Every GTA 6 player needs to know about ' + t },
+ ],
+ funny: [
+  { tag: '97 CTR', fn: t => 'I actually lost it when ' + t + ' happened 😂' },
+  { tag: '95 CTR', fn: t => 'Who let ' + t + ' cook like this?! 💀' },
+  { tag: '94 CTR', fn: t => 'Trying to stay serious during ' + t + ' (IMPOSSIBLE)' },
+  { tag: '93 CTR', fn: t => 'Instant karma hit ' + t + ' at 100 mph 😂' },
+  { tag: '92 CTR', fn: t => 'Bro had ONE job in ' + t + ' and fumbled it' },
+  { tag: '91 CTR', fn: t => 'Average 5 seconds of ' + t + ' pure chaos' },
+  { tag: '90 CTR', fn: t => 'Zero survival instincts detected in ' + t + ' 💀' },
+  { tag: '89 CTR', fn: t => 'Why is ' + t + ' funnier every time it loops?!' },
+ ],
+ debate: [
+  { tag: '97 CTR', fn: t => 'Unpopular opinion: ' + t + ' is overrated (here’s why)' },
+  { tag: '96 CTR', fn: t => 'Am I the only one who thinks ' + t + ' is crazy?' },
+  { tag: '95 CTR', fn: t => 'Be honest — would you actually try ' + t + '? 👇' },
+  { tag: '94 CTR', fn: t => 'Everyone gets ' + t + ' completely wrong' },
+  { tag: '93 CTR', fn: t => 'Hot take: ' + t + ' just ruined every other game for me' },
+  { tag: '92 CTR', fn: t => 'Rate this ' + t + ' moment 1–10 in the comments' },
+  { tag: '91 CTR', fn: t => 'W or L? Look what happened with ' + t },
+  { tag: '90 CTR', fn: t => 'Tell me I’m wrong about ' + t + '… I’ll wait' },
+ ],
+ story: [
+  { tag: '97 CTR', fn: t => 'POV: 5 seconds into ' + t + ' and everything goes sideways' },
+  { tag: '95 CTR', fn: t => 'The wildest ' + t + ' story you’ll hear all week' },
+  { tag: '94 CTR', fn: t => 'How ' + t + ' went from 0 to 100 real quick' },
+  { tag: '93 CTR', fn: t => 'I tried ' + t + ' so you don’t have to…' },
+  { tag: '92 CTR', fn: t => 'Day 1 of testing ' + t + ' — did NOT expect this' },
+  { tag: '91 CTR', fn: t => 'Watch how fast ' + t + ' turned into pure chaos' },
+  { tag: '90 CTR', fn: t => 'This is why you NEVER underestimate ' + t },
+  { tag: '89 CTR', fn: t => 'Wait for the plot twist in ' + t + '…' },
+ ],
+};
+
+function cleanTopicFromClip() {
+ const manual = ($('hook-gen-topic')?.value || '').trim();
+ if (manual) return manual;
+ const row = app()?.getSelected?.();
+ const raw = ($('title')?.value || row?.name || '').trim()
+  .replace(/\.[^.]+$/, '')
+  .replace(/[_-]+/g, ' ')
+  .replace(/#\S+/g, '')
+  .replace(/\s+/g, ' ')
+  .trim();
+ if (raw && raw.length >= 3) return raw.slice(0, 48);
+ return 'this GTA 6 clip';
+}
+
+function renderGeneratedHooks(seedTopic) {
+ const box = $('hook-gen-results');
+ if (!box) return;
+ const vibe = $('hook-gen-vibe')?.value || 'curiosity';
+ const topic = (seedTopic || cleanTopicFromClip()).trim();
+ const pool = HOOK_TEMPLATES[vibe] || HOOK_TEMPLATES.curiosity;
+ const rotated = pool.map((_, i) => pool[(i + hookGenSeed) % pool.length]).slice(0, 6);
+ hookGenSeed = (hookGenSeed + 2) % pool.length;
+
+ box.replaceChildren(...rotated.map(item => {
+  const text = item.fn(topic);
+  const card = app().node('div', undefined, 'hook-gen-item');
+  const top = app().node('div', undefined, 'hook-gen-top');
+  top.append(app().node('span', item.tag, 'hook-gen-score'), app().node('span', text, 'hook-gen-text'));
+  const acts = app().node('div', undefined, 'hook-gen-actions');
+  const bTitle = app().node('button', 'Use Title', 'mini-btn');
+  bTitle.type = 'button';
+  bTitle.onclick = () => {
+   if ($('title')) $('title').value = text.slice(0, 100);
+   app().refreshDraftEditor();
+   app().workflowDirty();
+   app().note('Applied generated hook to Title!');
+  };
+  const bCap = app().node('button', 'Use Caption', 'mini-btn');
+  bCap.type = 'button';
+  bCap.onclick = () => {
+   if ($('caption')) {
+    const cur = $('caption').value.trim();
+    $('caption').value = cur ? text + '\n\n' + cur : text;
+   }
+   app().refreshDraftEditor();
+   app().workflowDirty();
+   app().note('Added generated hook to Caption!');
+  };
+  acts.append(bTitle, bCap);
+  card.append(top, acts);
+  return card;
+ }));
+}
+
+if ($('hook-gen-go')) $('hook-gen-go').onclick = () => renderGeneratedHooks();
+if ($('hook-gen-vibe')) $('hook-gen-vibe').onchange = () => renderGeneratedHooks();
+if ($('hook-gen-topic')) $('hook-gen-topic').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); renderGeneratedHooks(); } });
+if ($('hook-gen-from-transcript')) $('hook-gen-from-transcript').onclick = () => {
+ if (!state.words.length) return;
+ const snippet = state.words.slice(0, 7).map(w => w.text).join(' ').replace(/[.!?]+$/, '');
+ if ($('hook-gen-topic')) $('hook-gen-topic').value = snippet.slice(0, 60);
+ renderGeneratedHooks(snippet);
+ app().note('Seeded Hook Generator from your spoken transcript!');
 };
 
 function syncClipSelectionUI(row) {
@@ -615,19 +891,27 @@ function syncClipSelectionUI(row) {
 
 window.addEventListener('snapmatic:clip-selected', e => {
  state.words = [];
- state.selectedWordIdx = -1;
+ stopCaptionRaf();
  if ($('ac-highlights-list')) $('ac-highlights-list').replaceChildren();
  if ($('ac-highlights-status')) $('ac-highlights-status').textContent = '';
- renderWordEditor();
+ if ($('hook-gen-topic')) $('hook-gen-topic').value = '';
+ renderTranscriptLines();
  syncClipSelectionUI(e.detail?.row);
+ renderGeneratedHooks();
 });
 
 window.addEventListener('snapmatic:exported', () => {
  if ($('studio-active-summary')) $('studio-active-summary').textContent = '✓ ' + ($('edit-state')?.textContent || 'Exported MP4 with Pro Studio!');
 });
 
-for (const ev of ['timeupdate', 'seeked', 'play', 'pause']) {
- app()?.getVideo()?.addEventListener(ev, renderLiveCaptions);
+const vidEl = app()?.getVideo();
+if (vidEl) {
+ vidEl.addEventListener('play', () => { renderLiveCaptions(true); startCaptionRaf(); });
+ vidEl.addEventListener('pause', () => { stopCaptionRaf(); renderLiveCaptions(true); });
+ vidEl.addEventListener('ended', () => { stopCaptionRaf(); renderLiveCaptions(true); });
+ vidEl.addEventListener('emptied', stopCaptionRaf);
+ vidEl.addEventListener('seeked', () => renderLiveCaptions(true));
+ vidEl.addEventListener('timeupdate', () => { if (vidEl.paused) renderLiveCaptions(false); });
 }
 
 window.snapmaticStudio = {
@@ -649,6 +933,7 @@ window.snapmaticStudio = {
 renderTemplates();
 refreshWhisperStatus();
 loadLuts();
+renderGeneratedHooks();
 syncClipSelectionUI(app()?.getSelected?.());
 setTimeout(() => syncClipSelectionUI(app()?.getSelected?.()), 1000);
 })();

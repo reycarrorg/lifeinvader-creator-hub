@@ -102,6 +102,66 @@ pub(crate) struct TranscribeRequest {
     out_ms: Option<u64>,
     #[serde(default)]
     language: Option<String>,
+    #[serde(default)]
+    engine: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+pub(crate) struct InstallWhisperRequest {
+    #[serde(default)]
+    model: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+pub(crate) struct CloudWhisperKeyRequest {
+    #[serde(default)]
+    provider: String,
+    #[serde(default)]
+    api_key: String,
+}
+
+const CLOUD_WHISPER_VAULT_TARGET: &str = "Snapmatic/Studio/WhisperCloud";
+
+#[derive(Serialize, Deserialize, Clone)]
+struct CloudWhisperCreds {
+    provider: String,
+    api_key: String,
+}
+
+fn load_cloud_whisper_creds() -> Option<CloudWhisperCreds> {
+    let raw = crate::workspace_oauth::studio_vault_read(CLOUD_WHISPER_VAULT_TARGET)?;
+    let creds: CloudWhisperCreds = serde_json::from_value(raw).ok()?;
+    if creds.api_key.trim().is_empty() {
+        return None;
+    }
+    Some(creds)
+}
+
+pub(crate) async fn save_cloud_whisper_key(
+    Json(input): Json<CloudWhisperKeyRequest>,
+) -> ApiResult<Json<Value>> {
+    let key = input.api_key.trim().to_owned();
+    let provider = match input.provider.trim().to_ascii_lowercase().as_str() {
+        "openai" => "openai".to_owned(),
+        _ => "groq".to_owned(),
+    };
+    if key.is_empty() {
+        crate::workspace_oauth::studio_vault_delete(CLOUD_WHISPER_VAULT_TARGET);
+        return Ok(Json(json!({
+            "cloud_configured": false,
+            "cloud_provider": null
+        })));
+    }
+    let payload = json!({
+        "provider": provider,
+        "api_key": key
+    });
+    crate::workspace_oauth::studio_vault_write(CLOUD_WHISPER_VAULT_TARGET, &payload)
+        .map_err(bad)?;
+    Ok(Json(json!({
+        "cloud_configured": true,
+        "cloud_provider": provider
+    })))
 }
 
 #[derive(Clone, Default)]
@@ -142,6 +202,29 @@ fn whisper_tools_dir() -> PathBuf {
     p
 }
 
+fn model_rank_and_tier(name: &str) -> (u8, &'static str, Option<&'static str>) {
+    let low = name.to_ascii_lowercase();
+    if low.contains("large") {
+        (5, "large", None)
+    } else if low.contains("medium.en") {
+        (4, "medium.en", Some("medium.en"))
+    } else if low.contains("medium") {
+        (4, "medium", Some("medium"))
+    } else if low.contains("small.en") {
+        (3, "small.en", Some("small.en"))
+    } else if low.contains("small") {
+        (3, "small", Some("small"))
+    } else if low.contains("base.en") {
+        (2, "base.en", Some("base.en"))
+    } else if low.contains("base") {
+        (2, "base", Some("base"))
+    } else if low.contains("tiny.en") {
+        (1, "tiny.en", Some("tiny.en"))
+    } else {
+        (1, "custom", None)
+    }
+}
+
 pub(crate) fn find_whisper_installation() -> Option<(PathBuf, PathBuf)> {
     let mut roots: Vec<PathBuf> = Vec::new();
     if let Ok(exe) = std::env::current_exe()
@@ -154,7 +237,7 @@ pub(crate) fn find_whisper_installation() -> Option<(PathBuf, PathBuf)> {
     roots.push(PathBuf::from("tools"));
 
     let mut found_bin: Option<PathBuf> = None;
-    let mut found_model: Option<PathBuf> = None;
+    let mut best_model: Option<(u8, u64, PathBuf)> = None;
     for dir in &roots {
         if found_bin.is_none() {
             for name in ["whisper-cli.exe", "main.exe", "whisper.exe", "whisper-cli"] {
@@ -164,7 +247,6 @@ pub(crate) fn find_whisper_installation() -> Option<(PathBuf, PathBuf)> {
                     break;
                 }
             }
-            // Also check one level deep (e.g., Release/whisper-cli.exe from zip extraction)
             if found_bin.is_none()
                 && let Ok(entries) = std::fs::read_dir(dir)
             {
@@ -185,25 +267,30 @@ pub(crate) fn find_whisper_installation() -> Option<(PathBuf, PathBuf)> {
                 }
             }
         }
-        if found_model.is_none()
-            && let Ok(entries) = std::fs::read_dir(dir)
-        {
+        if let Ok(entries) = std::fs::read_dir(dir) {
             for ent in entries.flatten() {
                 let p = ent.path();
                 if p.is_file()
                     && let Some(name) = p.file_name().and_then(|s| s.to_str())
                     && name.starts_with("ggml-")
                     && name.ends_with(".bin")
-                    && std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0) > 20_000_000
                 {
-                    found_model = Some(p);
-                    break;
+                    let len = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+                    if len > 20_000_000 {
+                        let (rank, _, _) = model_rank_and_tier(name);
+                        let better = best_model
+                            .as_ref()
+                            .is_none_or(|(br, bl, _)| rank > *br || (rank == *br && len > *bl));
+                        if better {
+                            best_model = Some((rank, len, p));
+                        }
+                    }
                 }
             }
         }
     }
-    match (found_bin, found_model) {
-        (Some(b), Some(m)) => Some((b, m)),
+    match (found_bin, best_model) {
+        (Some(b), Some((_, _, m))) => Some((b, m)),
         _ => None,
     }
 }
@@ -229,57 +316,93 @@ fn escape_ffmpeg_filter_path(p: &Path) -> String {
 
 pub(crate) async fn whisper_status() -> Json<Value> {
     let installed = find_whisper_installation();
+    let cloud = load_cloud_whisper_creds();
     let st = whisper_install_state()
         .lock()
         .map(|g| g.clone())
         .unwrap_or_default();
-    let (ready, bin, model, model_mb) = match installed {
+    let (ready, bin, model, model_tier, model_mb, has_small) = match installed {
         Some((b, m)) => {
             let mb = std::fs::metadata(&m).map(|md| md.len() / 1_048_576).unwrap_or(0);
+            let mname = m
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("ggml-base.en.bin")
+                .to_owned();
+            let (rank, tier, _) = model_rank_and_tier(&mname);
             (
                 true,
                 Some(b.to_string_lossy().into_owned()),
-                Some(m.file_name().and_then(|s| s.to_str()).unwrap_or("ggml-base.en.bin").to_owned()),
+                Some(mname),
+                Some(tier.to_owned()),
                 mb,
+                rank >= 3,
             )
         }
-        None => (false, None, None, 0),
+        None => (false, None, None, None, 0, false),
     };
     Json(json!({
         "ready": ready,
         "binary_path": bin,
         "model_name": model,
+        "model_tier": model_tier,
         "model_size_mb": model_mb,
+        "has_small": has_small,
+        "cloud_configured": cloud.is_some(),
+        "cloud_provider": cloud.map(|c| c.provider),
         "installing": st.installing,
-        "progress_pct": if ready { 100 } else { st.progress_pct },
+        "progress_pct": if ready && !st.installing { 100 } else { st.progress_pct },
         "stage": if ready && !st.installing { "Ready (Local Whisper AI)".to_owned() } else { st.stage },
         "error": st.error
     }))
 }
 
-pub(crate) async fn install_whisper() -> ApiResult<Json<Value>> {
-    if find_whisper_installation().is_some() {
-        return Ok(Json(json!({ "started": false, "ready": true, "message": "Local Whisper AI is already installed." })));
+pub(crate) async fn install_whisper(
+    body: Option<Json<InstallWhisperRequest>>,
+) -> ApiResult<Json<Value>> {
+    let target_model = match body
+        .and_then(|b| b.0.model)
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("small.en")
+    {
+        "base.en" => "base.en".to_owned(),
+        _ => "small.en".to_owned(),
+    };
+    if let Some((_, ref m)) = find_whisper_installation() {
+        let name = m.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        let (rank, _, _) = model_rank_and_tier(name);
+        if target_model == "base.en" || rank >= 3 {
+            return Ok(Json(json!({
+                "started": false,
+                "ready": true,
+                "message": "Pro Whisper AI model is already installed."
+            })));
+        }
     }
     {
         let mut st = whisper_install_state().lock().map_err(internal)?;
         if st.installing {
-            return Ok(Json(json!({ "started": false, "installing": true, "message": "Installation already in progress." })));
+            return Ok(Json(json!({
+                "started": false,
+                "installing": true,
+                "message": "Installation already in progress."
+            })));
         }
         st.installing = true;
         st.progress_pct = 5;
-        st.stage = "Fetching latest whisper.cpp Windows release…".to_owned();
+        st.stage = format!("Preparing Whisper AI ({target_model})…");
         st.error = None;
     }
 
     tokio::spawn(async move {
-        let res = run_whisper_install().await;
+        let res = run_whisper_install(target_model).await;
         if let Ok(mut st) = whisper_install_state().lock() {
             st.installing = false;
             match res {
                 Ok(()) => {
                     st.progress_pct = 100;
-                    st.stage = "Local Whisper AI installed and ready!".to_owned();
+                    st.stage = "Pro Whisper AI installed and ready!".to_owned();
                     st.error = None;
                 }
                 Err(msg) => {
@@ -357,8 +480,8 @@ fn download_url_with_progress(
     Ok(())
 }
 
-async fn run_whisper_install() -> Result<(), String> {
-    tokio::task::spawn_blocking(|| -> Result<(), String> {
+async fn run_whisper_install(target_model: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
         let dir = whisper_tools_dir();
         std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create tools/whisper: {e}"))?;
 
@@ -437,23 +560,37 @@ async fn run_whisper_install() -> Result<(), String> {
             }
         }
 
-        // 2. Download ggml-base.en.bin (~147 MB) from Hugging Face if missing
-        let model_path = dir.join("ggml-base.en.bin");
-        if !model_path.is_file()
-            || std::fs::metadata(&model_path).map(|m| m.len()).unwrap_or(0) < 100_000_000
-        {
-            download_url_with_progress(
+        // 2. Download target Whisper model (small.en = 488 MB Pro accuracy, or base.en = 148 MB)
+        let (file_name, url, expected_bytes, min_bytes, label) = if target_model == "base.en" {
+            (
+                "ggml-base.en.bin",
                 "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
-                &model_path,
-                147_964_211,
-                35,
-                63,
-                "Downloading Whisper AI Base.en model",
-            )?;
+                147_964_211u64,
+                100_000_000u64,
+                "Downloading Whisper Base.en",
+            )
+        } else {
+            (
+                "ggml-small.en.bin",
+                "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin",
+                487_614_201u64,
+                400_000_000u64,
+                "Downloading Pro Whisper Small.en",
+            )
+        };
+        let model_path = dir.join(file_name);
+        if !model_path.is_file()
+            || std::fs::metadata(&model_path).map(|m| m.len()).unwrap_or(0) < min_bytes
+        {
+            let base_pct = if has_bin { 8 } else { 35 };
+            let span_pct = if has_bin { 90 } else { 63 };
+            download_url_with_progress(url, &model_path, expected_bytes, base_pct, span_pct, label)?;
         }
 
         if find_whisper_installation().is_none() {
-            return Err("Download completed, but whisper-cli.exe or ggml-base.en.bin was not found in tools/whisper/.".to_owned());
+            return Err(format!(
+                "Download completed, but whisper-cli.exe or {file_name} was not found in tools/whisper/."
+            ));
         }
         Ok(())
     })
@@ -462,7 +599,7 @@ async fn run_whisper_install() -> Result<(), String> {
 }
 
 // ==========================================================================
-// 2. WORD-LEVEL AI TRANSCRIPTION (AUTOCAPTION.IO ENGINE)
+// 2. WORD-LEVEL AI TRANSCRIPTION (PRO AUTOCAPTION ENGINE: LOCAL DTW + CLOUD)
 // ==========================================================================
 
 fn keyword_emoji(word: &str) -> Option<&'static str> {
@@ -485,6 +622,92 @@ fn keyword_emoji(word: &str) -> Option<&'static str> {
     }
 }
 
+fn is_hallucination_token(trimmed: &str) -> bool {
+    if trimmed.is_empty() {
+        return true;
+    }
+    if (trimmed.starts_with('[') && trimmed.ends_with(']'))
+        || (trimmed.starts_with('(') && trimmed.ends_with(')'))
+        || (trimmed.starts_with('*') && trimmed.ends_with('*'))
+        || trimmed.contains('♪')
+        || trimmed.contains('♫')
+    {
+        return true;
+    }
+    let low = trimmed.to_ascii_lowercase();
+    matches!(
+        low.as_str(),
+        "[blank_audio]" | "(music)" | "(applause)" | "(laughter)" | "(cheering)" | "(silence)" | "..." | "—" | "–"
+    )
+}
+
+fn is_continuation_piece(raw: &str, trimmed: &str) -> bool {
+    if !raw.starts_with(' ') && !raw.starts_with('\n') && !raw.starts_with('\t') {
+        return true;
+    }
+    if trimmed.chars().all(|c| matches!(c, '.' | ',' | '!' | '?' | ':' | ';' | '…' | ')' | ']' | '"')) {
+        return true;
+    }
+    let low = trimmed.to_ascii_lowercase();
+    matches!(
+        low.as_str(),
+        "'s" | "'re" | "'t" | "n't" | "'ve" | "'ll" | "'m" | "'d" | "’s" | "’re" | "’t" | "n’t" | "’ve" | "’ll" | "’m" | "’d"
+    )
+}
+
+fn clean_and_dedupe_words(mut words: Vec<CaptionWord>) -> Vec<CaptionWord> {
+    // Strip pure punctuation / hallucination tokens and collapse 4+ identical-word loops
+    let mut out: Vec<CaptionWord> = Vec::with_capacity(words.len());
+    let mut repeat_key = String::new();
+    let mut repeat_count = 0usize;
+    for mut w in words.drain(..) {
+        w.text = w.text.trim().to_owned();
+        if w.text.is_empty() || is_hallucination_token(&w.text) {
+            continue;
+        }
+        if !w.text.chars().any(|c| c.is_alphanumeric()) {
+            // Attach stray punctuation onto previous word if present
+            if let Some(prev) = out.last_mut() {
+                prev.text.push_str(&w.text);
+            }
+            continue;
+        }
+        let norm = w
+            .text
+            .trim_matches(|c: char| !c.is_alphanumeric())
+            .to_ascii_lowercase();
+        if norm == repeat_key && !norm.is_empty() {
+            repeat_count += 1;
+            if repeat_count >= 3 {
+                continue;
+            }
+        } else {
+            repeat_key = norm;
+            repeat_count = 0;
+        }
+        if w.emoji.is_none() {
+            w.emoji = keyword_emoji(&w.text).map(str::to_owned);
+        }
+        out.push(w);
+    }
+
+    // Ensure strictly monotonic, clean non-overlapping bounds with natural word duration
+    for i in 0..out.len() {
+        if out[i].end_ms <= out[i].start_ms {
+            out[i].end_ms = out[i].start_ms + 140;
+        }
+        if i + 1 < out.len() {
+            if out[i + 1].start_ms < out[i].start_ms {
+                out[i + 1].start_ms = out[i].start_ms + 70;
+            }
+            if out[i].end_ms > out[i + 1].start_ms {
+                out[i].end_ms = out[i + 1].start_ms.max(out[i].start_ms + 50);
+            }
+        }
+    }
+    out
+}
+
 fn parse_whisper_json_words(raw: &str) -> Vec<CaptionWord> {
     let Ok(val) = serde_json::from_str::<Value>(raw) else {
         return Vec::new();
@@ -501,6 +724,7 @@ fn parse_whisper_json_words(raw: &str) -> Vec<CaptionWord> {
     let flush = |words: &mut Vec<CaptionWord>, txt: &mut String, st: &mut Option<u64>, en: u64| {
         let cleaned = txt.trim().to_owned();
         if !cleaned.is_empty()
+            && !is_hallucination_token(&cleaned)
             && let Some(s) = st.take()
         {
             let e = en.max(s + 90);
@@ -517,63 +741,218 @@ fn parse_whisper_json_words(raw: &str) -> Vec<CaptionWord> {
     };
 
     for seg in segs {
+        let seg_start = seg["offsets"]["from"].as_u64().unwrap_or(cur_end);
+        let seg_end = seg["offsets"]["to"].as_u64().unwrap_or(seg_start + 1200);
+        let seg_before = words.len();
+
         if let Some(tokens) = seg["tokens"].as_array() {
+            let mut in_paren = false;
             for tok in tokens {
                 let t = tok["text"].as_str().unwrap_or("");
                 if t.is_empty() || t.starts_with("[_") || t.starts_with("<|") {
                     continue;
                 }
                 let trimmed = t.trim();
-                if trimmed.is_empty() || (trimmed.starts_with('[') && trimmed.ends_with(']')) {
+                if trimmed.is_empty() {
                     continue;
                 }
-                let from_ms = tok["offsets"]["from"].as_u64().unwrap_or(cur_end);
-                let to_ms = tok["offsets"]["to"].as_u64().unwrap_or(from_ms + 120);
+                // Skip multi-token parenthesized/bracketed sound effects like "(" "music" ")"
+                if trimmed.starts_with('(') || trimmed.starts_with('[') {
+                    if !(trimmed.ends_with(')') || trimmed.ends_with(']')) {
+                        in_paren = true;
+                    }
+                    continue;
+                }
+                if in_paren {
+                    if trimmed.ends_with(')') || trimmed.ends_with(']') {
+                        in_paren = false;
+                    }
+                    continue;
+                }
+                if is_hallucination_token(trimmed) {
+                    continue;
+                }
 
-                // Merge subword BPE pieces (e.g. "Leon"+"idas", "We"+"'re", "Prison"+".") that have no leading space
-                let starts_new_word = t.starts_with(' ')
-                    || t.starts_with('\n')
-                    || cur_text.is_empty()
-                    || (from_ms > cur_end + 350 && !trimmed.chars().all(|c| c.is_ascii_punctuation()));
-                if starts_new_word && !cur_text.is_empty() {
-                    flush(&mut words, &mut cur_text, &mut cur_start, cur_end);
+                // Prefer DTW acoustic word timestamp (`t_dtw` is in centiseconds => * 10 ms!)
+                let dtw_ms = tok["t_dtw"].as_i64().filter(|&v| v > 0).map(|v| (v as u64) * 10);
+                let raw_from = tok["offsets"]["from"].as_u64().unwrap_or(seg_start);
+                let raw_to = tok["offsets"]["to"].as_u64().unwrap_or(raw_from + 120);
+                let from_ms = dtw_ms.unwrap_or(raw_from);
+                let to_ms = if let Some(dm) = dtw_ms {
+                    raw_to.max(dm + 110)
+                } else {
+                    raw_to.max(from_ms + 90)
+                };
+
+                let cont = !cur_text.is_empty() && is_continuation_piece(t, trimmed);
+                if !cont && !cur_text.is_empty() {
+                    // Use next word's DTW onset to tighten the end of the previous word
+                    let tight_end = if from_ms > cur_start.unwrap_or(0) + 60 {
+                        cur_end.min(from_ms)
+                    } else {
+                        cur_end
+                    };
+                    flush(&mut words, &mut cur_text, &mut cur_start, tight_end);
                 }
                 if cur_start.is_none() {
                     cur_start = Some(from_ms);
                 }
-                cur_text.push_str(if cur_text.is_empty() { t.trim_start() } else { t });
+                if cur_text.is_empty() {
+                    cur_text.push_str(trimmed);
+                } else if cont {
+                    cur_text.push_str(trimmed);
+                } else {
+                    cur_text.push_str(t);
+                }
                 cur_end = to_ms.max(cur_end);
+            }
+            flush(&mut words, &mut cur_text, &mut cur_start, cur_end);
+
+            // If a segment had collapsed/identical timestamps (e.g. DTW missed a token), redistribute proportionally by char count
+            let seg_words = &mut words[seg_before..];
+            if seg_words.len() > 1 {
+                let all_same_start = seg_words.iter().all(|w| w.start_ms == seg_words[0].start_ms);
+                if all_same_start && seg_end > seg_start + 120 {
+                    let total_chars: usize = seg_words.iter().map(|w| w.text.len().max(2)).sum();
+                    let span = seg_end - seg_start;
+                    let mut acc = seg_start;
+                    for w in seg_words.iter_mut() {
+                        let share = ((w.text.len().max(2) as f64 / total_chars as f64) * span as f64).round() as u64;
+                        w.start_ms = acc;
+                        w.end_ms = (acc + share.max(80)).min(seg_end);
+                        acc = w.end_ms;
+                    }
+                }
             }
         } else if let Some(text) = seg["text"].as_str() {
             flush(&mut words, &mut cur_text, &mut cur_start, cur_end);
-            let s0 = seg["offsets"]["from"].as_u64().unwrap_or(0);
-            let s1 = seg["offsets"]["to"].as_u64().unwrap_or(s0 + 1500).max(s0 + 200);
+            let s0 = seg_start;
+            let s1 = seg_end.max(s0 + 200);
             let toks: Vec<&str> = text.split_whitespace().collect();
             if !toks.is_empty() {
-                let step = ((s1 - s0) / toks.len() as u64).max(100);
-                for (i, w) in toks.iter().enumerate() {
-                    let ws = s0 + i as u64 * step;
-                    let we = (ws + step).min(s1);
+                let total_chars: usize = toks.iter().map(|w| w.len().max(2)).sum();
+                let span = s1 - s0;
+                let mut acc = s0;
+                for w in toks {
+                    let share = ((w.len().max(2) as f64 / total_chars as f64) * span as f64).round() as u64;
+                    let we = (acc + share.max(80)).min(s1);
                     words.push(CaptionWord {
-                        text: (*w).to_owned(),
-                        start_ms: ws,
-                        end_ms: we.max(ws + 80),
+                        text: w.to_owned(),
+                        start_ms: acc,
+                        end_ms: we.max(acc + 80),
                         emoji: keyword_emoji(w).map(str::to_owned),
                         color: None,
                     });
+                    acc = we;
                 }
             }
         }
     }
     flush(&mut words, &mut cur_text, &mut cur_start, cur_end);
+    clean_and_dedupe_words(words)
+}
 
-    // Ensure strictly monotonic non-overlapping bounds
-    for i in 0..words.len() {
-        if i + 1 < words.len() && words[i].end_ms > words[i + 1].start_ms {
-            words[i].end_ms = words[i + 1].start_ms.max(words[i].start_ms + 60);
+fn parse_cloud_whisper_words(raw: &str) -> Result<Vec<CaptionWord>, String> {
+    let val: Value = serde_json::from_str(raw).map_err(|e| format!("Invalid cloud Whisper JSON: {e}"))?;
+    if let Some(err_msg) = val["error"]["message"].as_str() {
+        return Err(format!("Cloud Whisper API error: {err_msg}"));
+    }
+    let mut words = Vec::new();
+    if let Some(arr) = val["words"].as_array() {
+        for item in arr {
+            let txt = item["word"].as_str().unwrap_or("").trim();
+            if txt.is_empty() {
+                continue;
+            }
+            let st = (item["start"].as_f64().unwrap_or(0.0).max(0.0) * 1000.0).round() as u64;
+            let en = (item["end"].as_f64().unwrap_or(0.0).max(0.0) * 1000.0).round() as u64;
+            words.push(CaptionWord {
+                text: txt.to_owned(),
+                start_ms: st,
+                end_ms: en.max(st + 80),
+                emoji: keyword_emoji(txt).map(str::to_owned),
+                color: None,
+            });
+        }
+    } else if let Some(segs) = val["segments"].as_array() {
+        for seg in segs {
+            let txt = seg["text"].as_str().unwrap_or("");
+            let s0 = (seg["start"].as_f64().unwrap_or(0.0).max(0.0) * 1000.0).round() as u64;
+            let s1 = (seg["end"].as_f64().unwrap_or(0.0).max(0.0) * 1000.0).round() as u64;
+            let toks: Vec<&str> = txt.split_whitespace().collect();
+            if toks.is_empty() {
+                continue;
+            }
+            let total_chars: usize = toks.iter().map(|w| w.len().max(2)).sum();
+            let span = s1.saturating_sub(s0).max(200);
+            let mut acc = s0;
+            for w in toks {
+                let share = ((w.len().max(2) as f64 / total_chars as f64) * span as f64).round() as u64;
+                let we = (acc + share.max(80)).min(s0 + span);
+                words.push(CaptionWord {
+                    text: w.to_owned(),
+                    start_ms: acc,
+                    end_ms: we.max(acc + 80),
+                    emoji: keyword_emoji(w).map(str::to_owned),
+                    color: None,
+                });
+                acc = we;
+            }
         }
     }
-    words
+    Ok(clean_and_dedupe_words(words))
+}
+
+fn run_cloud_whisper(
+    creds: &CloudWhisperCreds,
+    audio_path: &Path,
+    lang: &str,
+) -> Result<(Vec<CaptionWord>, String), String> {
+    let (url, model, engine_name) = if creds.provider == "openai" {
+        (
+            "https://api.openai.com/v1/audio/transcriptions",
+            "whisper-1",
+            "openai-whisper-1",
+        )
+    } else {
+        (
+            "https://api.groq.com/openai/v1/audio/transcriptions",
+            "whisper-large-v3-turbo",
+            "groq-whisper-large-v3-turbo",
+        )
+    };
+    let mut cmd = std::process::Command::new("curl.exe");
+    cmd.args([
+        "-sS",
+        "--max-time",
+        "90",
+        "-H",
+        &format!("Authorization: Bearer {}", creds.api_key.trim()),
+        "-F",
+        &format!("file=@{}", audio_path.to_string_lossy()),
+        "-F",
+        &format!("model={model}"),
+        "-F",
+        &format!("language={lang}"),
+        "-F",
+        "response_format=verbose_json",
+        "-F",
+        "timestamp_granularities[]=word",
+        url,
+    ]);
+    hide_window(&mut cmd);
+    let out = cmd
+        .output()
+        .map_err(|e| format!("Failed contacting cloud Whisper API: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "Cloud Whisper network error: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    let body = String::from_utf8_lossy(&out.stdout);
+    let words = parse_cloud_whisper_words(&body)?;
+    Ok((words, engine_name.to_owned()))
 }
 
 pub(crate) async fn transcribe_clip(
@@ -590,9 +969,22 @@ pub(crate) async fn transcribe_clip(
     let Some(ffmpeg) = find_ffmpeg() else {
         return Err(bad("FFmpeg not found in tools/ffmpeg.exe."));
     };
-    let Some((whisper_bin, model_path)) = find_whisper_installation() else {
-        return Err(bad("Local Whisper AI is not installed yet. Click 'Install Local Whisper AI' first."));
-    };
+    let cloud_creds = load_cloud_whisper_creds();
+    let local_install = find_whisper_installation();
+    let req_engine = input
+        .engine
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("auto")
+        .to_ascii_lowercase();
+
+    if req_engine == "cloud" && cloud_creds.is_none() {
+        return Err(bad("No Cloud Whisper API key saved. Enter a Groq or OpenAI key first, or use Local Whisper AI."));
+    }
+    if local_install.is_none() && cloud_creds.is_none() {
+        return Err(bad("Local Whisper AI is not installed yet. Click 'Install Pro Whisper AI' first (or add a Groq/OpenAI key)."));
+    }
+
     let in_ms = input.in_ms.unwrap_or(0);
     let out_ms_opt = input.out_ms;
     let lang = input
@@ -612,9 +1004,67 @@ pub(crate) async fn transcribe_clip(
 
         let stamp = uuid::Uuid::new_v4().simple();
         let wav_path = std::env::temp_dir().join(format!("snapmatic-whisper-{stamp}.wav"));
+        let mp3_path = std::env::temp_dir().join(format!("snapmatic-whisper-{stamp}.mp3"));
         let out_base = std::env::temp_dir().join(format!("snapmatic-whisper-{stamp}"));
 
-        // Extract crisp 16kHz mono PCM WAV
+        // Vocal-isolation pre-filter (removes sub-90Hz bass rumble/music & normalizes quiet dialogue)
+        let vocal_af = "highpass=f=90,lowpass=f=7600,afftdn=nf=-20,dynaudnorm=f=150:g=15:p=0.9";
+
+        // Path A: Optional Cloud Whisper Large-v3-Turbo (Groq / OpenAI) for ~99% studio accuracy
+        if req_engine != "local"
+            && let Some(ref creds) = cloud_creds
+        {
+            let mut ex = std::process::Command::new(&ffmpeg);
+            ex.args(["-y", "-hide_banner", "-loglevel", "error"]);
+            if in_ms > 0 {
+                ex.args(["-ss", &format!("{:.3}", in_ms as f64 / 1000.0)]);
+            }
+            ex.arg("-i").arg(&source_path);
+            ex.args([
+                "-t",
+                &format!("{:.3}", span_ms as f64 / 1000.0),
+                "-vn",
+                "-af",
+                vocal_af,
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-b:a",
+                "64k",
+            ])
+            .arg(&mp3_path);
+            hide_window(&mut ex);
+            let ex_ok = ex.output().is_ok_and(|o| o.status.success()) && mp3_path.is_file();
+            if ex_ok {
+                let cloud_res = run_cloud_whisper(creds, &mp3_path, &lang);
+                let _ = std::fs::remove_file(&mp3_path);
+                match cloud_res {
+                    Ok((words, engine_label)) => {
+                        let count = words.len();
+                        return Ok(json!({
+                            "words": words,
+                            "word_count": count,
+                            "duration_ms": span_ms,
+                            "engine": engine_label
+                        }));
+                    }
+                    Err(err) => {
+                        if req_engine == "cloud" || local_install.is_none() {
+                            return Err(err);
+                        }
+                        // Otherwise fall through gracefully to local Whisper AI
+                    }
+                }
+            }
+            let _ = std::fs::remove_file(&mp3_path);
+        }
+
+        // Path B: Local Whisper AI with Vocal-Isolation Pre-Filter + DTW Word Alignment + Beam Search
+        let Some((whisper_bin, model_path)) = local_install else {
+            return Err("Local Whisper AI is not installed.".to_owned());
+        };
+
         let mut ex = std::process::Command::new(&ffmpeg);
         ex.args(["-y", "-hide_banner", "-loglevel", "error"]);
         if in_ms > 0 {
@@ -625,6 +1075,8 @@ pub(crate) async fn transcribe_clip(
             "-t",
             &format!("{:.3}", span_ms as f64 / 1000.0),
             "-vn",
+            "-af",
+            vocal_af,
             "-ar",
             "16000",
             "-ac",
@@ -639,22 +1091,52 @@ pub(crate) async fn transcribe_clip(
             return Err("Could not extract audio track from this clip (clip may have no audio).".to_owned());
         }
 
-        // Run whisper-cli with full JSON token timestamps (-ojf)
-        let mut wcmd = std::process::Command::new(&whisper_bin);
-        if let Some(parent) = whisper_bin.parent() {
-            wcmd.current_dir(parent);
-        }
-        wcmd.arg("-m")
-            .arg(&model_path)
-            .arg("-f")
-            .arg(&wav_path)
-            .args(["-l", &lang, "-ojf", "-of"])
-            .arg(&out_base);
-        hide_window(&mut wcmd);
-        let w_out = wcmd
-            .output()
-            .map_err(|e| format!("Failed launching whisper-cli: {e}"))?;
+        let model_name = model_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("ggml-base.en.bin");
+        let (_, model_tier, dtw_preset) = model_rank_and_tier(model_name);
+
+        let run_local = |use_dtw: bool| -> Result<std::process::Output, String> {
+            let mut wcmd = std::process::Command::new(&whisper_bin);
+            if let Some(parent) = whisper_bin.parent() {
+                wcmd.current_dir(parent);
+            }
+            wcmd.arg("-m")
+                .arg(&model_path)
+                .arg("-f")
+                .arg(&wav_path)
+                .args([
+                    "-l",
+                    &lang,
+                    "-bs",
+                    "5",
+                    "-bo",
+                    "5",
+                    "-et",
+                    "2.4",
+                    "-lpt",
+                    "-1.0",
+                    "--no-fallback",
+                    "-ojf",
+                ]);
+            if use_dtw && let Some(preset) = dtw_preset {
+                wcmd.args(["-dtw", preset]);
+            }
+            wcmd.arg("-of").arg(&out_base);
+            hide_window(&mut wcmd);
+            wcmd.output()
+                .map_err(|e| format!("Failed launching whisper-cli: {e}"))
+        };
+
         let json_path = PathBuf::from(format!("{}.json", out_base.display()));
+        let mut w_out = run_local(true)?;
+        if !w_out.status.success() || !json_path.is_file() {
+            // Fallback cleanly without -dtw if an older whisper-cli binary rejects the flag
+            let _ = std::fs::remove_file(&json_path);
+            w_out = run_local(false)?;
+        }
+
         let raw_json = if w_out.status.success() && json_path.is_file() {
             std::fs::read_to_string(&json_path).ok()
         } else {
@@ -665,7 +1147,10 @@ pub(crate) async fn transcribe_clip(
 
         let Some(raw) = raw_json else {
             let err = String::from_utf8_lossy(&w_out.stderr);
-            return Err(format!("Whisper transcription failed: {}", err.lines().rev().take(3).collect::<Vec<_>>().join(" ")));
+            return Err(format!(
+                "Whisper transcription failed: {}",
+                err.lines().rev().take(3).collect::<Vec<_>>().join(" ")
+            ));
         };
         let words = parse_whisper_json_words(&raw);
         let count = words.len();
@@ -673,7 +1158,7 @@ pub(crate) async fn transcribe_clip(
             "words": words,
             "word_count": count,
             "duration_ms": span_ms,
-            "engine": "whisper-local"
+            "engine": format!("whisper-local-{model_tier}-dtw")
         }))
     })
     .await
@@ -724,6 +1209,7 @@ pub(crate) fn generate_ass_subtitles(words: &[CaptionWord], cfg: &CaptionStyleCo
 
     let (font_name, base_color, outline_color, back_color, border_style, outline_w, shadow_d) =
         match cfg.preset.as_str() {
+            "tiktok_bounce" => ("Arial Black", "&H00FFFFFF", "&H00000000", "&H90000000", 1, 6, 4),
             "mrbeast" => ("Impact", "&H00FFFFFF", "&H00000000", "&H90000000", 1, 6, 4),
             "vice_neon" => ("Arial Black", "&H00FFFFFF", "&H00932EFF", "&H80120809", 1, 5, 3),
             "submagic_pill" => ("Arial Black", "&H00FFFFFF", "&H00120809", "&HD0120809", 3, 14, 0),

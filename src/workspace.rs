@@ -18,6 +18,7 @@ pub fn routes(app:App)->Router<App>{
         .route("/workspace-studio.js",get(||async{([(header::CONTENT_TYPE,"text/javascript; charset=utf-8"),(header::CACHE_CONTROL,"no-cache")],include_str!("../web/workspace-studio.js"))}))
         .route("/api/workspace/studio/whisper/status",get(crate::workspace_studio::whisper_status))
         .route("/api/workspace/studio/whisper/install",post(crate::workspace_studio::install_whisper))
+        .route("/api/workspace/studio/cloud-key",post(crate::workspace_studio::save_cloud_whisper_key))
         .route("/api/workspace/studio/transcribe/{id}",post(crate::workspace_studio::transcribe_clip))
         .route("/api/workspace/studio/highlights/{id}",post(crate::workspace_studio::find_highlights))
         .route("/api/workspace/studio/upload-media",post(crate::workspace_studio::upload_studio_media).layer(axum::extract::DefaultBodyLimit::max(125*1024*1024)))

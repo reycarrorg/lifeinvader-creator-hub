@@ -3,17 +3,6 @@
 const $ = id => document.getElementById(id);
 const app = () => window.snapmaticApp;
 
-const HOOK_FORMULAS = [
- 'Wait until you see what this NPC does at the end…',
- '99% of GTA 6 players completely missed this detail 👀',
- 'No way Rockstar actually programmed this into GTA 6 💀',
- 'How did this actually just happen?! 😂',
- 'Stop scrolling — you need to see this GTA 6 secret',
- 'Trying the craziest glitch in GTA 6 so you don’t have to',
- 'POV: 5 seconds in Vice City and chaos breaks out 🌴',
- 'Did you know you can actually do THIS in GTA 6?',
-];
-
 let unexportedDirty = false;
 let uploadPollTimer = null;
 let batchUploadQueue = [];
@@ -189,21 +178,7 @@ if ($('edit-music-clear')) $('edit-music-clear').onclick = () => {
  $('edit-music-clear').hidden = true;
 };
 
-// 6. Viral Hook & Title Formula Helper
-function renderHookHelper() {
- const box = $('hook-helper-list');
- if (!box) return;
- box.replaceChildren(...HOOK_FORMULAS.map(text => {
-  const row = app().node('div', undefined, 'hook-row');
-  const sp = app().node('span', text);
-  const b1 = app().node('button', 'Title'); b1.type = 'button';
-  b1.onclick = () => { $('title').value = text.slice(0, 100); app().refreshDraftEditor(); app().workflowDirty(); app().note('Applied hook to Title.'); };
-  const b2 = app().node('button', 'Banner'); b2.type = 'button';
-  b2.onclick = () => { if ($('edit-hook')) { $('edit-hook').value = text.slice(0, 80); app().updateOverlayPreview(); unexportedDirty = true; } app().note('Applied hook to Top Banner overlay.'); };
-  row.append(sp, b1, b2);
-  return row;
- }));
-}
+// 6. Pro Viral Hook & Title Generator lives in workspace-studio.js
 
 // 7. Smart Auto-Format for All Platforms
 if ($('auto-format-all')) $('auto-format-all').onclick = () => {
@@ -326,7 +301,7 @@ function renderUploadReadiness() {
  const es = app().getEditState();
  const durS = es && es.out_ms > es.in_ms ? (es.out_ms - es.in_ms) / 1000 : (Number.isFinite(v?.duration) ? v.duration : 0);
  const w = v?.videoWidth || 0, h = v?.videoHeight || 0;
- const vertical = h > w || $('edit-framing')?.value !== 'original';
+ const vertical = h > w || Boolean(row.exported) || ($('edit-framing') ? $('edit-framing').value !== 'original' : false);
  const facts = app().getMediaFacts()?.[row.preview_sha256];
  const vCodec = (facts?.streams?.find(s => s.codec_type === 'video')?.codec_name || '').toLowerCase();
  const h264Ok = row.exported || !vCodec || vCodec === 'h264';
@@ -893,7 +868,6 @@ app()?.getVideo()?.addEventListener('loadedmetadata', () => {
  renderClipRatingAndMarkers(app().getSelected());
 });
 
-renderHookHelper();
 renderBrandKits();
 renderBatchUploadQueue();
 updateStreakPill();
