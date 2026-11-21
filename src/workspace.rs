@@ -27,6 +27,7 @@ pub fn routes(app:App)->Router<App>{
         .route("/api/oauth/{provider}/callback",get(crate::workspace_oauth::callback))
         .route("/api/oauth/{provider}/refresh",post(crate::workspace_oauth::refresh))
         .route("/api/oauth/{provider}/disconnect",post(crate::workspace_oauth::disconnect))
+        .route("/api/oauth/instagram/token",post(crate::workspace_oauth::connect_instagram_token))
         .route("/api/oauth/youtube/upload-draft/{clip_id}",post(crate::workspace_oauth::upload_youtube_private_draft))
         .route("/api/workspace/film-roll",get(crate::workspace_film_roll::list).post(crate::workspace_film_roll::add))
         .route("/api/workspace/film-roll/batch",post(crate::workspace_film_roll::batch_action))

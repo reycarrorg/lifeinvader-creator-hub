@@ -233,6 +233,20 @@ for(const [prefix,prov] of [['yt','youtube'],['ig','instagram']]){
  };
 }
 if($('tt-sys-exports'))$('tt-sys-exports').onclick=()=>{$('edit-open-exports')?.click();};
+if($('ig-token-connect'))$('ig-token-connect').onclick=async()=>{
+ const tokEl=$('ig-direct-token'),btn=$('ig-token-connect'),out=$('ig-config-msg');
+ const access_token=(tokEl?.value||'').trim();
+ if(!access_token){if(out)out.textContent='Paste a Meta access token first.';tokEl?.focus();return;}
+ btn.disabled=true;if(out)out.textContent='Verifying token & fetching Instagram Business/Creator account…';
+ try{
+  const r=await get('/api/oauth/instagram/token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({access_token})});
+  if(tokEl)tokEl.value='';
+  if(out)out.textContent='Connected Instagram '+(r.handle||r.account_name)+' (stored in Windows Credential Manager).';
+  note('Connected Instagram '+(r.handle||r.account_name)+'!');
+  await refreshOAuthStatus();loadChannelProfiles();
+ }catch(e){if(out)out.textContent='Error: '+e.message;note(e.message);}
+ finally{btn.disabled=false;}
+};
 if($('yt-upload-draft'))$('yt-upload-draft').onclick=async()=>{
  const row=selected,btn=$('yt-upload-draft'),out=$('yt-upload-result');
  if(!row?.from_sources||btn.disabled)return;

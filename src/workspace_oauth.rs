@@ -102,20 +102,23 @@ fn pkce_challenge(verifier: &str) -> String {
     base64url(&digest)
 }
 
-fn origin_from_headers(headers: &HeaderMap) -> String {
-    let host = headers
+fn port_from_headers(headers: &HeaderMap) -> u16 {
+    headers
         .get("host")
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("127.0.0.1:3847");
-    if host.starts_with("127.0.0.1") || host.starts_with("localhost") {
-        format!("http://{host}")
-    } else {
-        "http://127.0.0.1:3847".to_owned()
-    }
+        .and_then(|h| h.rsplit_once(':'))
+        .and_then(|(_, p)| p.parse::<u16>().ok())
+        .unwrap_or(3847)
 }
 
 fn redirect_uri_for(headers: &HeaderMap, provider: &str) -> String {
-    format!("{}/api/oauth/{provider}/callback", origin_from_headers(headers))
+    let port = port_from_headers(headers);
+    if provider == "instagram" {
+        // Meta rejects http://127.0.0.1 with "not a secure connection", but allows http://localhost in Development mode.
+        format!("http://localhost:{port}/api/oauth/instagram/callback")
+    } else {
+        format!("http://127.0.0.1:{port}/api/oauth/{provider}/callback")
+    }
 }
 
 fn open_browser_url(url: &str) -> Result<(), String> {
@@ -511,6 +514,11 @@ pub(crate) struct YoutubeDraftUploadInput {
     tags: Option<String>,
     #[serde(default)]
     use_source: bool,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct InstagramTokenInput {
+    access_token: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -1277,4 +1285,78 @@ pub(crate) async fn upload_youtube_private_draft(
         "privacy": "private",
         "studio_url": format!("https://studio.youtube.com/video/{uploaded}/edit")
     })))
+}
+
+pub(crate) async fn connect_instagram_token(
+    State(app): State<App>,
+    Json(input): Json<InstagramTokenInput>,
+) -> ApiResult<Json<Value>> {
+    let raw_token = input.access_token.trim().to_owned();
+    if raw_token.is_empty() || raw_token.len() > 2048 || raw_token.chars().any(char::is_whitespace) {
+        return Err(bad("Paste a valid Meta access token (no spaces)."));
+    }
+    let client = platform::vault_read(client_target("instagram").unwrap());
+    let app_clone = app.clone();
+    let result = tokio::task::spawn_blocking(move || -> Result<Value, String> {
+        // If App ID + Secret are saved, upgrade short-lived Graph API Explorer token -> 60-day long-lived token.
+        let (final_tok, exp_at) = if let Some(c) = client
+            && let (Some(cid), Some(csec)) = (c["client_id"].as_str(), c["client_secret"].as_str())
+            && !cid.is_empty()
+            && !csec.is_empty()
+        {
+            let ll_path = format!(
+                "/v21.0/oauth/access_token?grant_type=fb_exchange_token&client_id={}&client_secret={}&fb_exchange_token={}",
+                url_encode(cid),
+                url_encode(csec),
+                url_encode(&raw_token),
+            );
+            match platform::https_request("graph.facebook.com", "GET", &ll_path, &[], &[], 15_000) {
+                Ok(r) if r.status == 200 => {
+                    let v: Value = serde_json::from_slice(&r.body).unwrap_or_default();
+                    let tok = v["access_token"].as_str().unwrap_or(&raw_token).to_owned();
+                    let exp = now_unix() + v["expires_in"].as_i64().unwrap_or(5_184_000);
+                    (tok, exp)
+                }
+                _ => (raw_token, now_unix() + 3600),
+            }
+        } else {
+            (raw_token, now_unix() + 3600)
+        };
+        let (ig_id, ig_name, ig_handle, followers, media) = fetch_instagram_business_account(&final_tok)?;
+        platform::vault_write(
+            token_target("instagram").unwrap(),
+            &json!({ "access_token": final_tok, "expires_at": exp_at }),
+        )?;
+        save_account_row(
+            &app_clone,
+            "instagram",
+            "connected",
+            &ig_id,
+            &ig_name,
+            &ig_handle,
+            "",
+            followers,
+            media,
+            Some(exp_at),
+            "",
+        )?;
+        let ig_url = format!(
+            "https://www.instagram.com/{}/",
+            ig_handle.trim_start_matches('@')
+        );
+        ensure_destination_profile(&app_clone, "instagram", &ig_name, &ig_url);
+        Ok(json!({
+            "provider": "instagram",
+            "connected": true,
+            "account_name": ig_name,
+            "handle": ig_handle,
+            "subscribers": followers,
+            "media_count": media,
+            "expires_at": exp_at
+        }))
+    })
+    .await
+    .map_err(internal)?
+    .map_err(bad)?;
+    Ok(Json(result))
 }
