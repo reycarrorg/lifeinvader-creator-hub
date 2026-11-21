@@ -660,6 +660,8 @@ pub(crate) struct YoutubeDraftUploadInput {
     category_id: Option<String>,
     #[serde(default)]
     made_for_kids: bool,
+    #[serde(default = "default_true")]
+    as_short: bool,
     #[serde(default)]
     use_source: bool,
 }
@@ -1179,9 +1181,14 @@ fn parse_tiktok_upload_url(url: &str) -> Result<(String, String), String> {
         .ok_or_else(|| "TikTok upload URL is missing path.".to_owned())?;
     let host_lc = host.to_ascii_lowercase();
     let allowed = host_lc == "open-upload.tiktokapis.com"
+        || host_lc == "open-upload.tiktokapis.us"
         || host_lc.ends_with(".tiktokapis.com")
+        || host_lc.ends_with(".tiktokapis.us")
         || host_lc.ends_with(".tiktokv.com")
-        || host_lc.ends_with(".tiktokcdn.com");
+        || host_lc.ends_with(".tiktokv.us")
+        || host_lc.ends_with(".tiktokcdn.com")
+        || host_lc.ends_with(".tiktokcdn.us")
+        || host_lc.ends_with(".tiktokcdn-us.com");
     if !allowed {
         return Err(format!("Unexpected TikTok upload host: {host}"));
     }
@@ -1820,6 +1827,24 @@ fn resolve_upload_file(app: &App, clip_id: &str, use_source: bool) -> ApiResult<
     Ok((path, title))
 }
 
+fn ensure_youtube_shorts_metadata(title: &str, description: &str, as_short: bool) -> (String, String) {
+    let mut final_title: String = title.chars().take(100).collect();
+    let mut final_desc: String = description.chars().take(4900).collect();
+    if as_short {
+        if !final_title.to_ascii_lowercase().contains("#short") && final_title.chars().count() <= 92 {
+            final_title = format!("{} #Shorts", final_title.trim_end());
+        }
+        if !final_desc.to_ascii_lowercase().contains("#short") {
+            if final_desc.trim().is_empty() {
+                final_desc = "#Shorts".to_owned();
+            } else {
+                final_desc = format!("{}\n\n#Shorts", final_desc.trim_end());
+            }
+        }
+    }
+    (final_title, final_desc)
+}
+
 pub(crate) async fn upload_youtube_private_draft(
     State(app): State<App>,
     AxumPath(clip_id): AxumPath<String>,
@@ -1863,31 +1888,27 @@ pub(crate) async fn upload_youtube_private_draft(
         .and_then(crate::workspace_film_roll::decode_base64)
         .filter(|b| b.len() >= 8 && b.len() <= 2 * 1024 * 1024 && b.starts_with(b"\x89PNG\r\n\x1a\n"));
 
-    let title = input
+    let raw_title = input
         .title
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .unwrap_or(if fallback_title.is_empty() { "Snapmatic Draft" } else { &fallback_title })
-        .chars()
-        .take(100)
-        .collect::<String>();
-    let description = input
-        .description
-        .as_deref()
-        .unwrap_or("")
-        .chars()
-        .take(4900)
-        .collect::<String>();
-    let tags: Vec<String> = input
+        .unwrap_or(if fallback_title.is_empty() { "Snapmatic Draft" } else { &fallback_title });
+    let raw_desc = input.description.as_deref().unwrap_or("");
+    let as_short = input.as_short;
+    let (title, description) = ensure_youtube_shorts_metadata(raw_title, raw_desc, as_short);
+    let mut tags: Vec<String> = input
         .tags
         .as_deref()
         .unwrap_or("")
         .split([',', ' '])
         .map(|s| s.trim().trim_start_matches('#').to_owned())
         .filter(|s| !s.is_empty())
-        .take(30)
+        .take(29)
         .collect();
+    if as_short && !tags.iter().any(|t| t.eq_ignore_ascii_case("shorts")) {
+        tags.push("Shorts".to_owned());
+    }
     let privacy_clone = privacy.clone();
     let publish_at_clone = publish_at.clone();
     let category_id = match input.category_id.as_deref() {
@@ -1900,7 +1921,31 @@ pub(crate) async fn upload_youtube_private_draft(
     let file_path_sha = file_path.clone();
 
     set_upload_progress(true, "youtube", &clip_id, "initializing", 12, total_bytes, "Initializing YouTube resumable upload…");
-    let res = tokio::task::spawn_blocking(move || -> Result<(String, bool, Option<String>, String), String> {
+    let res = tokio::task::spawn_blocking(move || -> Result<(String, bool, Option<String>, String, Option<String>), String> {
+        let shorts_note = if as_short {
+            crate::workspace_film_roll::probe_mp4_summary(&file_path).and_then(|s| {
+                if s.width > 0 && s.height > 0 && s.width > s.height {
+                    Some(format!(
+                        "Video is landscape ({}×{}). YouTube only puts vertical (9:16) or square videos in the Shorts shelf.",
+                        s.width, s.height
+                    ))
+                } else if s.duration_s > 180.5 {
+                    Some(format!(
+                        "Video is {:.0}s (over YouTube's 3-minute Shorts cap), so YouTube will classify it as a regular video.",
+                        s.duration_s
+                    ))
+                } else if s.duration_s > 60.5 {
+                    Some(format!(
+                        "Uploaded with #Shorts ({:.0}s, 9:16). Note: YouTube treats 61–180s videos with Content ID music claims as regular videos — use \"Export ≤59s Guaranteed Short\" if YouTube places it under Videos.",
+                        s.duration_s
+                    ))
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        };
         let (access_token, _) = refresh_youtube_access_token()?;
         let video_bytes = std::fs::read(&file_path).map_err(|e| format!("Could not read MP4: {e}"))?;
         let file_sha = sha256_file_hex(&file_path_sha).unwrap_or_default();
@@ -2000,14 +2045,14 @@ pub(crate) async fn upload_youtube_private_draft(
                 Err(e) => thumb_err = Some(e),
             }
         }
-        Ok((video_id, thumb_ok, thumb_err, file_sha))
+        Ok((video_id, thumb_ok, thumb_err, file_sha, shorts_note))
     })
     .await
     .map_err(|e| {
         set_upload_progress(false, "youtube", &clip_id, "error", 0, total_bytes, "Upload thread failed.");
         internal(e)
     })?;
-    let (video_id, thumb_uploaded, thumb_note, file_sha) = match res {
+    let (video_id, thumb_uploaded, thumb_note, file_sha, shorts_note) = match res {
         Ok(v) => {
             set_upload_progress(false, "youtube", &clip_id, "done", 100, total_bytes, "YouTube draft upload complete!");
             v
@@ -2046,6 +2091,8 @@ pub(crate) async fn upload_youtube_private_draft(
         "video_id": video_id,
         "privacy": privacy,
         "publish_at": publish_at,
+        "as_short": as_short,
+        "shorts_note": shorts_note,
         "thumbnail_uploaded": thumb_uploaded,
         "thumbnail_note": thumb_note,
         "studio_url": studio_url
@@ -2099,79 +2146,194 @@ pub(crate) async fn upload_instagram_reel(
     let clip_prog = clip_id.clone();
     let file_sha_path = file_path.clone();
 
-    set_upload_progress(true, "instagram", &clip_id, "initializing", 10, total_bytes, "Creating Instagram Reels container…");
+    set_upload_progress(true, "instagram", &clip_id, "initializing", 8, total_bytes, "Checking MP4 compatibility for Instagram Reels…");
     let res = tokio::task::spawn_blocking(move || -> Result<(String, Option<String>, Option<String>, String), String> {
-        let video_bytes = std::fs::read(&file_path).map_err(|e| format!("Could not read MP4: {e}"))?;
         let file_sha = sha256_file_hex(&file_sha_path).unwrap_or_default();
-        let file_size = video_bytes.len().to_string();
+        let probe = crate::workspace_film_roll::probe_mp4_summary(&file_path);
+        let dur_s = probe.as_ref().map(|p| p.duration_s).unwrap_or(0.0);
+        let initial_needs_opt = total_bytes > 12 * 1024 * 1024
+            || (dur_s > 35.0 && probe.as_ref().is_some_and(|p| p.width > 720))
+            || probe.as_ref().is_some_and(|p| {
+                p.audio_sample_rate > 48_000
+                    || (!p.video_codec.is_empty() && p.video_codec != "h264")
+                    || (!p.audio_codec.is_empty() && p.audio_codec != "aac")
+            });
 
-        // Step 1: Create resumable Reels container on Graph API
-        let mut form = format!(
-            "media_type=REELS&upload_type=resumable&share_to_feed={}&access_token={}",
-            if share_to_feed { "true" } else { "false" },
-            url_encode(&access_token),
-        );
-        if !caption.trim().is_empty() {
-            form.push_str("&caption=");
-            form.push_str(&url_encode(caption.trim()));
-        }
-        if let Some(off) = thumb_offset {
-            form.push_str("&thumb_offset=");
-            form.push_str(&off.to_string());
-        }
-        let init_path = format!("/v21.0/{}/media", url_encode(&ig_id));
-        let init_resp = platform::https_request(
-            "graph.facebook.com",
-            "POST",
-            &init_path,
-            &[("Content-Type", "application/x-www-form-urlencoded")],
-            form.as_bytes(),
-            20_000,
-        )?;
-        let init_val: Value = serde_json::from_slice(&init_resp.body).unwrap_or_default();
-        if init_resp.status != 200 {
-            let msg = init_val["error"]["message"]
-                .as_str()
-                .unwrap_or("Instagram rejected Reel container creation.");
-            return Err(msg.to_owned());
-        }
-        let container_id = init_val["id"]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| "Instagram did not return a container ID.".to_owned())?
-            .to_owned();
-        let upload_uri = init_val["uri"]
-            .as_str()
-            .filter(|s| s.starts_with("https://rupload.facebook.com/"))
-            .ok_or_else(|| "Instagram did not return a rupload.facebook.com upload URI.".to_owned())?;
-        let upload_path = upload_uri
-            .strip_prefix("https://rupload.facebook.com")
-            .ok_or_else(|| "Invalid rupload URI.".to_owned())?;
+        let load_bytes = |optimize: bool, fast_fallback: bool| -> Result<Vec<u8>, String> {
+            if !optimize {
+                return std::fs::read(&file_path).map_err(|e| format!("Could not read MP4: {e}"));
+            }
+            set_upload_progress(
+                true,
+                "instagram",
+                &clip_prog,
+                "optimizing",
+                if fast_fallback { 22 } else { 14 },
+                total_bytes,
+                if fast_fallback {
+                    "Meta timed out on HD ingest — retrying with fast 540p Reels optimization…"
+                } else {
+                    "Optimizing MP4 for Instagram Reels (48 kHz AAC & fast Meta ingestion)…"
+                },
+            );
+            let tmp_path = std::env::temp_dir().join(format!(
+                "snapmatic-ig-{}-{}.mp4",
+                &clip_prog[..clip_prog.len().min(8)],
+                uuid::Uuid::new_v4().simple()
+            ));
+            let prep = crate::workspace_film_roll::prepare_instagram_safe_mp4(
+                &file_path,
+                &tmp_path,
+                dur_s,
+                fast_fallback,
+            );
+            let bytes = match prep {
+                Ok(()) => std::fs::read(&tmp_path)
+                    .map_err(|e| format!("Could not read optimized MP4: {e}")),
+                Err(e) => Err(e),
+            };
+            let _ = std::fs::remove_file(&tmp_path);
+            bytes
+        };
 
-        // Step 2: Upload raw MP4 bytes directly to rupload.facebook.com (no cloud hosting required!)
-        set_upload_progress(true, "instagram", &clip_prog, "uploading", 38, total_bytes, &format!("Uploading {:.1} MiB to Instagram…", total_bytes as f64 / 1_048_576.0));
-        let oauth_hdr = format!("OAuth {access_token}");
-        let up_resp = platform::https_request(
-            "rupload.facebook.com",
-            "POST",
-            upload_path,
-            &[
-                ("Authorization", &oauth_hdr),
-                ("offset", "0"),
-                ("file_size", &file_size),
-                ("Content-Type", "application/octet-stream"),
-            ],
-            &video_bytes,
-            180_000,
-        )?;
-        if up_resp.status != 200 {
-            let ev: Value = serde_json::from_slice(&up_resp.body).unwrap_or_default();
-            let msg = ev["debug_info"]["message"]
+        let attempt_upload = |video_bytes: &[u8]| -> Result<(String, u64), (String, bool)> {
+            let upload_bytes_len = video_bytes.len() as u64;
+            let file_size = video_bytes.len().to_string();
+
+            // Step 1: Create resumable Reels container on Graph API
+            set_upload_progress(true, "instagram", &clip_prog, "initializing", 28, upload_bytes_len, "Creating Instagram Reels container…");
+            let mut form = format!(
+                "media_type=REELS&upload_type=resumable&share_to_feed={}&access_token={}",
+                if share_to_feed { "true" } else { "false" },
+                url_encode(&access_token),
+            );
+            if !caption.trim().is_empty() {
+                form.push_str("&caption=");
+                form.push_str(&url_encode(caption.trim()));
+            }
+            if let Some(off) = thumb_offset {
+                form.push_str("&thumb_offset=");
+                form.push_str(&off.to_string());
+            }
+            let init_path = format!("/v21.0/{}/media", url_encode(&ig_id));
+            let init_resp = platform::https_request(
+                "graph.facebook.com",
+                "POST",
+                &init_path,
+                &[("Content-Type", "application/x-www-form-urlencoded")],
+                form.as_bytes(),
+                20_000,
+            )
+            .map_err(|e| (e, false))?;
+            let init_val: Value = serde_json::from_slice(&init_resp.body).unwrap_or_default();
+            if init_resp.status != 200 {
+                let msg = init_val["error"]["error_user_msg"]
+                    .as_str()
+                    .or_else(|| init_val["error"]["message"].as_str())
+                    .unwrap_or("Instagram rejected Reel container creation.");
+                return Err((msg.to_owned(), false));
+            }
+            let container_id = init_val["id"]
                 .as_str()
-                .or_else(|| ev["error"]["message"].as_str())
-                .unwrap_or("Instagram rupload video transfer failed.");
-            return Err(msg.to_owned());
-        }
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| ("Instagram did not return a container ID.".to_owned(), false))?
+                .to_owned();
+            let upload_uri = init_val["uri"]
+                .as_str()
+                .filter(|s| s.starts_with("https://rupload.facebook.com/"))
+                .ok_or_else(|| ("Instagram did not return a rupload.facebook.com upload URI.".to_owned(), false))?;
+            let upload_path = upload_uri
+                .strip_prefix("https://rupload.facebook.com")
+                .ok_or_else(|| ("Invalid rupload URI.".to_owned(), false))?;
+
+            // Step 2: Upload MP4 bytes directly to rupload.facebook.com in 3 MiB resumable chunks
+            let oauth_hdr = format!("OAuth {access_token}");
+            let chunk_size: usize = 3 * 1024 * 1024;
+            let total_len = video_bytes.len();
+            let total_chunks = total_len.div_ceil(chunk_size).max(1);
+            let mut offset: usize = 0;
+            let mut chunk_idx: usize = 0;
+            while offset < total_len {
+                let end = (offset + chunk_size).min(total_len);
+                chunk_idx += 1;
+                let pct = (32 + ((chunk_idx * 24) / total_chunks)).min(56) as u8;
+                set_upload_progress(
+                    true,
+                    "instagram",
+                    &clip_prog,
+                    "uploading",
+                    pct,
+                    upload_bytes_len,
+                    &format!(
+                        "Uploading {:.1} MiB to Instagram (chunk {chunk_idx}/{total_chunks})…",
+                        upload_bytes_len as f64 / 1_048_576.0
+                    ),
+                );
+                let off_str = offset.to_string();
+                let up_resp = platform::https_request(
+                    "rupload.facebook.com",
+                    "POST",
+                    upload_path,
+                    &[
+                        ("Authorization", &oauth_hdr),
+                        ("offset", &off_str),
+                        ("file_size", &file_size),
+                        ("Content-Type", "application/octet-stream"),
+                    ],
+                    &video_bytes[offset..end],
+                    90_000,
+                )
+                .map_err(|e| (e, false))?;
+                let is_final = end >= total_len;
+                let chunk_ok = if is_final {
+                    up_resp.status == 200
+                } else {
+                    matches!(up_resp.status, 200 | 206)
+                };
+                if !chunk_ok {
+                    let ev: Value = serde_json::from_slice(&up_resp.body).unwrap_or_default();
+                    let raw_body = String::from_utf8_lossy(&up_resp.body);
+                    let detail = ev["debug_info"]["message"]
+                        .as_str()
+                        .or_else(|| ev["error"]["error_user_msg"].as_str())
+                        .or_else(|| ev["error"]["message"].as_str())
+                        .filter(|s| !s.trim().is_empty())
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| raw_body.trim().chars().take(180).collect());
+                    let dtype = ev["debug_info"]["type"].as_str().unwrap_or("");
+                    let sub = ev["debug_info"]["subcode"]
+                        .as_i64()
+                        .or_else(|| ev["error"]["error_subcode"].as_i64());
+                    let mut msg = format!(
+                        "Instagram rupload HTTP {} (chunk {chunk_idx}/{total_chunks}, {:.1} MiB): {}",
+                        up_resp.status,
+                        upload_bytes_len as f64 / 1_048_576.0,
+                        if detail.is_empty() { "transfer failed" } else { &detail }
+                    );
+                    if !dtype.is_empty() {
+                        msg.push_str(&format!(" [{dtype}]"));
+                    }
+                    if let Some(sc) = sub {
+                        msg.push_str(&format!(" (subcode {sc})"));
+                    }
+                    let retryable = dtype == "ProcessingFailedError" || up_resp.status >= 500;
+                    return Err((msg, retryable));
+                }
+                offset = end;
+            }
+            Ok((container_id, upload_bytes_len))
+        };
+
+        let first_bytes = load_bytes(initial_needs_opt, false)?;
+        let (container_id, upload_bytes_len) = match attempt_upload(&first_bytes) {
+            Ok(ok) => ok,
+            Err((_first_err, true)) => {
+                drop(first_bytes);
+                let fallback_bytes = load_bytes(true, true)?;
+                attempt_upload(&fallback_bytes).map_err(|(e, _)| e)?
+            }
+            Err((e, false)) => return Err(e),
+        };
 
         // Step 3: Poll container processing until FINISHED (up to 60s)
         let status_path = format!(
@@ -2182,7 +2344,7 @@ pub(crate) async fn upload_instagram_reel(
         let mut finished = false;
         for step in 0..30 {
             let pct = (58 + (step as u8).min(28)).min(88);
-            set_upload_progress(true, "instagram", &clip_prog, "processing", pct, total_bytes, "Waiting for Instagram video processing…");
+            set_upload_progress(true, "instagram", &clip_prog, "processing", pct, upload_bytes_len, "Waiting for Instagram video processing…");
             std::thread::sleep(std::time::Duration::from_secs(2));
             let sresp = platform::https_request("graph.facebook.com", "GET", &status_path, &[], &[], 15_000)?;
             let sval: Value = serde_json::from_slice(&sresp.body).unwrap_or_default();
@@ -2192,7 +2354,10 @@ pub(crate) async fn upload_instagram_reel(
                     break;
                 }
                 Some("ERROR") | Some("EXPIRED") => {
-                    let msg = sval["status"].as_str().unwrap_or("Instagram video processing failed.");
+                    let msg = sval["status"]
+                        .as_str()
+                        .or_else(|| sval["error_message"].as_str())
+                        .unwrap_or("Instagram video processing failed.");
                     return Err(msg.to_owned());
                 }
                 _ => {}
@@ -2378,7 +2543,16 @@ pub(crate) async fn upload_tiktok_inbox_draft(
                 180_000,
             )?;
             if !matches!(put_resp.status, 200 | 201 | 206) {
-                return Err(format!("TikTok chunk upload failed (HTTP {}).", put_resp.status));
+                let body_snippet: String = String::from_utf8_lossy(&put_resp.body)
+                    .trim()
+                    .chars()
+                    .take(160)
+                    .collect();
+                return Err(if body_snippet.is_empty() {
+                    format!("TikTok chunk upload failed (HTTP {}).", put_resp.status)
+                } else {
+                    format!("TikTok chunk upload failed (HTTP {}): {body_snippet}", put_resp.status)
+                });
             }
         }
 
@@ -3277,4 +3451,34 @@ pub(crate) async fn connect_instagram_token(
     .map_err(internal)?
     .map_err(bad)?;
     Ok(Json(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tiktok_upload_url_accepts_us_and_global_hosts() {
+        assert_eq!(
+            parse_tiktok_upload_url("https://open-upload.tiktokapis.us/upload/?upload_id=abc&upload_token=xyz").unwrap(),
+            ("open-upload.tiktokapis.us".to_owned(), "/upload/?upload_id=abc&upload_token=xyz".to_owned())
+        );
+        assert!(parse_tiktok_upload_url("https://open-upload.tiktokapis.com/upload/?id=1").is_ok());
+        assert!(parse_tiktok_upload_url("https://v16.tiktokcdn-us.com/upload/video").is_ok());
+        assert!(parse_tiktok_upload_url("http://open-upload.tiktokapis.us/upload").is_err());
+        assert!(parse_tiktok_upload_url("https://evil.example.com/upload").is_err());
+    }
+
+    #[test]
+    fn youtube_shorts_metadata_appends_shorts_tag() {
+        let (t, d) = ensure_youtube_shorts_metadata("GTA 6 Bigfoot clip", "Watch till the end!", true);
+        assert!(t.contains("#Shorts"));
+        assert!(d.contains("#Shorts"));
+        let (t2, d2) = ensure_youtube_shorts_metadata("Already #Shorts", "Body #shorts", true);
+        assert_eq!(t2, "Already #Shorts");
+        assert_eq!(d2, "Body #shorts");
+        let (t3, d3) = ensure_youtube_shorts_metadata("Normal video", "Regular upload", false);
+        assert_eq!(t3, "Normal video");
+        assert_eq!(d3, "Regular upload");
+    }
 }

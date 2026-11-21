@@ -425,6 +425,7 @@ if($('yt-upload-draft'))$('yt-upload-draft').onclick=async()=>{
     publish_at,
     category_id:$('yt-draft-category')?.value||'20',
     made_for_kids:Boolean($('yt-draft-kids')?.checked),
+    as_short:Boolean($('yt-draft-shorts')?$('yt-draft-shorts').checked:true),
     thumbnail_png_base64:thumbData
    })
   });
@@ -432,7 +433,7 @@ if($('yt-upload-draft'))$('yt-upload-draft').onclick=async()=>{
   if(out){
    delete out.dataset.busy;
    const a=node('a','Open Draft in YouTube Studio ↗');a.href=res.studio_url;a.target='_blank';a.rel='noopener noreferrer';a.className='oauth-link';
-   const extra=(res.publish_at?' · Scheduled':'')+(res.thumbnail_uploaded?' · Thumbnail set':res.thumbnail_note?' · Thumbnail skipped: '+res.thumbnail_note:'');
+   const extra=(res.as_short?' · #Shorts':'')+(res.publish_at?' · Scheduled':'')+(res.thumbnail_uploaded?' · Thumbnail set':res.thumbnail_note?' · Thumbnail skipped: '+res.thumbnail_note:'')+(res.shorts_note?' — '+res.shorts_note:'');
    out.replaceChildren('Uploaded '+String(res.privacy||'private').toUpperCase()+' draft ('+res.video_id+')'+extra+'. ',a);
   }
   note('Uploaded '+String(res.privacy||'private').toUpperCase()+' draft to YouTube Studio ('+res.video_id+').');
@@ -593,17 +594,28 @@ if($('multi-ship-go'))$('multi-ship-go').onclick=async()=>{
     const thumbData=Boolean($('yt-draft-thumb')?.checked&&coverUrl)?await coverBase64():null;
     const r=await get('/api/oauth/youtube/upload-draft/'+encodeURIComponent(row.clip_id),{
      method:'POST',headers:{'Content-Type':'application/json'},
-     body:JSON.stringify({title:common.title,description:mats.youtube,tags:$('draft-yt-api-tags')?.value||common.tags,use_source:!row.exported,privacy,publish_at,thumbnail_png_base64:thumbData})
+     body:JSON.stringify({
+      title:common.title,
+      description:mats.youtube,
+      tags:$('draft-yt-api-tags')?.value||common.tags,
+      category_id:$('yt-draft-category')?.value||'20',
+      made_for_kids:Boolean($('yt-draft-kids')?.checked),
+      as_short:Boolean($('yt-draft-shorts')?$('yt-draft-shorts').checked:true),
+      use_source:!row.exported,
+      privacy,
+      publish_at,
+      thumbnail_png_base64:thumbData
+     })
     });
     row.yt_video_id=r.video_id;okCount++;
-    li.className='ok';li.textContent='✓ YouTube '+String(r.privacy||'private').toUpperCase()+' draft ('+r.video_id+')';
+    li.className='ok';li.textContent='✓ YouTube '+String(r.privacy||'private').toUpperCase()+(r.as_short?' Short':'')+' draft ('+r.video_id+')'+(r.shorts_note?' — '+r.shorts_note:'');
    }catch(e){li.className='err';li.textContent='✕ YouTube: '+e.message;}
   }else if(t==='instagram'){
    const li=addRow(igLive?'⏳ Publishing Instagram Reel…':'⏳ Uploading Instagram Test Container…');
    try{
     const r=await get('/api/oauth/instagram/upload-reel/'+encodeURIComponent(row.clip_id),{
      method:'POST',headers:{'Content-Type':'application/json'},
-     body:JSON.stringify({caption:mats.instagram,share_to_feed:Boolean($('draft-ig-share')?.checked),thumb_offset_ms:pdState?.cover?.thumb_offset_ms??null,use_source:!row.exported,publish:igLive})
+     body:JSON.stringify({caption:mats.instagram,share_to_feed:Boolean($('ig-upload-share')?$('ig-upload-share').checked:$('draft-ig-share')?.checked),thumb_offset_ms:pdState?.cover?.thumb_offset_ms??(Number($('ig-thumb-slider')?.value)||null),use_source:!row.exported,publish:igLive})
     });
     if(r.published&&r.media_id){row.ig_media_id=r.media_id;row.ig_permalink=r.permalink||'';}
     okCount++;
@@ -962,7 +974,7 @@ const guides={tiktok:['10% 18% 23% 7%','TikTok guide','18%','31%'],reels:['11% 1
 const drafts=new Map(), durations=new Map(), dimensions=new Map(), inspected=new Map([['tiktok',true],['instagram',true],['youtube',true]]);
 let items=[],providers=[],selected=null,filter='all',galleryFilter='all',generation=0,refreshing=false,ledgerRows=[],exportHistoryRows=[],systemData=null,activeView='studio',indexReady=false,ledgerReady=false,indexLoad=null,ledgerLoad=null;
 function node(tag,text,cls){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e;}
-async function get(url,opts){const r=await fetch(url,{cache:'no-store',credentials:'same-origin',redirect:'error',...opts});if(!r.ok){let reason='The local Hub did not accept this request.';try{reason=(await r.json()).reason||reason;}catch{}throw Error(reason);}return r.json();}
+async function get(url,opts){const r=await fetch(url,{cache:'no-store',credentials:'same-origin',redirect:'error',...opts});if(!r.ok){let reason='The local Hub did not accept this request.';try{const txt=(await r.text()).trim();if(txt){try{const j=JSON.parse(txt);reason=j.reason||j.error||j.message||txt;}catch{reason=txt;}}}catch{}throw Error(reason);}return r.json();}
 for(const id of ['title','caption','tags'])$(id).addEventListener('input',renderPreflight);
 get('/api/workspace/media-facts').then(d=>{mediaFacts=d;renderPreflight();updateCoverState();if(selected&&!editState)resetEdit(selected);}).catch(()=>{});
 const pd=window.snapmaticDraft, ed=window.snapmaticEdit;

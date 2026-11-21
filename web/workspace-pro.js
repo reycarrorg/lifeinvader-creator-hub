@@ -65,8 +65,9 @@ function updateStreakPill() {
    else if (i > 0) break;
   }
   const goal = getWeeklyGoal();
-  pill.textContent = '🔥 ' + streak + 'd streak · ' + weekCount + '/' + goal + ' this week';
- }).catch(() => { pill.textContent = '🔥 Goal: ' + getWeeklyGoal() + '/wk'; });
+  pill.textContent = '🔥 ' + streak + 'd · ' + weekCount + '/' + goal + ' wk';
+  pill.title = streak + '-day streak · ' + weekCount + ' of ' + goal + ' posts this week (click to edit goal)';
+ }).catch(() => { pill.textContent = '🔥 ' + getWeeklyGoal() + '/wk'; });
 }
 if ($('streak-pill')) {
  $('streak-pill').onclick = () => {
@@ -307,13 +308,14 @@ document.querySelectorAll('#yt-quick-sched button[data-qsched]').forEach(btn => 
 
 // 9. Upload Readiness & Pre-Upload Summary + Auto-Fix / Reels <=89s Variant
 function renderUploadReadiness() {
- const grid = $('upload-readiness'), warn = $('upload-unexported-warn'), fixBtn = $('upload-autofix-btn'), reelsBtn = $('upload-reels-cut-btn'), sumBox = $('upload-summary-preview');
+ const grid = $('upload-readiness'), warn = $('upload-unexported-warn'), fixBtn = $('upload-autofix-btn'), shortsBtn = $('upload-shorts-cut-btn'), reelsBtn = $('upload-reels-cut-btn'), sumBox = $('upload-summary-preview');
  const row = app()?.getSelected();
  if (!grid) return;
  if (!row?.from_sources) {
   grid.textContent = 'Select a Film Roll clip to check Shorts, Reels, TikTok & X readiness.';
   if (warn) warn.hidden = true;
   if (fixBtn) fixBtn.hidden = true;
+  if (shortsBtn) shortsBtn.hidden = true;
   if (reelsBtn) reelsBtn.hidden = true;
   return;
  }
@@ -328,8 +330,8 @@ function renderUploadReadiness() {
  const sizeMiB = (row.preview_bytes || 0) / 1048576;
 
  const checks = [
-  { id: 'youtube', name: 'YouTube Shorts', ok: durS <= 180 && vertical && sizeMiB <= 250, msg: durS > 180 ? 'Over 180s (normal video)' : !vertical ? 'Landscape (crop to 9:16 for Shorts)' : 'Ready (' + durS.toFixed(1) + 's · 9:16)' },
-  { id: 'instagram', name: 'Instagram Reels', ok: durS <= 90 && vertical && h264Ok, warn: durS > 90 && durS <= 180, msg: !h264Ok ? 'Codec ' + vCodec + ' — export H.264 first' : durS > 90 ? 'Over 90s (' + durS.toFixed(0) + 's) — recommend ≤89s' : !vertical ? 'Crop to 9:16 for Reels' : 'Ready (' + durS.toFixed(1) + 's · H.264)' },
+  { id: 'youtube', name: 'YouTube Shorts', ok: durS <= 60 && vertical && sizeMiB <= 250, warn: durS > 60 && durS <= 180 && vertical && sizeMiB <= 250, msg: durS > 180 ? 'Over 180s (regular video)' : !vertical ? 'Landscape (crop to 9:16 for Shorts)' : durS > 60 ? '3-min Short (' + durS.toFixed(0) + 's) — trim ≤59s if Content ID music puts it in Videos' : 'Guaranteed Short (' + durS.toFixed(1) + 's · 9:16 · #Shorts)' },
+  { id: 'instagram', name: 'Instagram Reels', ok: durS <= 90 && vertical && h264Ok, warn: durS > 90 && durS <= 180, msg: !h264Ok ? 'Codec ' + vCodec + ' — auto-optimized on upload' : durS > 90 ? 'Over 90s (' + durS.toFixed(0) + 's) — recommend ≤89s (auto-optimized 48 kHz)' : !vertical ? 'Crop to 9:16 for Reels' : 'Ready (' + durS.toFixed(1) + 's · H.264)' },
   { id: 'tiktok', name: 'TikTok Inbox', ok: durS <= 600 && h264Ok, msg: !h264Ok ? 'Export H.264 MP4 recommended' : 'Ready (' + durS.toFixed(1) + 's)' },
   { id: 'x', name: 'X Video', ok: durS <= 140 && h264Ok, msg: durS > 140 ? 'Over 140s X free-tier limit (' + durS.toFixed(0) + 's)' : 'Ready (' + durS.toFixed(1) + 's · ' + app().xPostText().length + '/280 chars)' },
  ];
@@ -344,6 +346,7 @@ function renderUploadReadiness() {
  const hasPendingEdits = unexportedDirty || Boolean(es?.dirty);
  if (warn) warn.hidden = !hasPendingEdits;
  if (fixBtn) fixBtn.hidden = !(!h264Ok || !vertical || hasPendingEdits);
+ if (shortsBtn) shortsBtn.hidden = !(durS > 60);
  if (reelsBtn) reelsBtn.hidden = !(durS > 90);
  if (sumBox) {
   const fileLabel = row.exported ? ('Exported MP4 (' + row.exported_file + ')') : ('Original source (' + row.name + ')');
@@ -354,6 +357,18 @@ if ($('upload-autofix-btn')) $('upload-autofix-btn').onclick = () => {
  if ($('edit-framing') && $('edit-framing').value === 'original') $('edit-framing').value = 'center_crop';
  if ($('edit-norm')) $('edit-norm').checked = true;
  if ($('edit-force-30fps')) $('edit-force-30fps').checked = true;
+ app().setInspectorTab('export');
+ $('edit-transcode')?.click();
+};
+if ($('upload-shorts-cut-btn')) $('upload-shorts-cut-btn').onclick = async () => {
+ const row = app().getSelected(), es = app().getEditState();
+ if (!row?.from_sources || !es) return;
+ const start = es.in_ms || 0;
+ const end = Math.min(es.duration_ms, start + 59000);
+ app().setTrim('out', end);
+ if ($('edit-framing') && $('edit-framing').value === 'original') $('edit-framing').value = 'center_crop';
+ if ($('yt-draft-shorts')) $('yt-draft-shorts').checked = true;
+ app().note('Trimmed clip to guaranteed ≤59s YouTube Short and starting export…');
  app().setInspectorTab('export');
  $('edit-transcode')?.click();
 };
@@ -489,7 +504,7 @@ if ($('batch-queue-run')) $('batch-queue-run').onclick = async () => {
      }
      await app().get('/api/oauth/youtube/upload-draft/' + encodeURIComponent(item.clip_id), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: item.title, description: item.yt_desc, tags: item.yt_tags, category_id: item.yt_cat, privacy: 'private', publish_at, use_source: !item.exported })
+      body: JSON.stringify({ title: item.title, description: item.yt_desc, tags: item.yt_tags, category_id: item.yt_cat, as_short: Boolean($('yt-draft-shorts') ? $('yt-draft-shorts').checked : true), privacy: 'private', publish_at, use_source: !item.exported })
      });
     } else if (t === 'instagram') {
      await app().get('/api/oauth/instagram/upload-reel/' + encodeURIComponent(item.clip_id), {

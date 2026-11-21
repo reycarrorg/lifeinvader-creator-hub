@@ -1119,10 +1119,10 @@ fn run_ffmpeg_once(
 
     match encoder {
         "h264_nvenc" => {
-            let (preset, cq) = match quality {
-                "high" => ("p5", "18"),
-                "fast" => ("p2", "25"),
-                _ => ("p4", "21"),
+            let (preset, cq, maxrate, bufsize) = match quality {
+                "high" => ("p5", "18", "12M", "24M"),
+                "fast" => ("p2", "25", "5M", "10M"),
+                _ => ("p4", "21", "7M", "14M"),
             };
             cmd.args([
                 "-c:v",
@@ -1135,44 +1135,53 @@ fn run_ffmpeg_once(
                 cq,
                 "-b:v",
                 "0",
+                "-maxrate",
+                maxrate,
+                "-bufsize",
+                bufsize,
                 "-pix_fmt",
                 "yuv420p",
             ]);
         }
         "h264_qsv" => {
-            let q = match quality {
-                "high" => "18",
-                "fast" => "25",
-                _ => "21",
+            let (q, maxrate, bufsize) = match quality {
+                "high" => ("18", "12M", "24M"),
+                "fast" => ("25", "5M", "10M"),
+                _ => ("21", "7M", "14M"),
             };
             cmd.args([
                 "-c:v",
                 "h264_qsv",
                 "-global_quality",
                 q,
+                "-maxrate",
+                maxrate,
+                "-bufsize",
+                bufsize,
                 "-pix_fmt",
                 "nv12",
             ]);
         }
         "h264_amf" => {
-            let (usage, qp) = match quality {
-                "high" => ("quality", "18"),
-                "fast" => ("speed", "25"),
-                _ => ("balanced", "21"),
+            let (usage, qp, maxrate, bufsize) = match quality {
+                "high" => ("quality", "18", "12M", "24M"),
+                "fast" => ("speed", "25", "5M", "10M"),
+                _ => ("balanced", "21", "7M", "14M"),
             };
             cmd.args([
                 "-c:v", "h264_amf", "-quality", usage, "-rc", "cqp", "-qp_i", qp, "-qp_p", qp,
-                "-pix_fmt", "yuv420p",
+                "-maxrate", maxrate, "-bufsize", bufsize, "-pix_fmt", "yuv420p",
             ]);
         }
         _ => {
-            let (preset, crf) = match quality {
-                "high" => ("medium", "16"),
-                "fast" => ("veryfast", "23"),
-                _ => ("fast", "20"),
+            let (preset, crf, maxrate, bufsize) = match quality {
+                "high" => ("medium", "16", "12M", "24M"),
+                "fast" => ("veryfast", "23", "5M", "10M"),
+                _ => ("fast", "20", "7M", "14M"),
             };
             cmd.args([
-                "-c:v", "libx264", "-preset", preset, "-crf", crf, "-pix_fmt", "yuv420p",
+                "-c:v", "libx264", "-preset", preset, "-crf", crf, "-maxrate", maxrate,
+                "-bufsize", bufsize, "-pix_fmt", "yuv420p",
             ]);
         }
     }
@@ -1183,7 +1192,9 @@ fn run_ffmpeg_once(
         if music_bed.is_none() && !audio_filters.is_empty() {
             cmd.args(["-af", &audio_filters.join(",")]);
         }
-        cmd.args(["-c:a", "aac", "-b:a", "192k"]);
+        // Always resample to 48 kHz stereo AAC (FFmpeg loudnorm otherwise upsamples to 96/192 kHz,
+        // which Instagram Reels & TikTok reject).
+        cmd.args(["-ar", "48000", "-ac", "2", "-c:a", "aac", "-b:a", "128k"]);
     }
     cmd.args(["-movflags", "+faststart"])
         .arg(tmp_out)
@@ -2940,4 +2951,182 @@ pub(crate) async fn pick_music() -> ApiResult<Json<Value>> {
     {
         Err(bad("Music file picker is supported on Windows builds."))
     }
+}
+
+pub(crate) struct Mp4Summary {
+    pub width: u32,
+    pub height: u32,
+    pub duration_s: f64,
+    pub video_codec: String,
+    pub audio_codec: String,
+    pub audio_sample_rate: u32,
+}
+
+pub(crate) fn probe_mp4_summary(path: &Path) -> Option<Mp4Summary> {
+    let ffprobe = find_ffprobe()?;
+    let mut cmd = std::process::Command::new(&ffprobe);
+    cmd.args([
+        "-v",
+        "quiet",
+        "-print_format",
+        "json",
+        "-show_format",
+        "-show_streams",
+    ])
+    .arg(path);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+    let out = cmd.output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let parsed: Value = serde_json::from_slice(&out.stdout).ok()?;
+    let streams = parsed["streams"].as_array()?;
+    let v = streams.iter().find(|s| s["codec_type"].as_str() == Some("video"));
+    let a = streams.iter().find(|s| s["codec_type"].as_str() == Some("audio"));
+    let width = v.and_then(|s| s["width"].as_u64()).unwrap_or(0) as u32;
+    let height = v.and_then(|s| s["height"].as_u64()).unwrap_or(0) as u32;
+    let duration_s = parsed["format"]["duration"]
+        .as_str()
+        .and_then(|s| s.parse::<f64>().ok())
+        .or_else(|| parsed["format"]["duration"].as_f64())
+        .unwrap_or(0.0);
+    let video_codec = v
+        .and_then(|s| s["codec_name"].as_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let audio_codec = a
+        .and_then(|s| s["codec_name"].as_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let audio_sample_rate = a
+        .and_then(|s| {
+            s["sample_rate"]
+                .as_str()
+                .and_then(|r| r.parse::<u32>().ok())
+                .or_else(|| s["sample_rate"].as_u64().map(|n| n as u32))
+        })
+        .unwrap_or(0);
+    Some(Mp4Summary {
+        width,
+        height,
+        duration_s,
+        video_codec,
+        audio_codec,
+        audio_sample_rate,
+    })
+}
+
+pub(crate) fn prepare_instagram_safe_mp4(
+    src: &Path,
+    out_tmp: &Path,
+    duration_s: f64,
+    fast_fallback: bool,
+) -> Result<(), String> {
+    let ffmpeg = find_ffmpeg().ok_or_else(|| "FFmpeg not found in tools/ffmpeg.exe.".to_owned())?;
+    // Meta's rupload.facebook.com synchronously validates/transcodes on the final chunk with a ~30s timeout.
+    // Keep normal uploads crisp (1080p <=35s, 720p >35s), and when fast_fallback is triggered after a
+    // Meta ProcessingFailedError timeout on long/high-motion clips, scale to 540x960 @ 24fps (~6-7 MiB)
+    // so Meta's transcoder finishes well under 30s.
+    let dur = if duration_s.is_finite() && duration_s > 1.0 {
+        duration_s
+    } else {
+        60.0
+    };
+    let target_mib = if fast_fallback { 6.5 } else { 11.2 };
+    let target_kbits = target_mib * 8192.0;
+    let audio_kbps: u32 = if fast_fallback || dur > 90.0 { 96 } else { 128 };
+    let v_kbps = ((target_kbits / dur) - (audio_kbps as f64 + 16.0)).clamp(420.0, 4500.0) as u32;
+    let max_kbps = (v_kbps * 12 / 10).max(v_kbps + 80);
+    let buf_kbps = max_kbps * 2;
+    let bv_str = format!("{v_kbps}k");
+    let max_str = format!("{max_kbps}k");
+    let buf_str = format!("{buf_kbps}k");
+    let ab_str = format!("{audio_kbps}k");
+    let (scale_vf, target_fps) = if fast_fallback || dur > 120.0 {
+        (
+            Some("scale='min(540,iw)':-2:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2"),
+            "24",
+        )
+    } else if dur > 75.0 {
+        (
+            Some("scale='min(720,iw)':-2:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2"),
+            "24",
+        )
+    } else if dur > 35.0 {
+        (
+            Some("scale='min(720,iw)':-2:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2"),
+            "30",
+        )
+    } else {
+        (None, "30")
+    };
+    let run_pass = |enc: &str| -> Result<(), String> {
+        let mut cmd = std::process::Command::new(&ffmpeg);
+        cmd.args(["-y", "-hide_banner", "-loglevel", "error", "-i"])
+            .arg(src);
+        if let Some(vf) = scale_vf {
+            cmd.args(["-vf", vf]);
+        }
+        match enc {
+            "h264_nvenc" => {
+                cmd.args([
+                    "-c:v", "h264_nvenc", "-preset", "p3", "-profile:v", "main", "-rc", "vbr",
+                    "-b:v", &bv_str, "-maxrate", &max_str, "-bufsize", &buf_str, "-r", target_fps,
+                    "-pix_fmt", "yuv420p",
+                ]);
+            }
+            "h264_qsv" => {
+                cmd.args([
+                    "-c:v", "h264_qsv", "-b:v", &bv_str, "-maxrate", &max_str, "-bufsize",
+                    &buf_str, "-r", target_fps, "-pix_fmt", "nv12",
+                ]);
+            }
+            "h264_amf" => {
+                cmd.args([
+                    "-c:v", "h264_amf", "-quality", "balanced", "-b:v", &bv_str, "-maxrate",
+                    &max_str, "-bufsize", &buf_str, "-r", target_fps, "-pix_fmt", "yuv420p",
+                ]);
+            }
+            _ => {
+                cmd.args([
+                    "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "main", "-level",
+                    "4.0", "-b:v", &bv_str, "-maxrate", &max_str, "-bufsize", &buf_str, "-r",
+                    target_fps, "-pix_fmt", "yuv420p",
+                ]);
+            }
+        }
+        cmd.args([
+            "-ar", "48000", "-ac", "2", "-c:a", "aac", "-b:a", &ab_str, "-shortest", "-movflags",
+            "+faststart",
+        ])
+        .arg(out_tmp);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        let out = cmd
+            .output()
+            .map_err(|e| format!("Failed to start FFmpeg Reels optimizer: {e}"))?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            let err = String::from_utf8_lossy(&out.stderr).trim().to_owned();
+            Err(if err.is_empty() {
+                "FFmpeg Reels optimizer failed.".to_owned()
+            } else {
+                err
+            })
+        }
+    };
+    if let Some(hw) = cached_hw_encoder() {
+        if run_pass(&hw).is_ok() {
+            return Ok(());
+        }
+    }
+    run_pass("libx264")
 }

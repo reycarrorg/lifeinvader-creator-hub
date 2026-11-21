@@ -304,7 +304,7 @@
 .cal-detail h3{margin:0;font-size:16px}
 .cal-item{padding:10px;border-radius:8px;background:var(--bg);border:1px solid var(--line);display:grid;gap:5px}
 .cal-item-head{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:11px}
-.streak-pill{padding:3px 10px;border-radius:999px;border:1px solid rgba(255,179,0,.45);background:rgba(255,179,0,.12);color:#ffd54f;font:600 11px var(--mono);cursor:pointer;white-space:nowrap}
+.streak-pill{padding:3px 9px;border-radius:999px;border:1px solid rgba(255,179,0,.45);background:rgba(255,179,0,.12);color:#ffd54f;font:600 11px var(--mono);cursor:pointer;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis;box-sizing:border-box}
 .streak-pill:hover{background:rgba(255,179,0,.22)}
 :root[data-theme="light"] .streak-pill{color:#b45309;border-color:rgba(180,83,9,.35)}
 .mini-btn{padding:4px 8px;border-radius:5px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:600 11px var(--mono);cursor:pointer}
