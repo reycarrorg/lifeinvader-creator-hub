@@ -3,7 +3,6 @@
 const $ = id => document.getElementById(id);
 const app = () => window.snapmaticApp;
 
-const TPL_KEY = 'snapmatic-autocap-templates-v1';
 const CAP_CACHE_KEY = 'snapmatic-autocap-clips-v1';
 function readCapCache() { try { return JSON.parse(localStorage.getItem(CAP_CACHE_KEY) || '{}') || {}; } catch { return {}; } }
 function saveClipCaptions(clipId, words) {
@@ -22,45 +21,38 @@ function loadClipCaptions(clipId) {
  const entry = readCapCache()[clipId];
  return Array.isArray(entry?.words) ? entry.words : [];
 }
-const GRADE_CSS = {
- none: '',
- crisp_rec709: 'contrast(1.06) saturate(1.10) brightness(1.01)',
- warm_cinema: 'contrast(1.08) saturate(1.12) sepia(0.10) brightness(1.01)',
- vice_night: 'contrast(1.10) saturate(1.20) hue-rotate(-5deg)',
- hdr_gaming: 'contrast(1.12) saturate(1.18)',
+
+const DEFAULT_CAPTION_STYLE = {
+ preset: 'hormozi',
+ words_per_line: 3,
+ font_size: 68,
+ pos_y_pct: 74,
+ active_color: '#FFE600',
+ uppercase: true,
+ pop_animation: true,
+ show_emojis: true,
 };
 
 const state = {
- whisperReady: false,
- hasSmall: false,
- cloudConfigured: false,
- cloudProvider: null,
- words: [], // [{ text, start_ms, end_ms, emoji, color }]
- preset: 'hormozi',
- activeColor: '#FFE600',
- colorGrade: 'none',
- lutPath: '',
- voiceoverPath: null,
- voiceoverBlobUrl: null,
+ words: [],
+ autoPlan: null,
+ lastAudit: null,
+ opusConfigured: false,
+ opusTemplateId: '',
+ submagicConfigured: false,
+ submagicTemplate: 'Hormozi 2',
+ submagicBrolls: true,
+ submagicZooms: true,
+ busy: false,
+ activeKeyProvider: null,
+ runAfterSave: false,
 };
 
-let whisperPollTimer = null;
 let captionRaf = null;
 let lastRenderedWordKey = '';
-let voRecorder = null, voChunks = [], voStream = null, voMeterRaf = null, voAudioCtx = null;
-
-function getCaptionStyle() {
- return {
-  preset: state.preset,
-  words_per_line: Number($('ac-wpl')?.value) || 3,
-  font_size: Number($('ac-size')?.value) || 68,
-  pos_y_pct: Number($('ac-posy')?.value) || 74,
-  active_color: state.activeColor,
-  uppercase: Boolean($('ac-uppercase')?.checked),
-  pop_animation: Boolean($('ac-pop')?.checked),
-  show_emojis: Boolean($('ac-emojis')?.checked),
- };
-}
+let cloudPollTimer = null;
+let exportPollTimer = null;
+let auditSeq = 0;
 
 function buildPhrases(words, wpl) {
  const phrases = [];
@@ -81,15 +73,8 @@ function buildPhrases(words, wpl) {
  return phrases;
 }
 
-function fmtShortTs(ms) {
- const s = Math.max(0, ms) / 1000;
- const m = Math.floor(s / 60);
- const rem = (s % 60).toFixed(1).padStart(4, '0');
- return String(m).padStart(2, '0') + ':' + rem;
-}
-
 // ==========================================================================
-// 60FPS LIVE WYSIWYG VIEWFINDER AUTOCAPTION PREVIEW
+// 60FPS LIVE VIEWFINDER KARAOKE PREVIEW
 // ==========================================================================
 function renderLiveCaptions(force = false) {
  const layer = $('vf-autocap-layer');
@@ -100,12 +85,11 @@ function renderLiveCaptions(force = false) {
   lastRenderedWordKey = '';
   return;
  }
- const cfg = getCaptionStyle();
+ const cfg = DEFAULT_CAPTION_STYLE;
  const v = app()?.getVideo();
  const es = app()?.getEditState();
  const trimInMs = es?.in_ms || 0;
  const curMs = v && Number.isFinite(v.currentTime) ? Math.max(0, Math.round(v.currentTime * 1000) - trimInMs) : 0;
-
  const phrases = buildPhrases(state.words, cfg.words_per_line);
  let phraseIdx = phrases.findIndex(ph => curMs >= ph[0].word.start_ms && curMs <= ph[ph.length - 1].word.end_ms + 240);
  let previewMode = false;
@@ -119,7 +103,6 @@ function renderLiveCaptions(force = false) {
   lastRenderedWordKey = 'hidden';
   return;
  }
-
  const activePhrase = phrases[phraseIdx];
  let activeWordIdx = activePhrase[0].idx;
  if (!previewMode) {
@@ -127,8 +110,7 @@ function renderLiveCaptions(force = false) {
    if (curMs >= item.word.start_ms) activeWordIdx = item.idx;
   }
  }
-
- const renderKey = [phraseIdx, activeWordIdx, cfg.preset, cfg.active_color, cfg.font_size, cfg.pos_y_pct, cfg.uppercase, cfg.pop_animation, cfg.show_emojis, cfg.words_per_line].join('|');
+ const renderKey = phraseIdx + '|' + activeWordIdx;
  if (!force && renderKey === lastRenderedWordKey) return;
  lastRenderedWordKey = renderKey;
 
@@ -140,26 +122,13 @@ function renderLiveCaptions(force = false) {
 
  layer.replaceChildren(...activePhrase.map(item => {
   const isAct = item.idx === activeWordIdx;
-  let txt = item.word.text.trim();
-  if (cfg.uppercase) txt = txt.toUpperCase();
-  if (isAct && cfg.show_emojis && item.word.emoji) txt += ' ' + item.word.emoji;
-  const sp = app().node('span', txt, 'vf-autocap-word' + (isAct && cfg.pop_animation ? ' active' : ''));
+  let txt = item.word.text.trim().toUpperCase();
+  if (isAct && item.word.emoji) txt += ' ' + item.word.emoji;
+  const sp = app().node('span', txt, 'vf-autocap-word' + (isAct ? ' active' : ''));
   sp.style.fontSize = scaledPx + 'px';
-  const col = item.word.color || cfg.active_color;
-  if (isAct) {
-   if (cfg.preset === 'submagic_pill') {
-    sp.style.backgroundColor = col;
-    sp.style.color = '#090812';
-   } else {
-    sp.style.color = col;
-   }
-  }
+  if (isAct) sp.style.color = item.word.color || cfg.active_color;
   return sp;
  }));
-
- // Highlight active timed line in the Pro Transcript Editor
- const rows = document.querySelectorAll('#ac-lines-list .ac-line-row');
- rows.forEach((rowEl, idx) => rowEl.classList.toggle('speaking', idx === phraseIdx));
 }
 
 function startCaptionRaf() {
@@ -181,600 +150,444 @@ function stopCaptionRaf() {
  }
 }
 
-function updateColorPreview() {
- const v = app()?.getVideo();
- if (!v) return;
- if (state.colorGrade !== 'none') v.style.filter = GRADE_CSS[state.colorGrade] || '';
- else if (!$('edit-vivid')?.checked) v.style.filter = '';
+// ==========================================================================
+// UI HELPERS & PROGRESS BAR
+// ==========================================================================
+function setProgress(show, pct, text, allowCancel = false) {
+ const wrap = $('ac3-progress-wrap'), bar = $('ac3-progress-bar'), out = $('ac3-progress-text'), cBtn = $('ac3-cancel-btn');
+ if (wrap) wrap.hidden = !show;
+ if (bar && Number.isFinite(pct)) bar.value = Math.max(0, Math.min(100, pct));
+ if (out && text !== undefined) out.textContent = text;
+ if (cBtn) cBtn.hidden = !allowCancel;
 }
 
-function activeFxList() {
- const list = [];
- if (state.words.length) list.push('AutoCaptions (' + state.words.length + 'w)');
- if ($('ac-jumpcut-on')?.checked) list.push('Jump-Cut');
- if ($('ac-voice-polish')?.checked) list.push('Voice Polish');
- if (state.voiceoverPath) list.push('Voiceover');
- if (state.lutPath) list.push('3D LUT');
- else if (state.colorGrade !== 'none') list.push('Grade');
- return list;
-}
+function syncButtons() {
+ const row = app()?.getSelected?.();
+ const hasClip = Boolean(row?.from_sources);
+ const locked = !hasClip || state.busy;
+ if ($('studio-no-clip-banner')) $('studio-no-clip-banner').hidden = hasClip;
+ if ($('btn-auto-snapmatic')) $('btn-auto-snapmatic').disabled = locked;
+ if ($('btn-auto-opus')) $('btn-auto-opus').disabled = locked;
+ if ($('btn-auto-submagic')) $('btn-auto-submagic').disabled = locked;
 
-function syncStudioSummary() {
- const list = activeFxList();
- const badge = $('itab-create-badge');
- if (badge) {
-  badge.textContent = String(list.length);
-  badge.hidden = list.length === 0;
+ const oBadge = $('opus-key-badge');
+ if (oBadge) {
+  oBadge.textContent = state.opusConfigured ? 'READY' : 'SET KEY';
+  oBadge.className = 'ac3-pill ' + (state.opusConfigured ? 'ac3-pill-ready' : 'ac3-pill-warn');
  }
- const sum = $('studio-active-summary');
- if (sum) {
-  sum.textContent = list.length ? 'Active Pro Studio (' + list.length + '): ' + list.join(' · ') : 'No Pro Studio effects active yet.';
+ const sBadge = $('submagic-key-badge');
+ if (sBadge) {
+  sBadge.textContent = state.submagicConfigured ? 'READY' : 'SET KEY';
+  sBadge.className = 'ac3-pill ' + (state.submagicConfigured ? 'ac3-pill-ready' : 'ac3-pill-warn');
  }
  if ($('hook-gen-from-transcript')) $('hook-gen-from-transcript').hidden = state.words.length === 0;
  renderLiveCaptions(true);
- updateColorPreview();
 }
 
 // ==========================================================================
-// TOOL 1: PRO WHISPER AI STATUS, SMALL.EN UPGRADE, CLOUD TURBO & TRANSCRIBER
+// AUTOMATIC TIKTOK ORIGINAL CONTENT GUIDELINES AUDITOR
 // ==========================================================================
-async function refreshWhisperStatus() {
- try {
-  const s = await app().get('/api/workspace/studio/whisper/status');
-  state.whisperReady = Boolean(s.ready);
-  state.hasSmall = Boolean(s.has_small);
-  state.cloudConfigured = Boolean(s.cloud_configured);
-  state.cloudProvider = s.cloud_provider || null;
-  const badge = $('ac-whisper-badge'), instBtn = $('ac-whisper-install');
-  const pWrap = $('ac-install-progress-wrap'), pBar = $('ac-install-progress'), pTxt = $('ac-install-progress-text');
+function renderAudit(data) {
+ const scoreEl = $('tt-audit-score');
+ const verdictEl = $('tt-audit-verdict');
+ const targetEl = $('tt-audit-target');
+ const listEl = $('tt-audit-list');
+ if (!scoreEl || !listEl) return;
 
-  if ($('ac-cloud-clear')) $('ac-cloud-clear').hidden = !state.cloudConfigured;
-  if ($('ac-cloud-status')) {
-   $('ac-cloud-status').textContent = state.cloudConfigured
-    ? '✓ Cloud Turbo active (' + String(state.cloudProvider || 'groq').toUpperCase() + ' Whisper Large-v3-Turbo · saved in Windows Vault).'
-    : 'Not configured — runs 100% locally via Whisper AI + DTW.';
-  }
-
-  if (s.installing) {
-   if (badge) { badge.textContent = 'INSTALLING PRO MODEL…'; badge.className = 'flag warn'; }
-   if (instBtn) instBtn.hidden = true;
-   if (pWrap) pWrap.hidden = false;
-   if (pBar) pBar.value = Number(s.progress_pct) || 5;
-   if (pTxt) pTxt.textContent = s.stage || 'Downloading…';
-   if (!whisperPollTimer) whisperPollTimer = setInterval(refreshWhisperStatus, 900);
-  } else if (state.cloudConfigured) {
-   if (badge) { badge.textContent = '⚡ CLOUD TURBO (' + String(state.cloudProvider || 'GROQ').toUpperCase() + ')'; badge.className = 'flag ready'; }
-   if (instBtn) instBtn.hidden = true;
-   if (pWrap) pWrap.hidden = true;
-   if (whisperPollTimer) { clearInterval(whisperPollTimer); whisperPollTimer = null; }
-  } else if (s.ready && s.has_small) {
-   if (badge) { badge.textContent = 'PRO WHISPER READY (' + (s.model_tier || 'small.en') + ' · DTW)'; badge.className = 'flag ready'; }
-   if (instBtn) instBtn.hidden = true;
-   if (pWrap) pWrap.hidden = true;
-   if (whisperPollTimer) { clearInterval(whisperPollTimer); whisperPollTimer = null; }
-  } else if (s.ready) {
-   if (badge) { badge.textContent = 'WHISPER (' + (s.model_tier || 'base.en') + ' · DTW)'; badge.className = 'flag warn'; }
-   if (instBtn) { instBtn.hidden = false; instBtn.disabled = false; instBtn.textContent = '⬇ Upgrade to Pro Model (488 MB)'; }
-   if (pWrap) pWrap.hidden = true;
-   if (whisperPollTimer) { clearInterval(whisperPollTimer); whisperPollTimer = null; }
-  } else {
-   if (badge) { badge.textContent = s.error ? 'WHISPER INSTALL ERROR' : 'WHISPER AI NOT INSTALLED'; badge.className = 'flag warn'; }
-   if (instBtn) { instBtn.hidden = false; instBtn.disabled = false; instBtn.textContent = '⬇ Install Pro Whisper AI (488 MB)'; }
-   if (pWrap) pWrap.hidden = true;
-   if (s.error && $('ac-transcribe-status')) $('ac-transcribe-status').textContent = 'Install error: ' + s.error;
-   if (whisperPollTimer) { clearInterval(whisperPollTimer); whisperPollTimer = null; }
-  }
-  syncClipSelectionUI(app()?.getSelected?.());
- } catch {}
-}
-
-if ($('ac-whisper-install')) $('ac-whisper-install').onclick = async () => {
- const btn = $('ac-whisper-install');
- btn.disabled = true;
- try {
-  await app().get('/api/workspace/studio/whisper/install', {
-   method: 'POST',
-   headers: { 'Content-Type': 'application/json' },
-   body: JSON.stringify({ model: 'small.en' })
-  });
-  app().note('Downloading Pro Whisper AI Small.en model (488 MB) for high-accuracy word detection…');
-  refreshWhisperStatus();
- } catch (e) {
-  app().note('Whisper install failed: ' + e.message);
-  btn.disabled = false;
- }
-};
-
-if ($('ac-cloud-save')) $('ac-cloud-save').onclick = async () => {
- const provider = $('ac-cloud-provider')?.value || 'groq';
- const api_key = ($('ac-cloud-key')?.value || '').trim();
- if (!api_key) { app().note('Paste your Groq or OpenAI API key first.'); return; }
- const btn = $('ac-cloud-save');
- btn.disabled = true;
- try {
-  await app().get('/api/workspace/studio/cloud-key', {
-   method: 'POST',
-   headers: { 'Content-Type': 'application/json' },
-   body: JSON.stringify({ provider, api_key })
-  });
-  if ($('ac-cloud-key')) $('ac-cloud-key').value = '';
-  app().note('Saved ' + provider.toUpperCase() + ' Whisper Turbo key securely in Windows Credential Manager!');
-  await refreshWhisperStatus();
- } catch (e) {
-  app().note('Could not save key: ' + e.message);
- } finally {
-  btn.disabled = false;
- }
-};
-
-if ($('ac-cloud-clear')) $('ac-cloud-clear').onclick = async () => {
- try {
-  await app().get('/api/workspace/studio/cloud-key', {
-   method: 'POST',
-   headers: { 'Content-Type': 'application/json' },
-   body: JSON.stringify({ provider: 'groq', api_key: '' })
-  });
-  app().note('Removed Cloud Whisper key (switched back to Local Whisper AI).');
-  await refreshWhisperStatus();
- } catch (e) {
-  app().note('Could not remove key: ' + e.message);
- }
-};
-
-// ==========================================================================
-// PRO LINE-BY-LINE TIMED TRANSCRIPT EDITOR (AutoCaption.io / TikTokCaptions.io style)
-// ==========================================================================
-function renderTranscriptLines() {
- const wrap = $('ac-editor-wrap'), list = $('ac-lines-list'), cnt = $('ac-word-count'), clr = $('ac-clear-words'), rescan = $('ac-rescan-words');
- if (!wrap || !list) return;
- if (!state.words.length) {
-  wrap.hidden = true;
-  if (clr) clr.hidden = true;
-  if (rescan) rescan.hidden = true;
-  list.replaceChildren();
+ if (!data) {
+  scoreEl.textContent = '--';
+  scoreEl.className = 'tt-score-pill';
+  if (verdictEl) verdictEl.hidden = true;
+  if (targetEl) targetEl.textContent = 'Select a clip — checks automatically.';
+  listEl.replaceChildren();
   return;
  }
- wrap.hidden = false;
- if (clr) clr.hidden = false;
- if (rescan) rescan.hidden = false;
- const cfg = getCaptionStyle();
- const phrases = buildPhrases(state.words, cfg.words_per_line);
- if (cnt) cnt.textContent = phrases.length + ' caption line' + (phrases.length === 1 ? '' : 's') + ' · ' + state.words.length + ' words';
 
- list.replaceChildren(...phrases.map(ph => {
-  const firstIdx = ph[0].idx;
-  const lastIdx = ph[ph.length - 1].idx;
-  const startMs = ph[0].word.start_ms;
-  const endMs = ph[ph.length - 1].word.end_ms;
-  const lineText = ph.map(x => x.word.text).join(' ');
-  const lineEmoji = ph.find(x => x.word.emoji)?.word.emoji || '';
+ const sc = Number(data.score) || 0;
+ const cls = sc >= 82 ? 'pass' : sc >= 55 ? 'warn' : 'fail';
+ scoreEl.textContent = sc + '/100';
+ scoreEl.className = 'tt-score-pill ' + cls;
 
-  const row = app().node('div', undefined, 'ac-line-row');
-  const tsBtn = app().node('button', fmtShortTs(startMs), 'ac-line-ts');
-  tsBtn.type = 'button';
-  tsBtn.title = 'Click to seek video to ' + fmtShortTs(startMs);
-  tsBtn.onclick = () => {
-   const es = app()?.getEditState();
-   const v = app()?.getVideo();
-   if (v && Number.isFinite(v.duration)) {
-    v.currentTime = Math.min(v.duration, ((es?.in_ms || 0) + startMs) / 1000);
-   }
-   renderLiveCaptions(true);
-  };
+ if (verdictEl) {
+  verdictEl.hidden = false;
+  verdictEl.textContent = data.verdict || '';
+  verdictEl.className = 'tt-verdict-tag ' + cls;
+ }
+ if (targetEl) {
+  const kind = data.target === 'export' ? 'Exported Render' : 'Raw Source Clip';
+  const dim = data.width && data.height ? ` · ${data.width}×${data.height}` : '';
+  targetEl.textContent = `Audited: ${kind}${dim}`;
+ }
 
-  const txtIn = document.createElement('input');
-  txtIn.type = 'text';
-  txtIn.className = 'ac-line-input';
-  txtIn.value = lineText;
-  txtIn.setAttribute('aria-label', 'Edit caption line at ' + fmtShortTs(startMs));
+ const badge = $('itab-create-badge');
+ if (badge) {
+  badge.textContent = String(sc);
+  badge.hidden = false;
+ }
 
-  const emIn = document.createElement('input');
-  emIn.type = 'text';
-  emIn.className = 'ac-line-emoji';
-  emIn.maxLength = 6;
-  emIn.placeholder = '✨';
-  emIn.value = lineEmoji;
-  emIn.title = 'Optional highlight emoji for this line';
-
-  const commitLine = () => {
-   const nextTokens = txtIn.value.trim().split(/\s+/).filter(Boolean);
-   const nextEmoji = emIn.value.trim() || null;
-   const spanCount = lastIdx - firstIdx + 1;
-   if (!nextTokens.length) {
-    state.words.splice(firstIdx, spanCount);
-   } else if (nextTokens.length === spanCount) {
-    nextTokens.forEach((tok, i) => {
-     state.words[firstIdx + i].text = tok;
-     state.words[firstIdx + i].emoji = i === nextTokens.length - 1 ? nextEmoji : null;
-    });
-   } else {
-    const totalChars = nextTokens.reduce((acc, s) => acc + Math.max(2, s.length), 0);
-    const totalMs = Math.max(200, endMs - startMs);
-    let cursor = startMs;
-    const rebuilt = nextTokens.map((tok, i) => {
-     const share = Math.max(70, Math.round((Math.max(2, tok.length) / totalChars) * totalMs));
-     const we = i === nextTokens.length - 1 ? Math.max(cursor + 80, endMs) : Math.min(endMs, cursor + share);
-     const item = { text: tok, start_ms: cursor, end_ms: we, emoji: i === nextTokens.length - 1 ? nextEmoji : null, color: null };
-     cursor = we;
-     return item;
-    });
-    state.words.splice(firstIdx, spanCount, ...rebuilt);
-   }
-   saveClipCaptions(app()?.getSelected?.()?.clip_id, state.words);
-   renderTranscriptLines();
-   syncStudioSummary();
-  };
-
-  txtIn.addEventListener('change', commitLine);
-  emIn.addEventListener('change', commitLine);
-  txtIn.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); txtIn.blur(); } });
-
-  const delBtn = app().node('button', '✕', 'ac-line-del');
-  delBtn.type = 'button';
-  delBtn.title = 'Remove this caption line';
-  delBtn.onclick = () => {
-   state.words.splice(firstIdx, lastIdx - firstIdx + 1);
-   saveClipCaptions(app()?.getSelected?.()?.clip_id, state.words);
-   renderTranscriptLines();
-   syncStudioSummary();
-  };
-
-  row.append(tsBtn, txtIn, emIn, delBtn);
-  return row;
+ const checks = Array.isArray(data.checks) ? data.checks : [];
+ listEl.replaceChildren(...checks.map(chk => {
+  const li = app().node('li', undefined, 'tt-audit-item ' + (chk.status || 'warn'));
+  const icon = chk.status === 'pass' ? '✓' : chk.status === 'fail' ? '✕' : '!';
+  const ic = app().node('span', icon, 'tt-chk-icon ' + (chk.status || 'warn'));
+  const body = app().node('div', undefined, 'tt-chk-body');
+  body.append(app().node('strong', chk.label || ''), app().node('small', chk.detail || ''));
+  li.append(ic, body);
+  return li;
  }));
 }
 
-if ($('ac-clear-words')) $('ac-clear-words').onclick = () => {
- state.words = [];
- saveClipCaptions(app()?.getSelected?.()?.clip_id, []);
- stopCaptionRaf();
- renderTranscriptLines();
- syncStudioSummary();
- if ($('ac-transcribe-status')) $('ac-transcribe-status').textContent = 'Cleared word captions.';
-};
-
-async function runTranscribe(forceRefresh = false) {
- const row = app()?.getSelected?.(), btn = $('ac-transcribe-go'), rescan = $('ac-rescan-words'), out = $('ac-transcribe-status');
- if (!row?.from_sources || btn?.disabled) return;
- if (!state.whisperReady && !state.cloudConfigured) {
-  app().note('Click "Install Pro Whisper AI (488 MB)" first, or add a free Groq key.');
-  return;
+async function runTikTokAudit(clipId, target = 'auto') {
+ if (!clipId) {
+  state.lastAudit = null;
+  renderAudit(null);
+  return null;
  }
- if (btn) btn.disabled = true;
- if (rescan) rescan.disabled = true;
- const modeDesc = state.cloudConfigured ? 'Cloud Whisper Large-v3-Turbo' : ('Local Whisper ' + (state.hasSmall ? 'Small.en + DTW' : 'Base.en + DTW'));
- if (out) out.textContent = (forceRefresh ? 'Re-scanning vocals & aligning words with ' : 'Isolating vocals & aligning spoken words with ') + modeDesc + '…';
+ const seq = ++auditSeq;
+ if ($('tt-audit-target')) $('tt-audit-target').textContent = 'Checking TikTok Original Content Guidelines…';
+ if ($('tt-audit-score')) {
+  $('tt-audit-score').textContent = '…';
+  $('tt-audit-score').className = 'tt-score-pill';
+ }
  try {
-  const es = app().getEditState();
-  const r = await app().get('/api/workspace/studio/transcribe/' + encodeURIComponent(row.clip_id), {
-   method: 'POST', headers: { 'Content-Type': 'application/json' },
-   body: JSON.stringify({ in_ms: es?.in_ms || 0, out_ms: es?.out_ms || null, language: 'en', engine: 'auto', force_refresh: Boolean(forceRefresh) })
+  const data = await app().get('/api/workspace/studio/tiktok-audit/' + encodeURIComponent(clipId), {
+   method: 'POST',
+   headers: { 'Content-Type': 'application/json' },
+   body: JSON.stringify({ target }),
   });
-  state.words = Array.isArray(r.words) ? r.words : [];
-  saveClipCaptions(row.clip_id, state.words);
-  renderTranscriptLines();
-  syncStudioSummary();
-  if (state.words.length) {
-   const eng = (r.engine || modeDesc) + (r.cached ? ' · instant cache' : '');
-   if (out) out.textContent = '✓ Aligned ' + state.words.length + ' spoken words (' + eng + ')! Press Play to preview 60fps karaoke.';
-   app().note('✨ Auto-generated ' + state.words.length + ' word-aligned captions (' + eng + ')!');
-  } else {
-   if (out) out.textContent = 'No speech detected in this clip segment.';
-   app().note('No speech detected in this clip.');
-  }
+  if (seq !== auditSeq) return data;
+  state.lastAudit = data;
+  renderAudit(data);
+  return data;
  } catch (e) {
-  if (out) out.textContent = 'Transcription failed: ' + e.message;
-  app().note('Transcription failed: ' + e.message);
- } finally {
-  if (rescan) rescan.disabled = false;
-  syncClipSelectionUI(app()?.getSelected?.());
- }
-}
-
-if ($('ac-transcribe-go')) $('ac-transcribe-go').onclick = () => runTranscribe(false);
-if ($('ac-rescan-words')) $('ac-rescan-words').onclick = () => runTranscribe(true);
-
-// Style preset cards, colors, sliders & checkboxes
-document.querySelectorAll('#ac-style-grid button[data-ac-preset]').forEach(btn => {
- btn.onclick = () => {
-  state.preset = btn.dataset.acPreset || 'hormozi';
-  document.querySelectorAll('#ac-style-grid button[data-ac-preset]').forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
-  syncStudioSummary();
- };
-});
-document.querySelectorAll('#ac-color-row button[data-ac-color]').forEach(btn => {
- btn.onclick = () => {
-  state.activeColor = btn.dataset.acColor || '#FFE600';
-  document.querySelectorAll('#ac-color-row button[data-ac-color]').forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
-  syncStudioSummary();
- };
-});
-for (const id of ['ac-wpl', 'ac-size', 'ac-posy', 'ac-uppercase', 'ac-pop', 'ac-emojis', 'ac-jumpcut-on', 'ac-voice-polish']) {
- const el = $(id);
- if (!el) continue;
- const onChg = () => {
-  if ($('ac-size-val') && $('ac-size')) $('ac-size-val').textContent = $('ac-size').value + 'px';
-  if ($('ac-posy-val') && $('ac-posy')) $('ac-posy-val').textContent = $('ac-posy').value + '%';
-  if (id === 'ac-wpl' && state.words.length) renderTranscriptLines();
-  syncStudioSummary();
- };
- el.addEventListener('input', onChg);
- el.addEventListener('change', onChg);
-}
-
-// ==========================================================================
-// TOOL 3: OPUSCLIP-STYLE MULTI-HIGHLIGHT FINDER
-// ==========================================================================
-if ($('ac-highlights-go')) $('ac-highlights-go').onclick = async () => {
- const row = app()?.getSelected?.(), btn = $('ac-highlights-go'), out = $('ac-highlights-status'), box = $('ac-highlights-list');
- if (!row?.from_sources || btn.disabled) return;
- btn.disabled = true;
- if (out) out.textContent = 'Scanning audio dynamics & speech activity for top viral moments…';
- try {
-  const r = await app().get('/api/workspace/studio/highlights/' + encodeURIComponent(row.clip_id), { method: 'POST' });
-  const list = Array.isArray(r.highlights) ? r.highlights : [];
-  if (out) out.textContent = list.length ? 'Found ' + list.length + ' ranked viral highlight moment' + (list.length === 1 ? '' : 's') + ':' : 'No highlights found.';
-  if (box) {
-   box.replaceChildren(...list.map(h => {
-    const card = app().node('div', undefined, 'ac-hl-card');
-    const meta = app().node('div', undefined, 'ac-hl-meta');
-    meta.append(
-     app().node('strong', h.label + ' · ' + h.score + '/99'),
-     app().node('small', app().time(h.start_ms / 1000).slice(0, 5) + ' → ' + app().time(h.end_ms / 1000).slice(0, 5) + ' (' + h.duration_s + 's)')
-    );
-    const loadBtn = app().node('button', 'Load & Trim', 'mini-btn');
-    loadBtn.type = 'button';
-    loadBtn.onclick = () => {
-     const es = app().getEditState();
-     if (es) {
-      app().setTrim('in', Math.min(es.duration_ms - 500, h.start_ms));
-      app().setTrim('out', Math.min(es.duration_ms, h.end_ms));
-      app().workflowDirty();
-     }
-     const v = app().getVideo();
-     if (v && Number.isFinite(v.duration)) v.currentTime = Math.min(v.duration, h.start_ms / 1000);
-     app().note('Loaded ' + h.label + ' (' + app().time(h.start_ms / 1000).slice(0, 5) + ' → ' + app().time(h.end_ms / 1000).slice(0, 5) + ').');
-    };
-    card.append(meta, loadBtn);
-    return card;
-   }));
+  if (seq === auditSeq && $('tt-audit-target')) {
+   $('tt-audit-target').textContent = 'Audit unavailable: ' + e.message;
   }
- } catch (e) {
-  if (out) out.textContent = 'Highlight scan failed: ' + e.message;
- } finally {
-  syncClipSelectionUI(app()?.getSelected?.());
+  return null;
  }
-};
-
-// ==========================================================================
-// TOOL 4: CLEAN MIC VOICEOVER RECORDER + AUTO-DUCKING
-// ==========================================================================
-async function uploadStudioMedia(blob, kind, fileName) {
- const fd = new FormData();
- fd.append('kind', kind);
- fd.append('file', blob, fileName);
- const r = await fetch('/api/workspace/studio/upload-media', { method: 'POST', credentials: 'same-origin', body: fd });
- if (!r.ok) throw Error((await r.text()).trim() || 'Upload failed.');
- return r.json();
 }
 
-function stopVoMeter() {
- if (voMeterRaf) { cancelAnimationFrame(voMeterRaf); voMeterRaf = null; }
- if (voAudioCtx) { voAudioCtx.close().catch(() => {}); voAudioCtx = null; }
- if ($('studio-vo-meter-wrap')) $('studio-vo-meter-wrap').hidden = true;
+// ==========================================================================
+// BUTTON 1: ⚡ SNAPMATIC AUTO-CREATE (LOCAL 1-CLICK ORIGINAL CONTENT PIPELINE)
+// ==========================================================================
+function stopExportPoll() {
+ if (exportPollTimer) { clearInterval(exportPollTimer); exportPollTimer = null; }
 }
 
-if ($('studio-vo-rec')) $('studio-vo-rec').onclick = async () => {
- if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
-  app().note('Microphone recording is unavailable in this browser context.');
-  return;
- }
+async function runSnapmaticAutoCreate() {
+ const row = app()?.getSelected?.();
+ if (!row?.from_sources || state.busy) return;
+ state.busy = true;
+ syncButtons();
+ if ($('studio-active-summary')) $('studio-active-summary').textContent = '';
+
  try {
-  voStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-  voChunks = [];
-  voRecorder = new MediaRecorder(voStream);
-  voRecorder.ondataavailable = e => { if (e.data && e.data.size > 0) voChunks.push(e.data); };
-  voRecorder.onstop = async () => {
-   stopVoMeter();
-   voStream?.getTracks().forEach(t => t.stop());
-   voStream = null;
-   const blob = new Blob(voChunks, { type: voRecorder.mimeType || 'audio/webm' });
-   if ($('studio-vo-status')) $('studio-vo-status').textContent = 'Saving voiceover locally…';
-   try {
-    const res = await uploadStudioMedia(blob, 'voiceover', 'voiceover.webm');
-    state.voiceoverPath = res.path;
-    if (state.voiceoverBlobUrl) URL.revokeObjectURL(state.voiceoverBlobUrl);
-    state.voiceoverBlobUrl = URL.createObjectURL(blob);
-    if ($('studio-vo-audio')) { $('studio-vo-audio').src = state.voiceoverBlobUrl; $('studio-vo-audio').hidden = false; }
-    if ($('studio-vo-clear')) $('studio-vo-clear').hidden = false;
-    if ($('studio-vo-status')) $('studio-vo-status').textContent = '✓ Voiceover ready (' + (res.bytes / 1024).toFixed(0) + ' KiB) — auto-ducks clip on export.';
-    syncStudioSummary();
-   } catch (err) {
-    if ($('studio-vo-status')) $('studio-vo-status').textContent = 'Save failed: ' + err.message;
-   }
+  // Step 1: Study raw source clip against TikTok Original Content Guidelines
+  setProgress(true, 10, 'Step 1/4: Studying clip against TikTok Original Content Guidelines…');
+  const audit = await runTikTokAudit(row.clip_id, 'source');
+  const plan = audit?.auto_fix_plan || {
+   pre_crop: null,
+   detail_restore: true,
+   dynamic_zoom: true,
+   remove_mid_silences: true,
+   studio_voice_enhance: true,
+   color_grade: 'crisp_rec709',
+   add_captions: true,
   };
-  try {
-   voAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
-   const src = voAudioCtx.createMediaStreamSource(voStream);
-   const an = voAudioCtx.createAnalyser(); an.fftSize = 256; src.connect(an);
-   const buf = new Uint8Array(an.frequencyBinCount);
-   if ($('studio-vo-meter-wrap')) $('studio-vo-meter-wrap').hidden = false;
-   const tick = () => {
-    an.getByteTimeDomainData(buf);
-    let s = 0; for (let i = 0; i < buf.length; i++) { const d = (buf[i] - 128) / 128; s += d * d; }
-    if ($('studio-vo-meter')) $('studio-vo-meter').style.width = Math.min(100, Math.round(Math.sqrt(s / buf.length) * 350)) + '%';
-    voMeterRaf = requestAnimationFrame(tick);
-   };
-   tick();
-  } catch {}
-  voRecorder.start();
-  $('studio-vo-rec').hidden = true;
-  if ($('studio-vo-stop')) $('studio-vo-stop').hidden = false;
-  if ($('studio-vo-status')) $('studio-vo-status').textContent = '● Recording voiceover…';
-  const v = app().getVideo();
-  if (v && v.readyState >= 2) { v.currentTime = (app().getEditState()?.in_ms || 0) / 1000; v.play().catch(() => {}); }
- } catch (e) { app().note('Mic error: ' + e.message); }
-};
-if ($('studio-vo-stop')) $('studio-vo-stop').onclick = () => {
- if (voRecorder && voRecorder.state !== 'inactive') voRecorder.stop();
- $('studio-vo-stop').hidden = true;
- if ($('studio-vo-rec')) $('studio-vo-rec').hidden = false;
- app().getVideo()?.pause();
-};
-if ($('studio-vo-clear')) $('studio-vo-clear').onclick = () => {
- state.voiceoverPath = null;
- if ($('studio-vo-audio')) { $('studio-vo-audio').hidden = true; $('studio-vo-audio').removeAttribute('src'); }
- $('studio-vo-clear').hidden = true;
- if ($('studio-vo-status')) $('studio-vo-status').textContent = 'Voiceover cleared.';
- syncStudioSummary();
-};
-if ($('studio-vo-duck')) $('studio-vo-duck').oninput = () => { if ($('studio-vo-duck-val')) $('studio-vo-duck-val').textContent = $('studio-vo-duck').value + ' dB'; };
-if ($('studio-vo-gain')) $('studio-vo-gain').oninput = () => { const g = Number($('studio-vo-gain').value) || 0; if ($('studio-vo-gain-val')) $('studio-vo-gain-val').textContent = (g >= 0 ? '+' : '') + g + ' dB'; };
+
+  // Step 2: Generate Pro Word-by-Word Karaoke Captions via Whisper AI
+  let words = loadClipCaptions(row.clip_id);
+  if (plan.add_captions !== false && !words.length) {
+   setProgress(true, 28, 'Step 2/4: Generating Pro Word-by-Word Karaoke Captions (Whisper AI)…');
+   try {
+    const es = app()?.getEditState?.();
+    const tr = await app().get('/api/workspace/studio/transcribe/' + encodeURIComponent(row.clip_id), {
+     method: 'POST',
+     headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({
+      in_ms: es?.in_ms || 0,
+      out_ms: es?.out_ms || null,
+      language: 'en',
+     }),
+    });
+    if (Array.isArray(tr.words) && tr.words.length) {
+     words = tr.words;
+     saveClipCaptions(row.clip_id, words);
+    }
+   } catch (e) {
+    // Continue gracefully even if clip has no clear speech
+    console.warn('Auto-Create captions skipped:', e.message);
+   }
+  }
+  state.words = words;
+  renderLiveCaptions(true);
+
+  // Auto-seed a punchy title if empty
+  if (words.length && $('title') && !$('title').value.trim()) {
+   const hookSnippet = words.slice(0, 7).map(w => w.text).join(' ').replace(/[.!?]+$/, '');
+   if (hookSnippet.length >= 6) {
+    $('title').value = hookSnippet.slice(0, 80);
+    app()?.refreshDraftEditor?.();
+   }
+  }
+
+  // Build automatic studio plan
+  const studioPlan = {
+   caption_words: words,
+   caption_style: words.length ? DEFAULT_CAPTION_STYLE : null,
+   pre_crop: plan.pre_crop || null,
+   detail_restore: true,
+   dynamic_zoom: true,
+   remove_mid_silences: Boolean(plan.remove_mid_silences),
+   silence_threshold_db: -32,
+   min_silence_s: 0.42,
+   studio_voice_enhance: Boolean(plan.studio_voice_enhance),
+   color_grade: plan.color_grade || 'crisp_rec709',
+  };
+  state.autoPlan = studioPlan;
+
+  // Step 3: Render transformed 1080x1920 High-Bitrate MP4 with scrubbed metadata
+  setProgress(true, 45, 'Step 3/4: Rendering transformed 1080p MP4 (reframe + polish + pacing + captions)…');
+  const es = app()?.getEditState?.();
+  stopExportPoll();
+  exportPollTimer = setInterval(async () => {
+   try {
+    const p = await app().get('/api/workspace/film-roll/export-progress');
+    if (p?.active) {
+     const mapped = 45 + Math.round((Number(p.percent) || 0) * 0.47);
+     setProgress(true, mapped, p.message || `Rendering 1080p MP4 (${p.percent || 0}%)…`);
+    }
+   } catch {}
+  }, 600);
+
+  const exportBody = {
+   framing: 'center_crop',
+   quality: 'high',
+   in_ms: es?.in_ms || 0,
+   out_ms: es?.out_ms || null,
+   mute: false,
+   normalize_audio: true,
+   use_hw_encoder: true,
+   save_caption_txt: false,
+   title: ($('title')?.value || row.name || '').trim(),
+   caption_text: ($('caption')?.value || '').trim(),
+   ...studioPlan,
+  };
+
+  const res = await app().get('/api/workspace/film-roll/' + encodeURIComponent(row.clip_id) + '/export', {
+   method: 'POST',
+   headers: { 'Content-Type': 'application/json' },
+   body: JSON.stringify(exportBody),
+  });
+  stopExportPoll();
+
+  row.exported = true;
+  row.exported_file = res.file_name;
+  row.export_url = res.export_url;
+  row.state = 'exported';
+
+  // Step 4: Automatically verify the finished MP4 against TikTok Guidelines!
+  setProgress(true, 95, 'Step 4/4: Verifying finished MP4 against TikTok Original Content Guidelines…');
+  const finalAudit = await runTikTokAudit(row.clip_id, 'export');
+  setProgress(false, 100, '');
+
+  const scoreTxt = finalAudit ? ` · TikTok Score: ${finalAudit.score}/100` : '';
+  const summary = `✓ Snapmatic Auto-Create exported ${res.file_name}${scoreTxt}`;
+  if ($('studio-active-summary')) $('studio-active-summary').textContent = summary;
+  if ($('edit-state')) $('edit-state').textContent = summary;
+
+  window.dispatchEvent(new CustomEvent('snapmatic:exported', { detail: { clip_id: row.clip_id } }));
+  await app()?.reload?.();
+  app()?.note?.(summary, [
+   { label: 'Upload →', onClick: () => document.querySelector('[data-itab="upload"]')?.click() },
+  ]);
+ } catch (e) {
+  stopExportPoll();
+  setProgress(false, 0, '');
+  const msg = '✕ Snapmatic Auto-Create failed: ' + e.message;
+  if ($('studio-active-summary')) $('studio-active-summary').textContent = msg;
+  app()?.note?.(msg);
+ } finally {
+  state.busy = false;
+  syncButtons();
+ }
+}
 
 // ==========================================================================
-// TOOL 5: PRO COLOR GRADES & .CUBE 3D LUTS
+// BUTTONS 2 & 3: 🟣 OPUSCLIP (OPUS.PRO) & ✨ SUBMAGIC CLOUD AI
 // ==========================================================================
-document.querySelectorAll('#studio-grade-pills button[data-grade]').forEach(btn => {
- btn.onclick = () => {
-  state.colorGrade = btn.dataset.grade || 'none';
-  document.querySelectorAll('#studio-grade-pills button[data-grade]').forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
-  syncStudioSummary();
- };
-});
-
-async function loadLuts(selectPath) {
- const sel = $('ac-lut-select');
- if (!sel) return;
+async function refreshProvidersStatus(checkCompletion = false) {
  try {
-  const r = await app().get('/api/workspace/studio/luts');
-  const luts = Array.isArray(r.luts) ? r.luts : [];
-  const prev = selectPath ?? sel.value;
-  const opts = [app().node('option', 'None (use preset above)')]; opts[0].value = '';
-  for (const l of luts) { const o = app().node('option', l.name); o.value = l.path; opts.push(o); }
-  sel.replaceChildren(...opts);
-  if (prev && luts.some(l => l.path === prev)) sel.value = prev;
-  state.lutPath = sel.value || '';
-  syncStudioSummary();
+  const s = await app().get('/api/workspace/studio/providers/status');
+  state.opusConfigured = Boolean(s.opus_configured);
+  state.opusTemplateId = s.opus_template_id || '';
+  state.submagicConfigured = Boolean(s.submagic_configured);
+  state.submagicTemplate = s.submagic_template || 'Hormozi 2';
+  state.submagicBrolls = s.submagic_brolls !== false;
+  state.submagicZooms = s.submagic_zooms !== false;
+
+  const job = s.job || {};
+  if (job.active) {
+   state.busy = true;
+   setProgress(true, Number(job.percent) || 10, job.message || (job.provider + ' processing…'), true);
+   if (!cloudPollTimer) cloudPollTimer = setInterval(() => refreshProvidersStatus(true), 1400);
+  } else if (checkCompletion && cloudPollTimer) {
+   clearInterval(cloudPollTimer);
+   cloudPollTimer = null;
+   state.busy = false;
+   setProgress(false, 100, '', false);
+   if (job.stage === 'done' && job.result) {
+    const cid = job.clip_id || app()?.getSelected?.()?.clip_id;
+    const finalAudit = cid ? await runTikTokAudit(cid, 'export') : null;
+    const scoreTxt = finalAudit ? ` · TikTok Score: ${finalAudit.score}/100` : '';
+    const msg = `✓ ${job.provider} ready: ${job.result.file_name}${scoreTxt}`;
+    if ($('studio-active-summary')) $('studio-active-summary').textContent = msg;
+    if ($('edit-state')) $('edit-state').textContent = msg;
+    await app()?.reload?.();
+    app()?.note?.(msg, [
+     { label: 'Upload →', onClick: () => document.querySelector('[data-itab="upload"]')?.click() },
+    ]);
+   } else if (job.error) {
+    const msg = `✕ ${job.provider}: ${job.error}`;
+    if ($('studio-active-summary')) $('studio-active-summary').textContent = msg;
+    app()?.note?.(msg);
+   }
+  }
+  syncButtons();
  } catch {}
 }
-if ($('ac-lut-select')) $('ac-lut-select').onchange = () => { state.lutPath = $('ac-lut-select').value || ''; syncStudioSummary(); };
-if ($('ac-lut-upload')) $('ac-lut-upload').onchange = async e => {
- const f = e.currentTarget.files?.[0]; e.currentTarget.value = '';
- if (!f) return;
- try {
-  const res = await uploadStudioMedia(f, 'lut', f.name);
-  if ($('ac-lut-status')) $('ac-lut-status').textContent = '✓ Loaded 3D LUT: ' + res.name;
-  await loadLuts(res.path);
-  app().note('Loaded .cube LUT: ' + res.name);
- } catch (err) {
-  if ($('ac-lut-status')) $('ac-lut-status').textContent = 'LUT upload failed: ' + err.message;
- }
-};
 
-// ==========================================================================
-// TOOL 6: REUSABLE 1-CLICK CREATOR STYLE TEMPLATES
-// ==========================================================================
-function readTemplates() { try { return JSON.parse(localStorage.getItem(TPL_KEY) || '[]') || []; } catch { return []; } }
-function writeTemplates(list) { try { localStorage.setItem(TPL_KEY, JSON.stringify(list)); } catch {} }
-function renderTemplates() {
- const sel = $('ac-tpl-select'), ap = $('ac-tpl-apply'), dl = $('ac-tpl-del');
- if (!sel) return;
- const list = readTemplates();
- if (!list.length) {
-  const o = app().node('option', 'No saved templates'); o.value = ''; sel.replaceChildren(o);
-  if (ap) ap.disabled = true; if (dl) dl.disabled = true;
+function openProviderKeyDialog(provider, runAfterSave = false) {
+ const dlg = $('provider-key-dialog');
+ if (!dlg) return;
+ state.activeKeyProvider = provider;
+ state.runAfterSave = runAfterSave;
+ if ($('pk-error')) $('pk-error').textContent = '';
+ if ($('pk-api-key')) $('pk-api-key').value = '';
+
+ const isOpus = provider === 'opus';
+ const configured = isOpus ? state.opusConfigured : state.submagicConfigured;
+ if ($('pk-title')) $('pk-title').textContent = isOpus ? '🟣 Connect OpusClip (opus.pro)' : '✨ Connect Submagic AI';
+ if ($('pk-desc')) {
+  $('pk-desc').textContent = isOpus
+   ? 'Paste your OpusClip API key (from opus.pro dashboard → API). Stored securely in Windows Credential Manager.'
+   : 'Paste your Submagic API key (from app.submagic.co → API). Stored securely in Windows Credential Manager.';
+ }
+ if ($('pk-opus-fields')) $('pk-opus-fields').hidden = !isOpus;
+ if ($('pk-submagic-fields')) $('pk-submagic-fields').hidden = isOpus;
+ if (isOpus && $('pk-opus-tpl')) $('pk-opus-tpl').value = state.opusTemplateId;
+ if (!isOpus) {
+  if ($('pk-sub-tpl')) $('pk-sub-tpl').value = state.submagicTemplate || 'Hormozi 2';
+  if ($('pk-sub-brolls')) $('pk-sub-brolls').checked = state.submagicBrolls;
+  if ($('pk-sub-zooms')) $('pk-sub-zooms').checked = state.submagicZooms;
+ }
+ if ($('pk-api-key')) {
+  $('pk-api-key').placeholder = configured ? 'Leave blank to keep saved key, or paste new key…' : 'Paste your API key…';
+ }
+ if ($('pk-remove')) $('pk-remove').hidden = !configured;
+ if ($('pk-save')) $('pk-save').textContent = runAfterSave ? 'Save Key & Run' : 'Save Key';
+ dlg.showModal();
+ $('pk-api-key')?.focus();
+}
+
+async function runCloudProvider(provider) {
+ const row = app()?.getSelected?.();
+ if (!row?.from_sources || state.busy) return;
+ const configured = provider === 'opus' ? state.opusConfigured : state.submagicConfigured;
+ if (!configured) {
+  openProviderKeyDialog(provider, true);
   return;
  }
- sel.replaceChildren(...list.map((t, i) => { const o = app().node('option', t.name); o.value = String(i); return o; }));
- if (ap) ap.disabled = false; if (dl) dl.disabled = false;
+ state.busy = true;
+ syncButtons();
+ const label = provider === 'opus' ? 'OpusClip' : 'Submagic';
+ setProgress(true, 8, `Starting ${label} cloud AI job…`, true);
+ try {
+  await app().get(`/api/workspace/studio/${provider}/run/` + encodeURIComponent(row.clip_id), {
+   method: 'POST',
+  });
+  if (!cloudPollTimer) cloudPollTimer = setInterval(() => refreshProvidersStatus(true), 1400);
+ } catch (e) {
+  state.busy = false;
+  setProgress(false, 0, '', false);
+  syncButtons();
+  const msg = `✕ ${label}: ${e.message}`;
+  if ($('studio-active-summary')) $('studio-active-summary').textContent = msg;
+  app()?.note?.(msg);
+ }
 }
-if ($('ac-tpl-save')) $('ac-tpl-save').onclick = () => {
- const name = ($('ac-tpl-name')?.value || '').trim();
- if (!name) { app().note('Enter a template name first.'); return; }
- const list = readTemplates().filter(t => t.name.toLowerCase() !== name.toLowerCase());
- list.push({
-  name,
-  caption: getCaptionStyle(),
-  jumpcut: Boolean($('ac-jumpcut-on')?.checked),
-  voicePolish: Boolean($('ac-voice-polish')?.checked),
-  colorGrade: state.colorGrade,
-  lutPath: state.lutPath,
- });
- writeTemplates(list);
- if ($('ac-tpl-name')) $('ac-tpl-name').value = '';
- renderTemplates();
- app().note('Saved Style Template "' + name + '"!');
-};
-if ($('ac-tpl-apply')) $('ac-tpl-apply').onclick = () => {
- const tpl = readTemplates()[Number($('ac-tpl-select')?.value)];
- if (!tpl) return;
- const c = tpl.caption || {};
- if (c.preset) {
-  state.preset = c.preset;
-  document.querySelectorAll('#ac-style-grid button[data-ac-preset]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.acPreset === c.preset)));
- }
- if (c.active_color) {
-  state.activeColor = c.active_color;
-  document.querySelectorAll('#ac-color-row button[data-ac-color]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.acColor === c.active_color)));
- }
- if ($('ac-wpl') && c.words_per_line) $('ac-wpl').value = String(c.words_per_line);
- if ($('ac-size') && c.font_size) { $('ac-size').value = String(c.font_size); if ($('ac-size-val')) $('ac-size-val').textContent = c.font_size + 'px'; }
- if ($('ac-posy') && c.pos_y_pct) { $('ac-posy').value = String(c.pos_y_pct); if ($('ac-posy-val')) $('ac-posy-val').textContent = c.pos_y_pct + '%'; }
- if ($('ac-uppercase') && typeof c.uppercase === 'boolean') $('ac-uppercase').checked = c.uppercase;
- if ($('ac-pop') && typeof c.pop_animation === 'boolean') $('ac-pop').checked = c.pop_animation;
- if ($('ac-emojis') && typeof c.show_emojis === 'boolean') $('ac-emojis').checked = c.show_emojis;
- if ($('ac-jumpcut-on') && typeof tpl.jumpcut === 'boolean') $('ac-jumpcut-on').checked = tpl.jumpcut;
- if ($('ac-voice-polish') && typeof tpl.voicePolish === 'boolean') $('ac-voice-polish').checked = tpl.voicePolish;
- if (tpl.colorGrade) {
-  state.colorGrade = tpl.colorGrade;
-  document.querySelectorAll('#studio-grade-pills button[data-grade]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.grade === tpl.colorGrade)));
- }
- if ($('ac-lut-select') && tpl.lutPath != null) { $('ac-lut-select').value = tpl.lutPath; state.lutPath = $('ac-lut-select').value || ''; }
- syncStudioSummary();
- app().note('Applied Style Template "' + tpl.name + '"!');
-};
-if ($('ac-tpl-del')) $('ac-tpl-del').onclick = () => {
- const idx = Number($('ac-tpl-select')?.value);
- const list = readTemplates();
- if (!Number.isInteger(idx) || !list[idx]) return;
- list.splice(idx, 1); writeTemplates(list); renderTemplates();
+
+if ($('btn-auto-snapmatic')) $('btn-auto-snapmatic').onclick = runSnapmaticAutoCreate;
+if ($('btn-auto-opus')) $('btn-auto-opus').onclick = () => runCloudProvider('opus');
+if ($('btn-auto-submagic')) $('btn-auto-submagic').onclick = () => runCloudProvider('submagic');
+if ($('btn-opus-key')) $('btn-opus-key').onclick = () => openProviderKeyDialog('opus', false);
+if ($('btn-submagic-key')) $('btn-submagic-key').onclick = () => openProviderKeyDialog('submagic', false);
+
+if ($('ac3-cancel-btn')) $('ac3-cancel-btn').onclick = async () => {
+ try { await app().get('/api/workspace/studio/providers/cancel', { method: 'POST' }); } catch {}
 };
 
-// ==========================================================================
-// SELECTION, EXPORT & RESET WIRING
-// ==========================================================================
+if ($('pk-close')) $('pk-close').onclick = () => $('provider-key-dialog')?.close();
+
+if ($('pk-remove')) $('pk-remove').onclick = async () => {
+ if (!state.activeKeyProvider) return;
+ try {
+  await app().get('/api/workspace/studio/providers/key', {
+   method: 'POST',
+   headers: { 'Content-Type': 'application/json' },
+   body: JSON.stringify({ provider: state.activeKeyProvider, api_key: '' }),
+  });
+  await refreshProvidersStatus(false);
+  $('provider-key-dialog')?.close();
+  app()?.note?.('API key removed from Windows Credential Manager.');
+ } catch (e) {
+  if ($('pk-error')) $('pk-error').textContent = e.message;
+ }
+};
+
+if ($('provider-key-form')) $('provider-key-form').onsubmit = async e => {
+ e.preventDefault();
+ const prov = state.activeKeyProvider;
+ if (!prov) return;
+ const rawKey = ($('pk-api-key')?.value || '').trim();
+ const already = prov === 'opus' ? state.opusConfigured : state.submagicConfigured;
+ if (!rawKey && !already) {
+  if ($('pk-error')) $('pk-error').textContent = 'Paste your API key to continue.';
+  return;
+ }
+ try {
+  const payload = {
+   provider: prov,
+   api_key: rawKey,
+   keep_existing_key: !rawKey && already,
+  };
+  if (prov === 'opus') {
+   payload.brand_template_id = ($('pk-opus-tpl')?.value || '').trim();
+  } else {
+   payload.template_name = ($('pk-sub-tpl')?.value || 'Hormozi 2').trim();
+   payload.magic_brolls = Boolean($('pk-sub-brolls')?.checked);
+   payload.magic_zooms = Boolean($('pk-sub-zooms')?.checked);
+  }
+  await app().get('/api/workspace/studio/providers/key', {
+   method: 'POST',
+   headers: { 'Content-Type': 'application/json' },
+   body: JSON.stringify(payload),
+  });
+  await refreshProvidersStatus(false);
+  $('provider-key-dialog')?.close();
+  app()?.note?.((prov === 'opus' ? 'OpusClip' : 'Submagic') + ' API key saved securely!');
+  if (state.runAfterSave) {
+   state.runAfterSave = false;
+   runCloudProvider(prov);
+  }
+ } catch (err) {
+  if ($('pk-error')) $('pk-error').textContent = err.message;
+ }
+};
+
 if ($('studio-pick-first')) $('studio-pick-first').onclick = () => {
- const list = app()?.getVisibleItems?.() || [];
- const first = list.find(r => r.from_sources) || list[0];
- if (first) { app().select(first); app().note('Selected "' + first.name + '" — ready for AutoCaption!'); }
- else app().note('No playable clips in Film Roll yet.');
-};
-
-if ($('studio-export-now')) $('studio-export-now').onclick = () => {
- const row = app()?.getSelected?.();
- if (!row?.from_sources) { app().note('Select a Film Roll clip first.'); return; }
- const tBtn = $('edit-transcode');
- if (!tBtn || tBtn.disabled) { app().note('Waiting for video duration to load — try again in a second.'); return; }
- if ($('studio-active-summary')) $('studio-active-summary').textContent = '⏳ Rendering MP4 with Pro Studio…';
- tBtn.click();
-};
-
-if ($('studio-reset-all')) $('studio-reset-all').onclick = () => {
- state.words = [];
- stopCaptionRaf();
- state.colorGrade = 'none';
- state.lutPath = '';
- state.voiceoverPath = null;
- if ($('ac-jumpcut-on')) $('ac-jumpcut-on').checked = false;
- if ($('ac-voice-polish')) $('ac-voice-polish').checked = false;
- if ($('ac-lut-select')) $('ac-lut-select').value = '';
- if ($('studio-vo-audio')) { $('studio-vo-audio').hidden = true; $('studio-vo-audio').removeAttribute('src'); }
- if ($('studio-vo-clear')) $('studio-vo-clear').hidden = true;
- if ($('ac-highlights-list')) $('ac-highlights-list').replaceChildren();
- document.querySelectorAll('#studio-grade-pills button[data-grade]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.grade === 'none')));
- renderTranscriptLines();
- syncStudioSummary();
- app().note('Reset Pro Studio settings.');
+ const first = document.querySelector('#queue-list .clip-row, #queue-list button[data-clip-id]');
+ if (first) first.click();
 };
 
 // ==========================================================================
@@ -789,8 +602,6 @@ const HOOK_TEMPLATES = {
   { tag: '94 CTR', fn: t => 'The hidden detail inside ' + t + ' changes everything' },
   { tag: '93 CTR', fn: t => 'Stop scrolling — you need to see this ' + t + ' breakdown' },
   { tag: '92 CTR', fn: t => 'Did you catch the secret in ' + t + '? Most people didn’t' },
-  { tag: '91 CTR', fn: t => 'Here is the real reason ' + t + ' is blowing up right now' },
-  { tag: '90 CTR', fn: t => 'Watch closely — ' + t + ' is NOT what you think' },
  ],
  shock: [
   { tag: '98 CTR', fn: t => 'NO WAY this actually happened in ' + t + ' 💀' },
@@ -798,19 +609,15 @@ const HOOK_TEMPLATES = {
   { tag: '95 CTR', fn: t => 'Wait… HOW did ' + t + ' just pull that off?! ⚡' },
   { tag: '94 CTR', fn: t => 'This ' + t + ' moment broke my brain 🤯' },
   { tag: '93 CTR', fn: t => 'Everything went wrong in ' + t + ' in 0.5 seconds' },
-  { tag: '92 CTR', fn: t => 'I paused ' + t + ' at the exact wrong frame 💀' },
-  { tag: '91 CTR', fn: t => 'Bro really thought nobody would notice ' + t },
-  { tag: '90 CTR', fn: t => 'My jaw dropped when ' + t + ' did THIS' },
+  { tag: '92 CTR', fn: t => 'Bro really thought nobody would notice ' + t },
  ],
  gta6: [
   { tag: '99 CTR', fn: t => 'Rockstar actually put THIS detail in ' + t + ' 🌴' },
   { tag: '97 CTR', fn: t => 'GTA 6 realism just peaked with ' + t + ' 🔥' },
   { tag: '96 CTR', fn: t => '99% of GTA fans missed this ' + t + ' Easter egg 👀' },
   { tag: '95 CTR', fn: t => 'Why ' + t + ' proves GTA 6 is 10 years ahead' },
-  { tag: '94 CTR', fn: t => 'This ' + t + ' leak / detail just confirmed everything' },
-  { tag: '93 CTR', fn: t => 'Vice City is going to be INSANE because of ' + t },
+  { tag: '94 CTR', fn: t => 'Vice City is going to be INSANE because of ' + t },
   { tag: '92 CTR', fn: t => 'Pause at 0:03 — did Rockstar really sneak ' + t + ' in?!' },
-  { tag: '91 CTR', fn: t => 'Every GTA 6 player needs to know about ' + t },
  ],
  funny: [
   { tag: '97 CTR', fn: t => 'I actually lost it when ' + t + ' happened 😂' },
@@ -818,18 +625,14 @@ const HOOK_TEMPLATES = {
   { tag: '94 CTR', fn: t => 'Trying to stay serious during ' + t + ' (IMPOSSIBLE)' },
   { tag: '93 CTR', fn: t => 'Instant karma hit ' + t + ' at 100 mph 😂' },
   { tag: '92 CTR', fn: t => 'Bro had ONE job in ' + t + ' and fumbled it' },
-  { tag: '91 CTR', fn: t => 'Average 5 seconds of ' + t + ' pure chaos' },
   { tag: '90 CTR', fn: t => 'Zero survival instincts detected in ' + t + ' 💀' },
-  { tag: '89 CTR', fn: t => 'Why is ' + t + ' funnier every time it loops?!' },
  ],
  debate: [
   { tag: '97 CTR', fn: t => 'Unpopular opinion: ' + t + ' is overrated (here’s why)' },
   { tag: '96 CTR', fn: t => 'Am I the only one who thinks ' + t + ' is crazy?' },
   { tag: '95 CTR', fn: t => 'Be honest — would you actually try ' + t + '? 👇' },
-  { tag: '94 CTR', fn: t => 'Everyone gets ' + t + ' completely wrong' },
-  { tag: '93 CTR', fn: t => 'Hot take: ' + t + ' just ruined every other game for me' },
-  { tag: '92 CTR', fn: t => 'Rate this ' + t + ' moment 1–10 in the comments' },
-  { tag: '91 CTR', fn: t => 'W or L? Look what happened with ' + t },
+  { tag: '94 CTR', fn: t => 'Rate this ' + t + ' moment 1–10 in the comments' },
+  { tag: '92 CTR', fn: t => 'W or L? Look what happened with ' + t },
   { tag: '90 CTR', fn: t => 'Tell me I’m wrong about ' + t + '… I’ll wait' },
  ],
  story: [
@@ -837,9 +640,7 @@ const HOOK_TEMPLATES = {
   { tag: '95 CTR', fn: t => 'The wildest ' + t + ' story you’ll hear all week' },
   { tag: '94 CTR', fn: t => 'How ' + t + ' went from 0 to 100 real quick' },
   { tag: '93 CTR', fn: t => 'I tried ' + t + ' so you don’t have to…' },
-  { tag: '92 CTR', fn: t => 'Day 1 of testing ' + t + ' — did NOT expect this' },
   { tag: '91 CTR', fn: t => 'Watch how fast ' + t + ' turned into pure chaos' },
-  { tag: '90 CTR', fn: t => 'This is why you NEVER underestimate ' + t },
   { tag: '89 CTR', fn: t => 'Wait for the plot twist in ' + t + '…' },
  ],
 };
@@ -854,8 +655,7 @@ function cleanTopicFromClip() {
   .replace(/#\S+/g, '')
   .replace(/\s+/g, ' ')
   .trim();
- if (raw && raw.length >= 3) return raw.slice(0, 48);
- return 'this GTA 6 clip';
+ return raw && raw.length >= 3 ? raw.slice(0, 48) : 'this GTA 6 clip';
 }
 
 function renderGeneratedHooks(seedTopic) {
@@ -906,37 +706,27 @@ if ($('hook-gen-from-transcript')) $('hook-gen-from-transcript').onclick = () =>
  const snippet = state.words.slice(0, 7).map(w => w.text).join(' ').replace(/[.!?]+$/, '');
  if ($('hook-gen-topic')) $('hook-gen-topic').value = snippet.slice(0, 60);
  renderGeneratedHooks(snippet);
- app().note('Seeded Hook Generator from your spoken transcript!');
 };
 
-function syncClipSelectionUI(row) {
- const ok = Boolean(row?.from_sources);
- if ($('studio-export-now')) $('studio-export-now').disabled = !ok;
- if ($('studio-no-clip-banner')) $('studio-no-clip-banner').hidden = ok;
- if ($('ac-transcribe-go')) $('ac-transcribe-go').disabled = !ok;
- if ($('ac-highlights-go')) $('ac-highlights-go').disabled = !ok;
- syncStudioSummary();
-}
-
+// ==========================================================================
+// LIFECYCLE EVENTS
+// ==========================================================================
 window.addEventListener('snapmatic:clip-selected', e => {
  const row = e.detail?.row;
  stopCaptionRaf();
  state.words = row?.clip_id ? loadClipCaptions(row.clip_id) : [];
- if ($('ac-highlights-list')) $('ac-highlights-list').replaceChildren();
- if ($('ac-highlights-status')) $('ac-highlights-status').textContent = '';
+ state.autoPlan = null;
  if ($('hook-gen-topic')) $('hook-gen-topic').value = '';
- if ($('ac-transcribe-status')) {
-  $('ac-transcribe-status').textContent = state.words.length
-   ? '✓ Restored ' + state.words.length + ' saved caption words for this clip.'
-   : 'Uses vocal-isolated Whisper AI + DTW word alignment for tight karaoke sync.';
- }
- renderTranscriptLines();
- syncClipSelectionUI(row);
+ if ($('studio-active-summary')) $('studio-active-summary').textContent = '';
+ syncButtons();
  renderGeneratedHooks();
+ if (row?.from_sources) runTikTokAudit(row.clip_id, 'auto');
+ else renderAudit(null);
 });
 
-window.addEventListener('snapmatic:exported', () => {
- if ($('studio-active-summary')) $('studio-active-summary').textContent = '✓ ' + ($('edit-state')?.textContent || 'Exported MP4 with Pro Studio!');
+window.addEventListener('snapmatic:exported', e => {
+ const cid = e.detail?.clip_id || app()?.getSelected?.()?.clip_id;
+ if (cid && !state.busy) runTikTokAudit(cid, 'export');
 });
 
 const vidEl = app()?.getVideo();
@@ -951,24 +741,18 @@ if (vidEl) {
 
 window.snapmaticStudio = {
  getExportExtras: () => ({
+  ...(state.autoPlan || {}),
   caption_words: state.words,
-  caption_style: state.words.length ? getCaptionStyle() : null,
-  remove_mid_silences: Boolean($('ac-jumpcut-on')?.checked),
-  silence_threshold_db: Number($('ac-jumpcut-db')?.value) || -32,
-  min_silence_s: Number($('ac-jumpcut-min')?.value) || 0.42,
-  studio_voice_enhance: Boolean($('ac-voice-polish')?.checked),
-  voiceover_path: state.voiceoverPath,
-  voiceover_duck_db: Number($('studio-vo-duck')?.value) || -14,
-  voiceover_gain_db: Number($('studio-vo-gain')?.value) || 2,
-  color_grade: state.colorGrade !== 'none' ? state.colorGrade : null,
-  lut_path: state.lutPath || null,
+  caption_style: state.words.length ? DEFAULT_CAPTION_STYLE : null,
  }),
 };
 
-renderTemplates();
-refreshWhisperStatus();
-loadLuts();
+refreshProvidersStatus(false);
 renderGeneratedHooks();
-syncClipSelectionUI(app()?.getSelected?.());
-setTimeout(() => syncClipSelectionUI(app()?.getSelected?.()), 1000);
+syncButtons();
+setTimeout(() => {
+ const row = app()?.getSelected?.();
+ syncButtons();
+ if (row?.from_sources && !state.lastAudit) runTikTokAudit(row.clip_id, 'auto');
+}, 900);
 })();

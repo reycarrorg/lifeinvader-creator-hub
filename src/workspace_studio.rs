@@ -92,6 +92,13 @@ pub(crate) struct StudioExportOptions {
     pub(crate) color_grade: Option<String>,
     #[serde(default)]
     pub(crate) lut_path: Option<String>,
+    // Auto-Create TikTok Original Content Transform Passes
+    #[serde(default)]
+    pub(crate) pre_crop: Option<String>,
+    #[serde(default)]
+    pub(crate) detail_restore: bool,
+    #[serde(default)]
+    pub(crate) dynamic_zoom: bool,
 }
 
 #[derive(Deserialize, Default)]
@@ -1667,11 +1674,39 @@ pub(crate) fn studio_voice_enhance_filter() -> &'static str {
     "highpass=f=80,afftdn=nf=-24,equalizer=f=180:width_type=o:width=1.2:g=2.5,equalizer=f=3200:width_type=o:width=1.4:g=3.2,equalizer=f=6500:width_type=o:width=1.0:g=-2.0,acompressor=threshold=-18dB:ratio=3.2:attack=10:release=120,loudnorm=I=-14:TP=-1.5:LRA=11"
 }
 
+pub(crate) fn sanitize_pre_crop(raw: Option<&str>) -> Option<String> {
+    let s = raw?.trim();
+    let parts: Vec<u32> = s.split(':').filter_map(|p| p.trim().parse::<u32>().ok()).collect();
+    if parts.len() != 4 {
+        return None;
+    }
+    let (w, h, x, y) = (parts[0], parts[1], parts[2], parts[3]);
+    if w < 160 || h < 160 || w > 7680 || h > 7680 || x > 7680 || y > 7680 {
+        return None;
+    }
+    // Ensure even dimensions for YUV420P compatibility
+    let ew = w & !1;
+    let eh = h & !1;
+    Some(format!("{ew}:{eh}:{x}:{y}"))
+}
+
 pub(crate) fn build_studio_video_filters(
     opts: &StudioExportOptions,
     work_dir: &Path,
 ) -> (Vec<String>, Option<PathBuf>) {
     let mut filters = Vec::new();
+
+    // Auto-Create 1080p Detail Restore (fixes compressed/blurry low-quality downloads)
+    if opts.detail_restore {
+        filters.push("hqdn3d=1.2:1.2:4:4,cas=0.22".to_owned());
+    }
+
+    // Auto-Create Dynamic Retention Motion/Zoom (breaks up static frames on 1080x1920 output)
+    if opts.dynamic_zoom {
+        filters.push(
+            "scale=1166:2074:flags=lanczos,crop=1080:1920:(iw-1080)/2+16*sin(t*0.85):(ih-1920)/2+18*cos(t*0.65)".to_owned(),
+        );
+    }
 
     // Tool 5: Real .cube 3D LUT OR tasteful Pro Color Grade
     if let Some(lp) = opts.lut_path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
@@ -1805,6 +1840,7 @@ pub(crate) fn apply_studio_post_passes(
                         "-c:v".into(), "libx264".into(), "-preset".into(), "fast".into(), "-crf".into(), "19".into(),
                         "-pix_fmt".into(), "yuv420p".into(),
                         "-c:a".into(), "aac".into(), "-b:a".into(), "192k".into(), "-ar".into(), "48000".into(), "-ac".into(), "2".into(),
+                        "-map_metadata".into(), "-1".into(),
                         "-movflags".into(), "+faststart".into(),
                         cut_out.to_string_lossy().into_owned(),
                     ];
@@ -1856,6 +1892,7 @@ pub(crate) fn apply_studio_post_passes(
                         "-c:v".into(), "libx264".into(), "-preset".into(), "fast".into(), "-crf".into(), "19".into(),
                         "-pix_fmt".into(), "yuv420p".into(),
                         "-c:a".into(), "copy".into(),
+                        "-map_metadata".into(), "-1".into(),
                         "-movflags".into(), "+faststart".into(),
                         cap_out.to_string_lossy().into_owned(),
                     ]);

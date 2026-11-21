@@ -1023,6 +1023,7 @@ fn run_ffmpeg_once(
     audio_filters: &[String],
     music_bed: Option<(&Path, f64)>,
     encoder: &str,
+    pre_crop: Option<&str>,
     video_filters: &[String],
     target_duration_us: u64,
 ) -> Result<(), String> {
@@ -1050,6 +1051,10 @@ fn run_ffmpeg_once(
                 .arg(format!("{:.3}", (end - start) as f64 / 1000.0));
         }
     }
+    let pre_prefix = pre_crop
+        .filter(|s| !s.is_empty())
+        .map(|c| format!("crop={c},"))
+        .unwrap_or_default();
     let dt_chain = if video_filters.is_empty() {
         String::new()
     } else {
@@ -1061,7 +1066,7 @@ fn run_ffmpeg_once(
     match framing {
         "center_crop" => {
             let vf = format!(
-                "crop='min(iw,ih*9/16)':'min(ih,iw*16/9)':'(iw-ow)*{pan_frac:.4}':'(ih-oh)/2',scale=1080:1920:flags=lanczos{dt_chain}"
+                "{pre_prefix}crop='min(iw,ih*9/16)':'min(ih,iw*16/9)':'(iw-ow)*{pan_frac:.4}':'(ih-oh)/2',scale=1080:1920:flags=lanczos{dt_chain}"
             );
             if music_bed.is_some() {
                 fc_parts.push(format!("[0:v]{vf}[v]"));
@@ -1072,10 +1077,10 @@ fn run_ffmpeg_once(
         }
         "blurred_fit" => {
             let vf = if video_filters.is_empty() {
-                "[0:v]split[bg][fg];[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[b];[fg]scale=1080:1920:force_original_aspect_ratio=decrease[f];[b][f]overlay=(W-w)/2:(H-h)/2[v]".to_owned()
+                format!("[0:v]{pre_prefix}split[bg][fg];[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[b];[fg]scale=1080:1920:force_original_aspect_ratio=decrease[f];[b][f]overlay=(W-w)/2:(H-h)/2[v]")
             } else {
                 format!(
-                    "[0:v]split[bg][fg];[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[b];[fg]scale=1080:1920:force_original_aspect_ratio=decrease[f];[b][f]overlay=(W-w)/2:(H-h)/2,{}[v]",
+                    "[0:v]{pre_prefix}split[bg][fg];[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[b];[fg]scale=1080:1920:force_original_aspect_ratio=decrease[f];[b][f]overlay=(W-w)/2:(H-h)/2,{}[v]",
                     video_filters.join(",")
                 )
             };
@@ -1090,21 +1095,28 @@ fn run_ffmpeg_once(
                 _ => ("iw-ow", "0"),
             };
             let vf = format!(
-                "[0:v]split[csrc][gsrc];[csrc]crop='iw*0.38':'ih*0.38':'{cx}':'{cy}',scale=1080:672:force_original_aspect_ratio=increase,crop=1080:672[cam];[gsrc]crop='min(iw,ih*0.865)':'ih':'(iw-ow)*{pan_frac:.4}':'0',scale=1080:1248:force_original_aspect_ratio=increase,crop=1080:1248[game];[cam][game]vstack=inputs=2{dt_chain}[v]"
+                "[0:v]{pre_prefix}split[csrc][gsrc];[csrc]crop='iw*0.38':'ih*0.38':'{cx}':'{cy}',scale=1080:672:force_original_aspect_ratio=increase,crop=1080:672[cam];[gsrc]crop='min(iw,ih*0.865)':'ih':'(iw-ow)*{pan_frac:.4}':'0',scale=1080:1248:force_original_aspect_ratio=increase,crop=1080:1248[game];[cam][game]vstack=inputs=2{dt_chain}[v]"
             );
             fc_parts.push(vf);
             used_filter_complex = true;
         }
         _ => {
+            let full_vf = if pre_prefix.is_empty() {
+                video_filters.join(",")
+            } else if video_filters.is_empty() {
+                pre_prefix.trim_end_matches(',').to_owned()
+            } else {
+                format!("{pre_prefix}{}", video_filters.join(","))
+            };
             if music_bed.is_some() {
-                if video_filters.is_empty() {
+                if full_vf.is_empty() {
                     fc_parts.push("[0:v]null[v]".to_owned());
                 } else {
-                    fc_parts.push(format!("[0:v]{}[v]", video_filters.join(",")));
+                    fc_parts.push(format!("[0:v]{full_vf}[v]"));
                 }
                 used_filter_complex = true;
-            } else if !video_filters.is_empty() {
-                cmd.arg("-vf").arg(video_filters.join(","));
+            } else if !full_vf.is_empty() {
+                cmd.arg("-vf").arg(full_vf);
             }
         }
     }
@@ -1211,7 +1223,7 @@ fn run_ffmpeg_once(
         // which Instagram Reels & TikTok reject).
         cmd.args(["-ar", "48000", "-ac", "2", "-c:a", "aac", "-b:a", "128k"]);
     }
-    cmd.args(["-movflags", "+faststart"])
+    cmd.args(["-map_metadata", "-1", "-movflags", "+faststart"])
         .arg(tmp_out)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -1514,10 +1526,12 @@ async fn render_clip_internal(
     let srt_cleanup = temp_srt_path.clone();
     let ass_cleanup = temp_ass_path.clone();
     let studio_opts = input.studio.clone();
+    let pre_crop_opt = crate::workspace_studio::sanitize_pre_crop(studio_opts.pre_crop.as_deref());
 
     let render = tokio::task::spawn_blocking(move || -> Result<(u64, String), String> {
         let mut chosen_encoder = "libx264".to_owned();
         let music_ref = music_bed_owned.as_ref().map(|(p, db)| (p.as_path(), *db));
+        let pre_crop_ref = pre_crop_opt.as_deref();
         let res = if use_hw && let Some(hw) = cached_hw_encoder() {
             match run_ffmpeg_once(
                 &ffmpeg,
@@ -1532,6 +1546,7 @@ async fn render_clip_internal(
                 &audio_filters,
                 music_ref,
                 &hw,
+                pre_crop_ref,
                 &video_filters,
                 effective_target_us,
             ) {
@@ -1559,6 +1574,7 @@ async fn render_clip_internal(
                         &audio_filters,
                         music_ref,
                         "libx264",
+                        pre_crop_ref,
                         &video_filters,
                         effective_target_us,
                     )
@@ -1578,6 +1594,7 @@ async fn render_clip_internal(
                 &audio_filters,
                 music_ref,
                 "libx264",
+                pre_crop_ref,
                 &video_filters,
                 effective_target_us,
             )
@@ -1700,6 +1717,69 @@ async fn render_clip_internal(
         "export_url": format!("/api/workspace/film-roll/{clip_id}/export"),
         "state": "exported",
     }))
+}
+
+pub(crate) fn register_external_export(
+    app: &App,
+    clip_id: &str,
+    file_name: &str,
+    provider_label: &str,
+    bytes: u64,
+) -> Result<Value, (StatusCode, String)> {
+    let db = app.db.lock().map_err(internal)?;
+    let (title, source_name): (String, String) = db
+        .query_row(
+            "SELECT title, source_name FROM workspace_film_roll WHERE clip_id=?1",
+            [clip_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap_or_else(|_| (file_name.to_owned(), provider_label.to_owned()));
+    db.execute(
+        "UPDATE workspace_film_roll SET exported_path=?1, review_state='exported' WHERE clip_id=?2",
+        params![file_name, clip_id],
+    )
+    .map_err(internal)?;
+    db.execute(
+        "INSERT INTO workspace_export_history(
+            clip_id, title, source_name, file_name, caption_file, cover_file,
+            framing, quality, in_ms, out_ms, muted, normalized_audio, bytes, exported_at
+         ) VALUES(?1, ?2, ?3, ?4, '', '', ?5, 'high', 0, 0, 0, 1, ?6, unixepoch())",
+        params![
+            clip_id,
+            if title.is_empty() { file_name } else { &title },
+            source_name,
+            file_name,
+            provider_label,
+            bytes as i64,
+        ],
+    )
+    .map_err(internal)?;
+    let history_id = db.last_insert_rowid();
+    Ok(json!({
+        "clip_id": clip_id,
+        "history_id": history_id,
+        "file_name": file_name,
+        "bytes": bytes,
+        "provider": provider_label,
+        "export_url": format!("/api/workspace/film-roll/{clip_id}/export"),
+        "state": "exported",
+    }))
+}
+
+pub(crate) fn resolve_exported_video(app: &App, clip_id: &str) -> Option<PathBuf> {
+    let db = app.db.lock().ok()?;
+    let rel: String = db
+        .query_row(
+            "SELECT exported_path FROM workspace_film_roll WHERE clip_id=?1",
+            [clip_id],
+            |r| r.get(0),
+        )
+        .ok()?;
+    if rel.trim().is_empty() {
+        return None;
+    }
+    let path = exports_dir(app).join(rel);
+    path.is_file().then_some(path)
 }
 
 pub(crate) async fn export_clip(
@@ -2853,6 +2933,7 @@ pub(crate) async fn split_parts(
                 &af,
                 None,
                 enc,
+                None,
                 &vf,
                 target_us,
             );
@@ -2870,6 +2951,7 @@ pub(crate) async fn split_parts(
                     &af,
                     None,
                     "libx264",
+                    None,
                     &vf,
                     target_us,
                 )?;

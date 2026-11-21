@@ -15,6 +15,7 @@
 #[cfg(feature="snapmatic-hud")] mod workspace_triage;
 #[cfg(feature="snapmatic-hud")] mod workspace_film_roll;
 #[cfg(feature="snapmatic-hud")] mod workspace_studio;
+#[cfg(feature="snapmatic-hud")] mod workspace_autocreate;
 #[cfg(feature="snapmatic-hud")] mod workspace_oauth;
 #[cfg(feature="snapmatic-hud")] mod workspace_tiktok_export;
 #[cfg(feature="snapmatic-hud")] mod controller_tiktok_inbox;

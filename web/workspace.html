@@ -337,225 +337,79 @@
           </section>
         </div>
 
-        <!-- TAB 2: CREATE ✨ (PRO AUTOCAPTION AI & STUDIO) -->
+        <!-- TAB 2: CREATE ✨ (3-ENGINE AUTO-CREATE + AUTOMATIC TIKTOK GUIDELINES CHECK) -->
         <div class="itab-pane" data-itab-pane="create">
-          <section aria-label="AutoCaption and Pro Studio" class="space-y-3">
-            <div class="studio-status-strip">
-              <output id="studio-active-summary" class="muted" role="status">No Pro Studio effects active yet.</output>
-              <button type="button" id="studio-reset-all" class="mini-btn cancel-btn">Reset</button>
-            </div>
+          <section aria-label="Auto-Create Engines and TikTok Guidelines" class="space-y-3">
             <div id="studio-no-clip-banner" class="dup-warning" style="margin:4px 0;">
-              <span>👆 Select a clip in Film Roll (left) to start captioning &amp; exporting.</span>
+              <span>👆 Select a clip in Film Roll (left) to Auto-Create.</span>
               <div><button type="button" id="studio-pick-first" class="mini-btn">Select First Clip</button></div>
             </div>
 
-            <!-- TOOL 1: PRO AUTOCAPTION AI STUDIO -->
-            <details class="overlay-box" open>
-              <summary>✨ Pro AutoCaption AI (Word-by-Word Karaoke)</summary>
-              <div class="ac-whisper-bar" id="ac-whisper-bar">
-                <span id="ac-whisper-badge" class="flag warn">CHECKING ENGINE…</span>
-                <button type="button" id="ac-whisper-install" class="mini-btn" hidden>⬇ Upgrade to Pro Model (488 MB)</button>
-              </div>
-              <div class="export-progress-wrap" id="ac-install-progress-wrap" hidden>
-                <progress id="ac-install-progress" max="100" value="0"></progress>
-                <output id="ac-install-progress-text">Downloading…</output>
+            <!-- ONLY 3 CLEAN AUTO-CREATE BUTTONS -->
+            <div class="ac3-stack" role="group" aria-label="Auto-Create engines">
+              <div class="ac3-row">
+                <button type="button" id="btn-auto-snapmatic" class="ac3-btn ac3-snapmatic" disabled>
+                  <span class="ac3-icon">⚡</span>
+                  <span class="ac3-copy">
+                    <strong>Snapmatic</strong>
+                    <small>Local Auto-Create · Fixes TikTok guidelines, 1080p, captions &amp; pacing</small>
+                  </span>
+                  <span class="ac3-pill ac3-pill-free">FREE</span>
+                </button>
               </div>
 
-              <div class="export-btn-row">
-                <button type="button" id="ac-transcribe-go" class="vice-btn-primary" disabled>✨ Auto-Generate Captions</button>
-                <button type="button" id="ac-rescan-words" class="mini-btn" hidden title="Ignore cache and re-transcribe fresh">↻ Re-scan</button>
-                <button type="button" id="ac-clear-words" class="cancel-btn" hidden>Clear</button>
+              <div class="ac3-row">
+                <button type="button" id="btn-auto-opus" class="ac3-btn ac3-opus" disabled>
+                  <span class="ac3-icon">🟣</span>
+                  <span class="ac3-copy">
+                    <strong>OpusClip</strong>
+                    <small>opus.pro Cloud AI · Viral clips, auto-reframe &amp; B-roll</small>
+                  </span>
+                  <span class="ac3-pill" id="opus-key-badge">SET KEY</span>
+                </button>
+                <button type="button" id="btn-opus-key" class="ac3-gear" title="Configure Opus.pro API key" aria-label="Configure Opus.pro API key">⚙</button>
               </div>
-              <output id="ac-transcribe-status" class="muted" role="status">Uses vocal-isolated Whisper AI + DTW word alignment for tight karaoke sync.</output>
 
-              <details class="ac-cloud-box" id="ac-cloud-box">
-                <summary>⚡ Optional: Cloud Whisper Large-v3-Turbo (~99% Accuracy in 2s)</summary>
-                <p class="muted">Optional free Groq or OpenAI key stored securely in Windows Credential Manager for studio-grade 99% accuracy.</p>
-                <div class="export-grid">
-                  <label>Provider
-                    <select id="ac-cloud-provider">
-                      <option value="groq">Groq (Free Tier · Large-v3-Turbo)</option>
-                      <option value="openai">OpenAI (Whisper-1)</option>
-                    </select>
-                  </label>
-                  <label>API Key
-                    <input id="ac-cloud-key" type="password" placeholder="gsk_… or sk-…">
-                  </label>
+              <div class="ac3-row">
+                <button type="button" id="btn-auto-submagic" class="ac3-btn ac3-submagic" disabled>
+                  <span class="ac3-icon">✨</span>
+                  <span class="ac3-copy">
+                    <strong>Submagic</strong>
+                    <small>submagic.co Cloud AI · Magic B-roll, zooms, SFX &amp; captions</small>
+                  </span>
+                  <span class="ac3-pill" id="submagic-key-badge">SET KEY</span>
+                </button>
+                <button type="button" id="btn-submagic-key" class="ac3-gear" title="Configure Submagic API key" aria-label="Configure Submagic API key">⚙</button>
+              </div>
+            </div>
+
+            <!-- LIVE PIPELINE STATUS & PROGRESS -->
+            <div id="ac3-progress-wrap" class="ac3-progress" hidden>
+              <div class="ac3-progress-top">
+                <output id="ac3-progress-text" role="status">Ready</output>
+                <button type="button" id="ac3-cancel-btn" class="mini-btn cancel-btn" hidden>Cancel</button>
+              </div>
+              <progress id="ac3-progress-bar" max="100" value="0"></progress>
+            </div>
+            <output id="studio-active-summary" class="muted ac3-summary" role="status"></output>
+
+            <!-- AUTOMATIC TIKTOK ORIGINAL CONTENT GUIDELINES CHECKER -->
+            <div class="tt-audit-card" id="tt-audit-card">
+              <div class="tt-audit-head">
+                <div>
+                  <span class="tt-audit-eyebrow">AUTO GUIDELINES CHECK</span>
+                  <h4>TikTok Original Content Check</h4>
                 </div>
-                <div class="export-btn-row">
-                  <button type="button" id="ac-cloud-save" class="mini-btn">Save Key</button>
-                  <button type="button" id="ac-cloud-clear" class="cancel-btn" hidden>Remove Key</button>
-                </div>
-                <output id="ac-cloud-status" class="muted" role="status"></output>
-              </details>
-
-              <label style="margin-top:10px;">Viral Caption Style</label>
-              <div class="ac-style-grid" id="ac-style-grid">
-                <button type="button" data-ac-preset="hormozi" aria-pressed="true" class="ac-style-card">
-                  <span class="ac-swatch ac-sw-hormozi">WAIT <b style="color:#FFE600">FOR</b> IT</span>
-                  <small>Hormozi Pop</small>
-                </button>
-                <button type="button" data-ac-preset="tiktok_bounce" aria-pressed="false" class="ac-style-card">
-                  <span class="ac-swatch ac-sw-tiktok">NO <b style="color:#FF2E93">CAP</b></span>
-                  <small>TikTok Bounce</small>
-                </button>
-                <button type="button" data-ac-preset="mrbeast" aria-pressed="false" class="ac-style-card">
-                  <span class="ac-swatch ac-sw-mrbeast">NO <b style="color:#00F5A0">WAY</b></span>
-                  <small>MrBeast Bold</small>
-                </button>
-                <button type="button" data-ac-preset="vice_neon" aria-pressed="false" class="ac-style-card">
-                  <span class="ac-swatch ac-sw-vice">VICE <b style="color:#00E5FF">CITY</b></span>
-                  <small>Vice Neon</small>
-                </button>
-                <button type="button" data-ac-preset="submagic_pill" aria-pressed="false" class="ac-style-card">
-                  <span class="ac-swatch ac-sw-pill">LOOK <b class="ac-pill-demo">HERE</b></span>
-                  <small>Submagic Pill</small>
-                </button>
-                <button type="button" data-ac-preset="minimal_clean" aria-pressed="false" class="ac-style-card">
-                  <span class="ac-swatch ac-sw-clean">clean <b style="color:#00E5FF">pro</b></span>
-                  <small>Minimal Clean</small>
-                </button>
-              </div>
-
-              <label>Active Word Highlight Color</label>
-              <div class="ac-color-row" id="ac-color-row">
-                <button type="button" data-ac-color="#FFE600" aria-pressed="true" style="background:#FFE600;" title="Hormozi Yellow"></button>
-                <button type="button" data-ac-color="#00F5A0" aria-pressed="false" style="background:#00F5A0;" title="Mint Green"></button>
-                <button type="button" data-ac-color="#00E5FF" aria-pressed="false" style="background:#00E5FF;" title="Vice Cyan"></button>
-                <button type="button" data-ac-color="#FF2E93" aria-pressed="false" style="background:#FF2E93;" title="Vice Pink"></button>
-                <button type="button" data-ac-color="#FF9E2C" aria-pressed="false" style="background:#FF9E2C;" title="Sunset Gold"></button>
-                <button type="button" data-ac-color="#FFFFFF" aria-pressed="false" style="background:#FFFFFF;" title="Pure White"></button>
-              </div>
-
-              <div class="export-grid">
-                <label>Words / Line
-                  <select id="ac-wpl">
-                    <option value="1">1 Word (Rapid)</option>
-                    <option value="2">2 Words (Punchy)</option>
-                    <option value="3" selected>3 Words (Viral)</option>
-                    <option value="4">4 Words (Story)</option>
-                  </select>
-                </label>
-                <label>Font Size (<output id="ac-size-val">68px</output>)
-                  <input id="ac-size" type="range" min="44" max="92" step="2" value="68">
-                </label>
-              </div>
-
-              <label>Vertical Position (<output id="ac-posy-val">74%</output>)
-                <input id="ac-posy" type="range" min="18" max="86" step="2" value="74">
-              </label>
-
-              <div class="export-checks">
-                <label class="inline-check"><input type="checkbox" id="ac-uppercase" checked> ALL CAPS styling</label>
-                <label class="inline-check"><input type="checkbox" id="ac-pop" checked> Word-by-word pop bounce</label>
-                <label class="inline-check"><input type="checkbox" id="ac-emojis" checked> Smart keyword emojis (🔥 💀 👀 💰)</label>
-              </div>
-
-              <!-- Pro Line-by-Line Timed Transcript Editor (AutoCaption.io / TikTokCaptions.io style) -->
-              <div id="ac-editor-wrap" hidden>
-                <div class="ac-editor-head">
-                  <strong id="ac-word-count">0 lines</strong>
-                  <small class="muted">Click timestamp to seek · edit text inline</small>
-                </div>
-                <div id="ac-lines-list" class="ac-lines-list"></div>
-              </div>
-            </details>
-
-            <!-- TOOL 2: MID-CLIP JUMP-CUT SILENCE REMOVER -->
-            <details class="overlay-box">
-              <summary>✂️ Auto Jump-Cut Silence Remover</summary>
-              <p class="muted">Scans the whole clip and cuts out awkward mid-sentence pauses automatically (captions remap cleanly).</p>
-              <label class="inline-check"><input type="checkbox" id="ac-jumpcut-on"> Remove mid-clip dead air on export</label>
-              <div class="export-grid">
-                <label>Sensitivity
-                  <select id="ac-jumpcut-db">
-                    <option value="-38">Gentle (-38 dB)</option>
-                    <option value="-32" selected>Balanced (-32 dB)</option>
-                    <option value="-26">Aggressive (-26 dB)</option>
-                  </select>
-                </label>
-                <label>Min Pause
-                  <select id="ac-jumpcut-min">
-                    <option value="0.30">Tight (0.30s)</option>
-                    <option value="0.42" selected>Natural (0.42s)</option>
-                    <option value="0.65">Relaxed (0.65s)</option>
-                  </select>
-                </label>
-              </div>
-            </details>
-
-            <!-- TOOL 3: OPUSCLIP-STYLE MULTI-HIGHLIGHT FINDER -->
-            <details class="overlay-box">
-              <summary>🔥 Multi-Highlight Viral Clip Finder</summary>
-              <p class="muted">Ranks the top 3–4 highest-energy 30–58s Shorts/Reels moments in long clips or stream VODs.</p>
-              <div class="export-btn-row">
-                <button type="button" id="ac-highlights-go" class="vice-btn-primary" disabled>🔥 Find Top Viral Moments</button>
-              </div>
-              <output id="ac-highlights-status" class="muted" role="status"></output>
-              <div id="ac-highlights-list" class="ac-highlights-list"></div>
-            </details>
-
-            <!-- TOOL 4: STUDIO VOICE POLISH & CLEAN MIC VOICEOVER -->
-            <details class="overlay-box">
-              <summary>🎙️ Studio Voice Polish &amp; Mic Voiceover</summary>
-              <label class="inline-check"><input type="checkbox" id="ac-voice-polish"> Studio Voice Enhance (noise reduction + warm vocal EQ + −14 LUFS)</label>
-              <div class="export-btn-row" style="margin-top:8px;">
-                <button type="button" id="studio-vo-rec">● Record Mic Voiceover</button>
-                <button type="button" id="studio-vo-stop" class="cancel-btn" hidden>■ Stop Recording</button>
-                <button type="button" id="studio-vo-clear" hidden>Clear Voiceover</button>
-              </div>
-              <div class="studio-meter-wrap" id="studio-vo-meter-wrap" hidden>
-                <div id="studio-vo-meter" class="studio-meter-bar"></div>
-              </div>
-              <audio id="studio-vo-audio" controls hidden style="width:100%;height:32px;margin:6px 0;"></audio>
-              <div class="export-grid">
-                <label>Auto-Duck Clip (<output id="studio-vo-duck-val">-14 dB</output>)
-                  <input id="studio-vo-duck" type="range" min="-26" max="0" step="2" value="-14">
-                </label>
-                <label>Voiceover Gain (<output id="studio-vo-gain-val">+2 dB</output>)
-                  <input id="studio-vo-gain" type="range" min="-6" max="12" step="1" value="2">
-                </label>
-              </div>
-              <output id="studio-vo-status" class="muted" role="status">Optional: record clean commentary with automatic sidechain ducking.</output>
-            </details>
-
-            <!-- TOOL 5: PRO COLOR GRADING & .CUBE 3D LUTS -->
-            <details class="overlay-box">
-              <summary>🎨 Pro Color Grading &amp; .cube 3D LUTs</summary>
-              <div class="preset-chips" id="studio-grade-pills">
-                <button type="button" data-grade="none" aria-pressed="true">Original</button>
-                <button type="button" data-grade="crisp_rec709">Crisp Rec.709</button>
-                <button type="button" data-grade="warm_cinema">Warm Cinema</button>
-                <button type="button" data-grade="vice_night">Vice Night</button>
-                <button type="button" data-grade="hdr_gaming">HDR Gaming</button>
-              </div>
-              <div class="export-grid" style="margin-top:6px;">
-                <label>Custom .cube LUT
-                  <select id="ac-lut-select">
-                    <option value="">None (use preset above)</option>
-                  </select>
-                </label>
-                <div class="export-btn-row" style="align-self:end;margin:0;">
-                  <label class="mini-btn file-btn">+ Load .cube<input id="ac-lut-upload" type="file" accept=".cube" hidden></label>
+                <div class="tt-audit-score-wrap">
+                  <span id="tt-audit-score" class="tt-score-pill">--</span>
                 </div>
               </div>
-              <output id="ac-lut-status" class="muted" role="status"></output>
-            </details>
-
-            <!-- TOOL 6: REUSABLE 1-CLICK STYLE TEMPLATES -->
-            <details class="overlay-box">
-              <summary>💾 Saved Creator Style Templates</summary>
-              <p class="muted">Save your caption style, highlight color, Y-position, voice polish &amp; color grade to apply in 1 click.</p>
-              <div class="preset-bar" style="margin-top:6px;">
-                <select id="ac-tpl-select"><option value="">No saved templates</option></select>
-                <button type="button" id="ac-tpl-apply" disabled>Apply</button>
-                <button type="button" id="ac-tpl-del" disabled>✕</button>
+              <div class="tt-audit-meta">
+                <span id="tt-audit-target" class="muted">Select a clip — checks automatically.</span>
+                <span id="tt-audit-verdict" class="tt-verdict-tag" hidden></span>
               </div>
-              <div class="preset-save-row" style="margin-top:6px;">
-                <input id="ac-tpl-name" type="text" maxlength="40" placeholder="e.g. GTA 6 Main Style">
-                <button type="button" id="ac-tpl-save">Save Template</button>
-              </div>
-            </details>
+              <ul id="tt-audit-list" class="tt-audit-list"></ul>
+            </div>
           </section>
         </div>
 
@@ -1068,6 +922,38 @@
       <dt>1–5 / A / H</dt><dd>Rate clip ★ / Approve / Hold · N / P for Next / Prev</dd>
       <dt>Shift+Click / Shift+Enter</dt><dd>Select a range for bulk Film Roll triage</dd>
     </dl>
+  </dialog>
+
+  <dialog class="p5-dialog ac3-key-dialog" id="provider-key-dialog" aria-labelledby="pk-title">
+    <form id="provider-key-form">
+      <header>
+        <h2 id="pk-title" class="font-display text-lg font-bold">Connect Cloud AI</h2>
+        <button type="button" id="pk-close" aria-label="Close" class="mini-btn">Close</button>
+      </header>
+      <p id="pk-desc" class="muted" style="margin:6px 0 12px;"></p>
+      <label style="display:block;margin-bottom:10px;">API Key (stored securely in Windows Credential Manager)
+        <input id="pk-api-key" type="password" autocomplete="off" placeholder="Paste your API key…">
+      </label>
+      <div id="pk-opus-fields" hidden>
+        <label style="display:block;margin-bottom:10px;">Brand Template ID (optional)
+          <input id="pk-opus-tpl" type="text" placeholder="Leave blank for your Opus.pro default template">
+        </label>
+      </div>
+      <div id="pk-submagic-fields" hidden>
+        <label style="display:block;margin-bottom:10px;">Caption Template Name
+          <input id="pk-sub-tpl" type="text" value="Hormozi 2" placeholder="Hormozi 2, Sara, Daniel…">
+        </label>
+        <div class="export-checks" style="margin-bottom:10px;">
+          <label class="inline-check"><input type="checkbox" id="pk-sub-brolls" checked> Magic B-Roll Cutaways</label>
+          <label class="inline-check"><input type="checkbox" id="pk-sub-zooms" checked> Magic Zooms</label>
+        </div>
+      </div>
+      <output id="pk-error" class="muted" role="alert" style="display:block;color:#ff6b86;margin-bottom:8px;"></output>
+      <div class="export-btn-row" style="justify-content:flex-end;">
+        <button type="button" id="pk-remove" class="cancel-btn" hidden>Remove Key</button>
+        <button type="submit" id="pk-save" class="vice-btn-primary">Save Key</button>
+      </div>
+    </form>
   </dialog>
 </body>
 </html>
