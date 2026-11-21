@@ -1,163 +1,1230 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Snapmatic · Film Roll</title><link rel="stylesheet" href="/workspace.css"><script src="/workspace-preflight.js" defer></script><script src="/workspace-platform-draft.js" defer></script><script src="/workspace-edit.js" defer></script><script src="/workspace-phase5.js" defer></script><script src="/workspace.js" defer></script><script src="/workspace-pro.js" defer></script><link rel="icon" href="/favicon.ico?v=aperture-1" sizes="any"><link rel="icon" type="image/png" href="/icon-192.png?v=aperture-1" sizes="192x192"><link rel="apple-touch-icon" href="/icon-192.png?v=aperture-1"><link rel="manifest" href="/manifest.webmanifest?v=aperture-1"><meta name="theme-color" content="#0B0D10"></head>
-<body class="snapmatic-shell"><header class="top"><a class="identity" href="/workspace?view=studio" aria-label="Snapmatic home"><img src="/icon-192.png?v=aperture-1" alt="" width="30" height="30"><span>SNAPMATIC<small>CREATOR WORKSPACE</small></span></a><label>Channel <select id="channel-scope" aria-label="Select channel profile"><option value="all">All Channels</option></select></label><div class="credentials" id="credentials" aria-label="Provider credential status"></div><button type="button" id="theme-toggle" class="theme-toggle-btn" title="Switch Light / Dark theme" aria-label="Toggle Light or Dark theme">☀ Light</button><a class="readonly-pill" id="sm-tools-pill" href="/workspace?view=system" data-shell-link="system">Checking local tools…</a><a class="posting-lock" href="/workspace?view=system" data-shell-link="system">AUTO-POSTING: OFF</a></header>
-<div class="snapmatic-main-rail"><nav class="view-nav" aria-label="Snapmatic views"><a href="/workspace?view=studio" data-view="studio">Viewfinder Studio</a><a href="/workspace?view=gallery" data-view="gallery">Film Roll Gallery</a><a href="/workspace?view=insights" data-view="insights">Channel Insights</a><a href="/workspace?view=calendar" data-view="calendar">Calendar</a><a href="/workspace?view=ledger" data-view="ledger">Receipts &amp; Backups</a><a href="/workspace?view=system" data-view="system">Connections &amp; System</a><span class="nav-spacer"></span><button id="p5-open-command" type="button">Commands <kbd>Ctrl+K</kbd></button><button id="p5-open-help" type="button" aria-label="Keyboard shortcuts">?</button></nav>
-<nav class="utility-strip" aria-label="Workspace tools"><span>WORKSPACE TOOLS</span><a href="/workspace?view=profiles" data-shell-link="profiles">Profiles</a><a href="/workspace?view=sources" data-shell-link="sources">Sources</a><span class="nav-spacer"></span><button type="button" id="streak-pill" class="streak-pill" title="Click to set your weekly posting goal">🔥 Streak: checking…</button></nav></div>
-<main class="desk" id="studio">
-<aside class="rail panel" aria-labelledby="roll-title"><header class="panel-head"><div class="eyebrow">01 / LIBRARY</div><h1 id="roll-title">Film Roll</h1><p id="roll-count">Loading indexed clips…</p></header>
-<div class="rail-search"><input id="roll-search" type="search" placeholder="Search Film Roll…" aria-label="Search Film Roll clips"></div>
-<div id="filters" class="filters" role="group" aria-label="Filter Film Roll"><button type="button" data-filter="all" aria-pressed="true">All</button><button type="button" data-filter="pending" aria-pressed="false">Pending Review</button><button type="button" data-filter="approved" aria-pressed="false">Approved</button><button type="button" data-filter="hold" aria-pressed="false">Hold</button><button type="button" data-filter="exported" aria-pressed="false">Exported</button><button type="button" data-filter="unposted" aria-pressed="false">Not Uploaded</button><button type="button" data-filter="toprated" aria-pressed="false">Top ★</button></div>
-<details class="p5-triage"><summary>Batch review triage</summary><div id="p5-batch"><output id="p5-batch-size">Shift+Click or Shift+Enter to select a range</output><div><button type="button" data-triage="approve" disabled>Approve</button><button type="button" data-triage="hold" disabled>Hold</button><button type="button" data-triage="pending_review" disabled>Pending</button><button type="button" data-triage="remove" disabled>Remove</button></div><small>Bulk updates Film Roll status or removes from the Film Roll list. Original files on disk are never touched.</small><output id="p5-batch-result" aria-live="polite"></output></div></details><div id="roll" class="roll" aria-label="Indexed clips"></div><footer><span class="dot"></span><span id="connection">Opening local event feed…</span></footer></aside>
-<section class="stage panel" aria-labelledby="stage-title"><header class="stage-head"><div><div class="eyebrow">02 / PLAYBACK</div><h2 id="stage-title">Viewfinder</h2></div><output id="stage-state" class="flag" aria-live="polite">STANDBY</output></header>
-<div class="view-shell"><div class="viewfinder" id="viewfinder" tabindex="0" aria-label="Vertical viewfinder. Space or K plays, J/L shuttle, arrows seek, M mutes, G toggles framing guides."><span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span><video id="video" playsinline preload="metadata" aria-label="Selected clip"></video><div id="vf-hook-overlay" class="vf-hook" hidden></div><div id="vf-wm-overlay" class="vf-wm" hidden></div><div id="vf-mock-ui" class="vf-mock-ui" data-platform="tiktok" hidden aria-hidden="true"><div class="vf-mock-top" id="vf-mock-top">Following · <strong>For You</strong></div><div class="vf-mock-rail"><span title="Like">♥<small>12.4K</small></span><span title="Comment">💬<small>418</small></span><span title="Bookmark">🔖<small>1.9K</small></span><span title="Share">↗<small>620</small></span></div><div class="vf-mock-meta"><strong id="vf-mock-handle">@cj_4_prez</strong><p id="vf-mock-caption">Your caption &amp; hashtags appear here…</p></div></div><div id="empty" class="overlay-empty"><b>＋</b><span>SELECT A CLIP</span><small>PREVIEW MONITOR</small></div><div class="grid" id="grid" hidden aria-hidden="true"></div><div id="zones" class="zones" hidden aria-hidden="true"><span id="zone-label"></span></div></div><div class="p5-compare" id="p5-compare" hidden><strong id="p5-compare-label">Render</strong><video id="p5-compare-video" muted playsinline preload="metadata" aria-label="Verified comparison video"></video><small id="p5-compare-state" role="status"></small></div></div>
-<div class="p5-playback" role="group" aria-label="Playback source and frame controls"><button type="button" id="p5-source" disabled>Source</button><button type="button" id="p5-render" disabled>Exported</button><button type="button" id="p5-split" aria-pressed="false" disabled>Split comparison</button><button type="button" id="p5-step-back" disabled aria-label="Previous frame">−1 frame</button><button type="button" id="p5-step-next" disabled aria-label="Next frame">+1 frame</button><label><input type="checkbox" id="p5-loop" disabled> Loop In/Out</label><label class="speed-ctrl">Speed <select id="sm-speed" aria-label="Playback speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label></div><label class="sm-volume">Volume <input id="sm-volume" type="range" min="0" max="100" value="70" aria-label="Preview volume"></label><div class="transport"><button id="play" type="button" aria-label="Play clip" disabled>▶</button><input id="seek" type="range" min="0" max="0" value="0" step="0.01" aria-label="Seek in clip" disabled><output id="time">00:00.000 / --:--.---</output></div>
-<div class="trim-visual" id="trim-visual" hidden><div class="trim-track" id="trim-track" title="Click anywhere to seek · drag handles to trim"><div class="trim-filmstrip" id="trim-filmstrip"></div><div class="trim-range" id="trim-range"></div><div class="trim-markers" id="trim-markers"></div><div class="trim-playhead" id="trim-playhead"></div><button type="button" class="trim-handle trim-handle-in" id="trim-handle-in" aria-label="Drag trim In handle" title="Drag to set Trim In"></button><button type="button" class="trim-handle trim-handle-out" id="trim-handle-out" aria-label="Drag trim Out handle" title="Drag to set Trim Out"></button></div><div class="trim-visual-meta"><output id="trim-visual-range">00:00.000 → 00:00.000</output><output id="trim-visual-dur">Clip: 00:00.000</output></div>
-<div class="marker-bar"><input id="marker-label" type="text" maxlength="40" placeholder="Add marker at playhead (e.g. Glitch starts)…"><button type="button" id="marker-add">+ Marker</button><div id="marker-list" class="marker-list"></div></div></div>
-<div class="p5-waveform"><div id="p5-scrub" aria-hidden="true"></div><small id="p5-scrub-note">Waveform and speech metadata unavailable</small> <button id="p5-waveform-load" type="button" disabled>Load local waveform</button></div>
-<div class="cover-tools"><div class="export-btn-row"><button type="button" class="shutter" id="cover-shutter" disabled>Set Frame as Cover</button><button type="button" id="cover-auto-btn" disabled>Auto-Pick 3 Best Covers</button></div><output id="cover-offset" aria-live="polite">Cover not captured</output><div id="cover-candidates" class="cover-candidates" hidden></div><img id="cover-image" alt="Captured 1080 by 1920 cover frame" hidden><a id="cover-download" hidden>Save 1080 × 1920 cover PNG locally</a>
-<details class="overlay-box" id="cover-designer-box"><summary>Cover Thumbnail Designer (Text + Vignette + Border)</summary><label>Cover headline <input id="cover-design-title" type="text" maxlength="50" placeholder="e.g. GTA 6 SECRET FOUND!"></label><div class="export-checks"><label class="inline-check"><input type="checkbox" id="cover-design-vignette" checked> Contrast vignette</label><label class="inline-check"><input type="checkbox" id="cover-design-border"> Cyan accent border</label></div><div class="export-btn-row"><button type="button" id="cover-design-apply" disabled>Stamp Cover PNG</button></div></details><small>Manual cover suggestion; never sent automatically.</small></div>
-<div class="guides"><label><input id="grid-toggle" type="checkbox" checked> Grid</label><label><input id="safe-toggle" type="checkbox"> Safe zones</label><label><input id="mock-ui-toggle" type="checkbox"> Platform UI</label><label><input id="live-fx-preview" type="checkbox" checked> Live FX/Crop</label><button type="button" id="live-fx-hold" class="mini-btn" title="Hold to compare raw original">Hold: Original</button><select id="platform-zone" aria-label="Safe zone platform" title="Guide approximation"><option value="tiktok">TikTok</option><option value="reels">Reels</option><option value="shorts">Shorts</option><option value="x">X</option></select></div>
-<div class="clip-rating-bar" id="clip-rating-bar"><span class="rating-stars" id="rating-stars" role="group" aria-label="Clip star rating"><button type="button" data-star="1">★</button><button type="button" data-star="2">★</button><button type="button" data-star="3">★</button><button type="button" data-star="4">★</button><button type="button" data-star="5">★</button></span><div class="mood-pills" id="mood-pills"><button type="button" data-mood="Banger">🔥 Banger</button><button type="button" data-mood="Funny">😂 Funny</button><button type="button" data-mood="Glitch">⚡ Glitch</button><button type="button" data-mood="Needs Edit">✂ Needs Edit</button></div><small class="muted">Keys 1–5 rate · A approve · H hold · N/P next/prev</small></div>
-<div class="telemetry"><div><small>FRAME</small><output id="frame">—</output></div><div><small>AVG BITRATE</small><output id="bitrate">—</output></div><div><small>SHA-256</small><output id="digest">—</output></div><div><small>CODEC</small><output id="codec">—</output></div><div><small>ENCODER</small><output id="encoder">—</output></div><div><small>RECEIPT</small><output id="receipt">—</output></div></div>
-<div class="telemetry"><div><small>INTEGRATED LOUDNESS</small><output id="edit-lufs">Not measured</output></div><div><small>TRUE PEAK</small><output id="edit-peak">Not measured</output></div></div>
-<div class="stage-actions"><section class="workflow" aria-label="Clip workflow"><div><strong id="wf-stage">Review</strong> &rarr; Export</div><output id="wf-count"></output><p id="wf-reason">Select a clip.</p><button type="button" id="wf-primary" disabled>Choose a clip</button> <button type="button" id="wf-next" disabled>Save &amp; Next</button> <button type="button" id="wf-undo" disabled>Undo</button><output id="wf-saved" role="status"></output></section><button type="button" id="approve" class="shutter" disabled><img src="/icon-192.png?v=aperture-1" alt="" width="30" height="30"> Approve</button><button type="button" id="hold-clip" class="hold-btn" disabled>Hold</button><small>Ctrl+Enter · Local review only. Approval never posts.</small></div><output id="message" role="status"></output><ol id="playback-proof" class="proof" aria-label="Film Roll playback check" hidden></ol></section>
-<aside class="inspector panel" aria-labelledby="inspect-title"><header class="panel-head"><div class="eyebrow">03 / DETAILS</div><h2 id="inspect-title">Inspector</h2><p id="inspect-description" class="muted" hidden></p><p id="inspect-state">No clip selected</p></header>
-<div class="inspector-tabs" id="inspector-tabs" role="tablist" aria-label="Inspector sections"><button type="button" role="tab" data-itab="captions" aria-selected="true">Captions</button><button type="button" role="tab" data-itab="export" aria-selected="false">Edit &amp; Export</button><button type="button" role="tab" data-itab="upload" aria-selected="false">Upload <span id="itab-upload-badge" class="itab-badge" hidden></span></button><button type="button" role="tab" data-itab="checks" aria-selected="false">Checks</button></div>
-<div class="inspector-body">
-<div class="itab-pane" data-itab-pane="captions">
-<section aria-labelledby="draft-head"><h3 id="draft-head">Caption desk</h3><p class="muted">Local draft · not sent or saved.</p><label>Title<input id="title" type="text" maxlength="200" placeholder="Clip title"></label><label>Caption<textarea id="caption" maxlength="10000" rows="5" placeholder="Write a caption…"></textarea></label><label>Hashtags<input id="tags" type="text" maxlength="1000" placeholder="#snapmatic"></label>
-<div class="preset-box"><div class="preset-bar"><select id="preset-select" aria-label="Caption & hashtag preset"><option value="">Loading presets…</option></select><button id="draft-preset" type="button" disabled>Apply</button><button id="preset-delete" type="button" title="Delete selected preset" disabled>✕</button></div><div class="preset-save-row"><input id="preset-name" type="text" maxlength="60" placeholder="Save current as preset…"><button id="preset-save" type="button">Save preset</button></div></div>
-<div id="platform-draft-tools">
-<details><summary>YouTube Shorts draft</summary><output id="draft-yt-title" class="muted"></output><output id="draft-yt-shorts" class="muted"></output><label>YouTube keyword tags, comma separated <input id="draft-yt-api-tags" maxlength="1600"></label><output id="draft-yt-api-count" class="muted" aria-live="polite"></output><label><input id="draft-shorts" type="checkbox"> Include #Shorts</label><label><input id="draft-youtube-override" type="checkbox"> Override YouTube description</label><textarea id="draft-youtube" maxlength="10000" rows="3" aria-label="YouTube description"></textarea><output id="draft-youtube-count" class="muted" aria-live="polite"></output><p class="warn" id="draft-yt-audio" hidden>Over 60 seconds: an active Content ID claim can block a Short. Check audio rights and Shorts Audio Library usage limits before posting.</p></details>
-<details><summary>Instagram Reels draft</summary><label><input id="draft-ig-share" type="checkbox"> Also share to Feed, if available (local preference only)</label><p id="draft-ig-placement" class="muted" hidden>Over 90 seconds: Instagram determines where this Reel appears. Placement is not guaranteed.</p><label><input id="draft-trial" type="checkbox"> Trial Reel, manual graduation (local draft only)</label><label><input id="draft-instagram-override" type="checkbox"> Override Instagram caption</label><textarea id="draft-instagram" maxlength="10000" rows="3" aria-label="Instagram caption"></textarea><output id="draft-instagram-count" class="muted" aria-live="polite"></output><p class="warn" id="draft-ig-discovery" hidden>Over 180 seconds: may not be recommended to new audiences.</p></details>
-<details><summary>TikTok Manual Export</summary><label><input id="draft-tiktok-override" type="checkbox"> Override TikTok editor text</label><textarea id="draft-tiktok" maxlength="10000" rows="3" aria-label="TikTok editor caption"></textarea><output id="draft-tiktok-count" class="muted" aria-live="polite"></output><p class="muted">Copy this caption for manual use. A captured cover can accompany a verified export; nothing is sent to TikTok.</p><output id="draft-tt-capacity" class="muted" aria-live="polite"></output><div><button type="button" id="tt-copy">Copy caption + hashtags</button> <button type="button" id="tt-export" disabled>Create local export</button> <button type="button" id="tt-folder">Open export folder</button> <a href="/workspace?view=ledger" data-shell-link="ledger">Verified backup links</a></div><output id="tt-result" aria-live="polite"></output></details>
-<details><summary>X (Twitter) Post draft</summary><textarea id="draft-x" maxlength="280" rows="3" placeholder="Auto-filled from Title + Caption + Hashtags (280 chars max)…" aria-label="X post text"></textarea><output id="draft-x-count" class="muted" aria-live="polite">0/280 characters</output><div class="export-btn-row"><button type="button" id="x-copy">Copy X post text</button></div></details>
-<details class="overlay-box"><summary>Viral Hook &amp; Title Formula Helper</summary><div id="hook-helper-list" class="hook-helper-list"></div></details>
-<div class="export-btn-row"><button type="button" id="platform-draft-save" disabled>Save local draft</button><button type="button" id="auto-format-all">Auto-Format All Platforms</button><button type="button" id="copy-all-captions">Copy All Captions</button></div><p id="platform-draft-result" class="muted" role="status">Select a verified preview.</p></div></section>
-</div>
-<div class="itab-pane" data-itab-pane="export" hidden>
-<section class="inspector-trim" aria-label="Trim and timing"><h3>Trim and timing</h3><div class="trim-tools" aria-label="Non-destructive source trim"><label>In <input id="trim-in" type="range" min="0" max="0" step="1" disabled></label><button id="trim-in-here" type="button" disabled>Set In (I)</button><label>Out <input id="trim-out" type="range" min="0" max="0" step="1" disabled></label><button id="trim-out-here" type="button" disabled>Set Out (O)</button><output id="trim-status" aria-live="polite">Select a verified preview</output></div>
-<div class="export-btn-row"><button type="button" id="trim-detect-silence" disabled>Auto-Trim Dead Air</button></div><output id="silence-status" class="muted" aria-live="polite"></output>
-</section><section aria-labelledby="local-edit-heading"><h3 id="local-edit-heading">Export Local MP4</h3>
-<div class="preset-chips" id="export-presets-bar" aria-label="1-click platform export presets"><button type="button" data-epreset="universal">Universal 9:16</button><button type="button" data-epreset="reels">IG Reels Safe</button><button type="button" data-epreset="shorts">YT Shorts Max</button><button type="button" data-epreset="x">X Crisp ≤140s</button></div>
-<div class="export-grid"><label>Framing <select id="edit-framing" disabled><option value="original">Original shape</option><option value="center_crop">9:16 Center Crop</option><option value="blurred_fit">Blurred-Background Fit</option></select></label>
-<label>Quality <select id="edit-quality" disabled><option value="balanced">Balanced (CRF 20)</option><option value="high">High Quality (CRF 16)</option><option value="fast">Fast (CRF 23)</option></select></label></div>
-<div id="crop-pan-row" class="pan-row" hidden><label>9:16 Crop Horizontal Pan <output id="crop-pan-val">Center</output><input id="edit-crop-pan" type="range" min="-100" max="100" value="0" step="2"></label></div>
-<div class="export-grid"><label>Export Speed <select id="edit-export-speed" disabled><option value="1">1× Normal</option><option value="1.1">1.1× Snappy</option><option value="1.25">1.25× Fast</option></select></label><label>Rotate <select id="edit-rotate" disabled><option value="0">0°</option><option value="90">90° CW</option><option value="180">180°</option><option value="270">270° CCW</option></select></label></div>
-<div class="export-checks"><label class="inline-check"><input type="checkbox" id="edit-hw" disabled> <span id="edit-hw-label">Hardware encode (checking GPU…)</span></label><label class="inline-check"><input type="checkbox" id="edit-norm" disabled> Normalize audio (−14 LUFS)</label><label class="inline-check"><input type="checkbox" id="edit-fade-io" disabled> Smooth Fade In / Out (0.35s)</label><label class="inline-check"><input type="checkbox" id="edit-vivid" disabled> Vivid Color Pop (gaming contrast)</label><label class="inline-check"><input type="checkbox" id="edit-mirror" disabled> Mirror horizontal</label><label class="inline-check"><input type="checkbox" id="edit-zoom" disabled> Subtle Zoom (1.06×)</label><label class="inline-check"><input type="checkbox" id="edit-force-30fps" disabled> Lock 30fps (Reels safe)</label><label class="inline-check"><input type="checkbox" id="edit-mute" disabled> Mute audio</label><label class="inline-check"><input type="checkbox" id="edit-pack" checked disabled> Save caption .txt + cover .png pack</label></div>
-<details class="overlay-box"><summary>Audio Enhancer &amp; Background Music Bed</summary><div class="export-grid"><label>Audio Preset <select id="edit-audio-preset"><option value="none">Original</option><option value="voice">Voice Clarity</option><option value="punch">Gameplay Punch</option><option value="denoise">Noise Reduction</option></select></label><label>Gain (<output id="edit-gain-val">0 dB</output>) <input id="edit-audio-gain" type="range" min="-12" max="12" value="0" step="1"></label></div><div class="export-btn-row"><button type="button" id="edit-music-pick">Choose Music Track…</button><button type="button" id="edit-music-clear" hidden>Remove</button></div><output id="edit-music-name" class="muted">No background music attached.</output><label>Music Bed Volume (<output id="edit-music-vol-val">−18 dB</output>) <input id="edit-music-vol" type="range" min="-32" max="-6" value="-18" step="1"></label></details>
-<details class="overlay-box"><summary>Hook banner, outro CTA &amp; watermark</summary><label>Top hook banner <input id="edit-hook" type="text" maxlength="80" placeholder="e.g. WAIT FOR THE ENDING…"></label><label>Outro CTA banner (last 2s) <input id="edit-outro-cta" type="text" maxlength="70" placeholder="e.g. Follow @cj_4_prez for Part 2!"></label><div class="export-grid"><label>Watermark <input id="edit-watermark" type="text" maxlength="40" placeholder="@yourhandle"></label><label>Position <select id="edit-wm-pos"><option value="bottom_right">Bottom Right</option><option value="bottom_left">Bottom Left</option><option value="top_right">Top Right</option><option value="top_left">Top Left</option></select></label></div></details>
-<details class="overlay-box"><summary>Burn-in Subtitles (.srt)</summary><div class="export-grid"><label>Style <select id="edit-srt-style"><option value="bold_yellow">CapCut Bold Yellow</option><option value="clean_white">Clean White Outline</option></select></label><label>Load .srt file <input id="edit-srt-file" type="file" accept=".srt,text/plain"></label></div><label>SRT content <textarea id="edit-srt-text" rows="4" placeholder="1&#10;00:00:00,000 --> 00:00:02,500&#10;WAIT FOR THIS CLIP!"></textarea></label></details>
-<details class="overlay-box"><summary>Split Long Clip into Multi-Part Shorts/Reels</summary><div class="export-grid"><label>Seconds per part <input id="split-part-sec" type="number" min="15" max="180" value="55"></label><label>Hook prefix <input id="split-part-hook" type="text" maxlength="40" placeholder="e.g. GTA 6 CHAOS"></label></div><div class="export-btn-row"><button type="button" id="split-parts-go" disabled>Split &amp; Export Parts</button></div><p class="muted" id="split-parts-result" role="status"></p></details>
-<div id="edit-zones" hidden><p class="muted">Choose each exact source rectangle (left, top, width and height in percent).</p>
-<fieldset id="edit-facecam"><legend>Facecam</legend><label>Left % <input type="number" min="0" max="99"></label><label>Top % <input type="number" min="0" max="99"></label><label>Width % <input type="number" min="1" max="100"></label><label>Height % <input type="number" min="1" max="100"></label></fieldset>
-<fieldset id="edit-gameplay"><legend>Gameplay</legend><label>Left % <input type="number" min="0" max="99"></label><label>Top % <input type="number" min="0" max="99"></label><label>Width % <input type="number" min="1" max="100"></label><label>Height % <input type="number" min="1" max="100"></label></fieldset></div>
-<p class="muted" id="edit-transcript-state" hidden></p><div id="edit-transcript" hidden></div>
-<div class="export-btn-row"><button type="button" id="edit-transcode" disabled>Export MP4 (FFmpeg)</button><button type="button" id="edit-open-derived" hidden>Play exported MP4</button><button type="button" id="export-zip-kit" disabled>Zip Post Kit</button><button type="button" id="edit-open-exports">Open exports folder</button></div>
-<div class="export-progress-wrap" id="export-progress-wrap" hidden><progress id="export-progress" max="100" value="0"></progress><output id="export-progress-text">0%</output><button type="button" id="export-cancel" class="cancel-btn">Cancel</button></div>
-<p class="muted" id="edit-state" role="status">Select a Film Roll clip to trim and export locally.</p>
-</section>
-</div>
-<div class="itab-pane" data-itab-pane="upload" hidden>
-<section aria-label="Multi-platform upload">
-<div id="clip-shipped-links" class="shipped-banner" hidden></div>
-<div id="dup-hash-warning" class="dup-warning" hidden></div>
-<div class="queue-handoff readiness-card" id="readiness-card"><h4>Platform Readiness &amp; Pre-Upload Check</h4>
-<div id="upload-readiness" class="readiness-grid">Select a clip to check Shorts, Reels, TikTok &amp; X readiness.</div>
-<div id="upload-unexported-warn" class="warn" hidden>You have unexported edits (trim/crop/overlay/FX). Export first so uploads include your edits!</div>
-<div class="export-btn-row"><button type="button" id="upload-autofix-btn" hidden>Auto-Fix &amp; Export Compliant 9:16 MP4</button><button type="button" id="upload-shorts-cut-btn" hidden>Export ≤59s Guaranteed Short</button><button type="button" id="upload-reels-cut-btn" hidden>Export Reels-Safe ≤89s Variant</button></div>
-<div class="export-progress-wrap" id="upload-progress-wrap" hidden><progress id="upload-progress" max="100" value="0"></progress><output id="upload-progress-text">Uploading…</output></div>
-<details class="overlay-box"><summary>Pre-Upload Caption &amp; File Preview</summary><div id="upload-summary-preview" class="muted">Select a clip to preview exact upload metadata.</div></details></div>
-<div class="queue-handoff multi-ship-card" id="multi-ship-card"><h4>One-Click Ship to Multiple Platforms</h4>
-<div class="multi-ship-checks"><label class="inline-check"><input type="checkbox" id="ship-chk-yt"> YouTube Shorts Draft</label><label class="inline-check"><input type="checkbox" id="ship-chk-ig"> Instagram (<select id="ship-ig-mode" aria-label="Instagram ship mode"><option value="container">Test Container</option><option value="publish">Publish Live</option></select>)</label><label class="inline-check"><input type="checkbox" id="ship-chk-tt"> TikTok Inbox Draft</label><label class="inline-check"><input type="checkbox" id="ship-chk-x"> X Video Post (Live)</label></div>
-<div class="export-btn-row"><button type="button" id="multi-ship-go" disabled>Ship Selected Platforms</button><button type="button" id="batch-queue-add" disabled>+ Add to Batch Upload Queue</button></div>
-<ul id="multi-ship-log" class="multi-ship-log" hidden></ul></div>
-<div class="queue-handoff" id="batch-upload-card"><h4>Batch Multi-Clip Upload Queue (<span id="batch-queue-count">0</span>)</h4>
-<label class="inline-check"><input type="checkbox" id="batch-space-yt" checked> Auto-space YouTube scheduled drafts (1/day at 6 PM)</label>
-<ul id="batch-queue-list" class="multi-ship-log"></ul>
-<div class="export-btn-row"><button type="button" id="batch-queue-run" disabled>Run Batch Upload Queue</button><button type="button" id="batch-queue-clear" class="cancel-btn" hidden>Clear Queue</button></div></div>
-<div class="queue-handoff"><h4>YouTube Draft Upload</h4>
-<div class="export-grid"><label>Privacy <select id="yt-draft-privacy"><option value="private" selected>Private (default)</option><option value="unlisted">Unlisted</option></select></label><label>Category <select id="yt-draft-category"><option value="20" selected>Gaming</option><option value="24">Entertainment</option><option value="23">Comedy</option><option value="22">People &amp; Blogs</option><option value="28">Science &amp; Tech</option></select></label></div>
-<label>Schedule (optional, forces Private) <input id="yt-draft-schedule" type="datetime-local"></label>
-<div class="preset-chips" id="yt-quick-sched"><button type="button" data-qsched="today18">Today 6 PM</button><button type="button" data-qsched="tmrw12">Tmrw 12 PM</button><button type="button" data-qsched="tmrw18">Tmrw 6 PM</button><button type="button" data-qsched="nextopen">Next Open Slot</button><button type="button" data-qsched="clear">Clear</button></div>
-<div class="export-checks"><label class="inline-check"><input type="checkbox" id="yt-draft-shorts" checked> YouTube Short (adds #Shorts)</label><label class="inline-check"><input type="checkbox" id="yt-draft-thumb" checked> Attach captured 1080×1920 Cover PNG</label><label class="inline-check"><input type="checkbox" id="yt-draft-kids"> Made for Kids</label></div>
-<div class="export-btn-row"><button type="button" id="yt-upload-draft" disabled>Upload Draft to YouTube</button></div><p class="muted" id="yt-upload-result" role="status">Connect YouTube in Connections &amp; System to upload drafts (Private or Unlisted only).</p></div>
-<div class="queue-handoff"><h4>Instagram Reel Upload</h4>
-<p class="muted">Direct upload from your PC via Meta resumable upload (uses Instagram caption, Share to Feed &amp; Cover frame offset).</p>
-<label class="inline-check"><input type="checkbox" id="ig-upload-share" checked> Also share Reel to Feed</label>
-<label>Cover frame offset (<output id="ig-thumb-val">0.0s</output>) <input id="ig-thumb-slider" type="range" min="0" max="1000" value="0" step="100" disabled></label>
-<div class="export-btn-row"><button type="button" id="ig-upload-container" disabled>Upload Test Container (Unpublished)</button><button type="button" id="ig-publish-arm" disabled>Upload &amp; Publish Reel…</button><button type="button" id="ig-publish-confirm" class="confirm-publish-btn" hidden>Confirm: Publish Live to Instagram</button></div><p class="muted" id="ig-upload-result" role="status">Connect Instagram in Connections &amp; System to upload Reels directly.</p></div>
-<div class="queue-handoff"><h4>TikTok Inbox Draft</h4>
-<p class="muted">Uploads your MP4 straight to your TikTok phone app Inbox as a draft (never auto-posts publicly). Open TikTok Inbox to add sound &amp; post.</p>
-<label class="inline-check"><input type="checkbox" id="tt-autocopy" checked> Auto-copy formatted TikTok caption on send</label>
-<div class="export-btn-row"><button type="button" id="tt-upload-draft" disabled>Send Draft to TikTok Inbox</button></div><p class="muted" id="tt-upload-result" role="status">Connect TikTok in Connections &amp; System to send drafts straight to your TikTok Inbox.</p></div>
-<div class="queue-handoff"><h4>X (Twitter) Video Post</h4>
-<textarea id="x-upload-text" maxlength="280" rows="2" placeholder="X post text (auto-filled, max 280 chars)…"></textarea>
-<div class="export-btn-row"><button type="button" id="x-post-arm" disabled>Upload &amp; Post to X…</button><button type="button" id="x-post-confirm" class="confirm-publish-btn" hidden>Confirm: Publish Live to X</button></div><p class="muted" id="x-upload-result" role="status">Connect X in Connections &amp; System to post video clips directly.</p></div>
-<div class="queue-handoff"><h4>Send to Profile Queue</h4><div class="queue-handoff-row"><select id="queue-profile" aria-label="Target posting profile"><option value="">Choose a posting profile…</option></select><button type="button" id="queue-send" disabled>Send to Queue</button></div><p class="muted" id="queue-result" role="status">Queues this clip + caption for manual posting inside Profiles.</p></div>
-</section>
-</div>
-<div class="itab-pane" data-itab-pane="checks" hidden>
-<section><h3>Platform preflight</h3><div id="platform-preflight" aria-live="polite">Select a verified preview to see media checks and live metadata counts.</div><p class="muted">Advisories are not upload failures. Authorization and review-only rights are separate. Publishing remains off.</p><h3>Connection status</h3><div id="platforms" class="platforms"></div><p class="muted">Platform toggles only change this session’s inspection.</p></section>
-<section><h3>Drive verification</h3><span id="drive" class="flag warn">NOT VERIFIED</span><p id="drive-detail" class="muted">A source index is not a backup receipt.</p></section>
-</div>
-</div><footer><button class="publish" id="publish" type="button" disabled aria-disabled="true">Publish Selected</button><small>PUBLIC POSTING LOCKED</small></footer></aside>
-</main>
-<main class="wide-view" id="gallery" hidden><div class="feature-heading"><div class="eyebrow">02 / INDEX</div><h1>Film Roll Gallery</h1><p id="gallery-count">Loading the indexed queue…</p></div>
-<div class="searchbar"><label>Search clips <input id="gallery-search" type="search" placeholder="Filename, title, or @source"></label><label>Source <select id="gallery-source-filter"><option value="all">All sources</option></select></label><label>Sort <select id="gallery-sort"><option value="recent">Recently added</option><option value="rating">Top rated ★</option><option value="title">Title A–Z</option><option value="largest">Largest first</option></select></label><div id="gallery-filters" class="filters" aria-label="Gallery filters"><button data-filter="all" aria-pressed="true">All</button><button data-filter="pending" aria-pressed="false">Pending Review</button><button data-filter="approved" aria-pressed="false">Approved</button><button data-filter="hold" aria-pressed="false">Hold</button><button data-filter="exported" aria-pressed="false">Exported</button><button data-filter="unposted" aria-pressed="false">Not Uploaded</button><button data-filter="toprated" aria-pressed="false">Top ★</button></div><button type="button" id="gallery-export-approved" class="gallery-export-btn" title="Export all approved clips sequentially in the background">Export all approved</button><button type="button" id="gallery-clear-approved" class="gallery-clear-btn" title="Remove approved clips from Film Roll list (keeps files on disk)">Clear approved</button></div><div class="gallery-batch-bar" id="gallery-batch-bar" hidden><progress id="gallery-batch-progress" max="100" value="0"></progress><output id="gallery-batch-text"></output><button type="button" id="gallery-batch-cancel" class="cancel-btn">Cancel batch</button></div><div id="gallery-items" class="gallery-items"></div><ol id="gallery-proof" class="proof" hidden aria-label="Gallery poster check"></ol></main>
-<main class="wide-view" id="ledger" hidden><div class="feature-heading"><div class="eyebrow">03 / EXPORTS &amp; RECEIPTS</div><h1>Exports &amp; Receipts</h1><p>Every local MP4 export rendered from Viewfinder Studio, plus verified provider receipts. Public auto-posting remains disabled.</p></div>
-<div class="searchbar"><label>Filter exports &amp; receipts <input id="ledger-search" type="search" placeholder="Clip, source, framing, filename, or SHA"></label><button type="button" id="ledger-open-exports">Open exports folder</button></div>
-<section class="panel ledger-table" aria-label="Local export history"><h2 class="section-subhead">Local Export History</h2><table><thead><tr><th>Clip / Source</th><th>Framing &amp; Quality</th><th>Pack Files</th><th>Size</th><th>Exported</th><th>Actions</th></tr></thead><tbody id="export-history-rows"></tbody></table><div id="export-history-notice" class="muted" role="status">Loading local exports…</div></section>
-<section class="panel ledger-table" aria-label="Cloud upload receipts"><h2 class="section-subhead">Cloud Upload Receipts (SHA-256 Tracked)</h2><table><thead><tr><th>Platform</th><th>Clip</th><th>Status / Privacy</th><th>Content SHA-256</th><th>Uploaded</th><th>Link</th></tr></thead><tbody id="upload-receipts-rows"></tbody></table><div id="upload-receipts-notice" class="muted" role="status">Loading upload receipts…</div></section>
-<details class="legacy-ledger"><summary>Controller &amp; provider receipts (<span id="ledger-count">0</span>)</summary><section class="panel ledger-table" aria-label="Backup and receipt ledger"><table><thead><tr><th>Clip / State</th><th>Source SHA-256</th><th>Rendered SHA-256</th><th>Restore</th><th>Private YouTube</th><th>Unpublished Instagram</th><th>Restore actions</th></tr></thead><tbody id="ledger-records"></tbody></table></section><div id="ledger-notice" role="status"></div></details></main>
-<main class="wide-view" id="system" hidden><div class="feature-heading"><div class="eyebrow">04 / DIAGNOSTICS</div><h1>Connections &amp; System</h1><p>Connect your YouTube and Instagram accounts locally (stored securely in Windows Credential Manager), check installed tools, and manage storage.</p><nav class="utility-cards" aria-label="Connections tools"><a href="/workspace?view=profiles" data-shell-link="profiles"><strong>Profiles</strong><small>Creator posting profiles, queues, and analytics</small></a><a href="/workspace?view=sources" data-shell-link="sources"><strong>Sources</strong><small>Content discovery, source folders, and sync</small></a></nav></div>
-<section class="panel oauth-section" aria-label="Connect social accounts"><h2>Connect Accounts</h2><p class="muted">OAuth tokens and client secrets are stored natively in Windows Credential Manager — never sent anywhere except Google or Meta directly from your PC. Public auto-posting stays locked off.</p>
-<div class="oauth-grid">
-<div class="oauth-card" id="oauth-card-yt"><header><strong class="oauth-title" id="yt-oauth-title">YouTube</strong><span id="yt-oauth-badge" class="flag warn">CHECKING…</span></header><div id="yt-oauth-meta" class="muted">Checking YouTube connection…</div>
-<div class="export-btn-row"><button type="button" id="yt-connect" disabled>Connect YouTube</button><button type="button" id="yt-refresh" hidden>Refresh status</button><button type="button" id="yt-disconnect" class="cancel-btn" hidden>Disconnect</button></div>
-<a id="yt-auth-link" class="oauth-link" target="_blank" rel="noopener noreferrer" hidden>Open Google sign-in link manually ↗</a>
-<details id="yt-oauth-setup"><summary>Google OAuth Setup (Desktop Client)</summary><ol class="oauth-steps"><li>Open Google Cloud Console → <strong>APIs &amp; Services → Library</strong> and enable <strong>YouTube Data API v3</strong>.</li><li>Go to <strong>Credentials → Create Credentials → OAuth client ID → Desktop app</strong> (or Web app with Redirect URI below).</li><li>Paste the downloaded JSON (or Client ID + Secret) below and click <strong>Save Credentials</strong>.</li></ol>
-<div class="oauth-uri-row"><code id="yt-redirect-uri">http://127.0.0.1:3847/api/oauth/youtube/callback</code><button type="button" id="yt-copy-uri">Copy URI</button></div>
-<label>Paste Google OAuth client JSON <textarea id="yt-client-json" rows="3" placeholder='{"installed":{"client_id":"...apps.googleusercontent.com","client_secret":"..."}}'></textarea></label>
-<div class="export-grid"><label>Or Client ID <input id="yt-client-id" type="text" placeholder="...apps.googleusercontent.com"></label><label>Client Secret <input id="yt-client-secret" type="password" placeholder="GOCSPX-..."></label></div>
-<div class="export-btn-row"><button type="button" id="yt-save-config">Save YouTube Credentials</button></div><p class="muted" id="yt-config-msg" role="status"></p></details></div>
-<div class="oauth-card" id="oauth-card-ig"><header><strong class="oauth-title" id="ig-oauth-title">Instagram</strong><span id="ig-oauth-badge" class="flag warn">CHECKING…</span></header><div id="ig-oauth-meta" class="muted">Checking Instagram connection…</div>
-<div class="export-btn-row"><button type="button" id="ig-connect" disabled>Connect Instagram</button><button type="button" id="ig-refresh" hidden>Refresh status</button><button type="button" id="ig-extend" hidden>Extend 60-Day Token</button><button type="button" id="ig-disconnect" class="cancel-btn" hidden>Disconnect</button></div>
-<a id="ig-auth-link" class="oauth-link" target="_blank" rel="noopener noreferrer" hidden>Open Meta sign-in link manually ↗</a>
-<details id="ig-oauth-setup"><summary>Meta App Setup (Business / Creator)</summary><ol class="oauth-steps"><li>Keep your Meta app in <strong>Development Mode</strong> (Meta blocks HTTP login in Live Mode) and add the exact <code>localhost</code> Redirect URI below under <strong>Facebook Login → Settings → Valid OAuth Redirect URIs</strong>.</li><li>Ensure your Instagram Business or Creator account is linked to a Facebook Page, then save App ID + Secret below.</li><li><strong>Or skip browser redirect completely:</strong> open <a class="oauth-link" href="https://developers.facebook.com/tools/explorer/" target="_blank" rel="noopener noreferrer">Meta Graph API Explorer ↗</a>, select your Snapmatic app, grant <code>instagram_basic</code> + <code>pages_show_list</code>, click <strong>Generate Access Token</strong>, and paste it below (Snapmatic automatically upgrades it to a 60-day token).</li></ol>
-<div class="oauth-uri-row"><code id="ig-redirect-uri">http://localhost:3847/api/oauth/instagram/callback</code><button type="button" id="ig-copy-uri">Copy URI</button></div>
-<div class="export-grid"><label>Meta App ID <input id="ig-client-id" type="text" placeholder="123456789012345"></label><label>Meta App Secret <input id="ig-client-secret" type="password" placeholder="Meta App Secret"></label></div>
-<div class="export-btn-row"><button type="button" id="ig-save-config">Save Instagram Credentials</button></div>
-<label>Or paste Graph API Explorer Access Token <input id="ig-direct-token" type="password" placeholder="EAA..."></label>
-<div class="export-btn-row"><button type="button" id="ig-token-connect">Connect with Access Token</button></div><p class="muted" id="ig-config-msg" role="status"></p></details></div>
-<div class="oauth-card" id="oauth-card-tt"><header><strong class="oauth-title" id="tt-oauth-title">TikTok</strong><span id="tt-oauth-badge" class="flag warn">CHECKING…</span></header><div id="tt-oauth-meta" class="muted">Checking TikTok connection…</div>
-<div class="export-btn-row"><button type="button" id="tt-connect" disabled>Connect TikTok</button><button type="button" id="tt-refresh" hidden>Refresh status</button><button type="button" id="tt-disconnect" class="cancel-btn" hidden>Disconnect</button><button type="button" id="tt-sys-exports">Open exports folder</button></div>
-<a id="tt-auth-link" class="oauth-link" target="_blank" rel="noopener noreferrer" hidden>Open TikTok sign-in link manually ↗</a>
-<details id="tt-oauth-setup"><summary>TikTok Developer Setup (Desktop Sandbox)</summary><ol class="oauth-steps"><li>Open <a class="oauth-link" href="https://developers.tiktok.com/" target="_blank" rel="noopener noreferrer">TikTok for Developers ↗</a> → <strong>Manage apps</strong> → create an app and switch it to <strong>Sandbox</strong> mode (no public audit needed for your own account).</li><li>Add products: <strong>Login Kit</strong> (Desktop), <strong>Display API</strong>, and <strong>Content Posting API</strong> (enable Inbox / Share draft upload).</li><li>Under <strong>Login Kit → Desktop → Redirect URI</strong>, add the exact URI below, and add your TikTok account under <strong>Sandbox → Target Users</strong>.</li><li>Paste your Sandbox <strong>Client Key</strong> and <strong>Client Secret</strong> below, save, then click <strong>Connect TikTok</strong>.</li></ol>
-<div class="oauth-uri-row"><code id="tt-redirect-uri">http://127.0.0.1:3847/api/oauth/tiktok/callback</code><button type="button" id="tt-copy-uri">Copy URI</button></div>
-<div class="export-grid"><label>TikTok Client Key <input id="tt-client-id" type="text" placeholder="sbaw..."></label><label>Client Secret <input id="tt-client-secret" type="password" placeholder="TikTok Client Secret"></label></div>
-<div class="export-btn-row"><button type="button" id="tt-save-config">Save TikTok Credentials</button></div><p class="muted" id="tt-config-msg" role="status"></p></details></div>
-<div class="oauth-card" id="oauth-card-x"><header><strong class="oauth-title" id="x-oauth-title">X (Twitter)</strong><span id="x-oauth-badge" class="flag warn">CHECKING…</span></header><div id="x-oauth-meta" class="muted">Checking X connection…</div>
-<div class="export-btn-row"><button type="button" id="x-connect" disabled>Connect X</button><button type="button" id="x-refresh" hidden>Refresh status</button><button type="button" id="x-disconnect" class="cancel-btn" hidden>Disconnect</button></div>
-<a id="x-auth-link" class="oauth-link" target="_blank" rel="noopener noreferrer" hidden>Open X sign-in link manually ↗</a>
-<details id="x-oauth-setup"><summary>X Developer Setup (OAuth 2.0 PKCE)</summary><ol class="oauth-steps"><li>Open <a class="oauth-link" href="https://developer.x.com/en/portal/dashboard" target="_blank" rel="noopener noreferrer">X Developer Portal ↗</a> → App → <strong>User authentication settings</strong>.</li><li>Enable <strong>OAuth 2.0</strong> with <strong>Read and write</strong> permissions (Native / Desktop App), and add the Redirect URI below.</li><li>Paste your OAuth 2.0 <strong>Client ID</strong> (and Client Secret if confidential app) below, save, then click <strong>Connect X</strong>.</li></ol>
-<div class="oauth-uri-row"><code id="x-redirect-uri">http://127.0.0.1:3847/api/oauth/x/callback</code><button type="button" id="x-copy-uri">Copy URI</button></div>
-<div class="export-grid"><label>X Client ID <input id="x-client-id" type="text" placeholder="OAuth 2.0 Client ID"></label><label>Client Secret (optional) <input id="x-client-secret" type="password" placeholder="Optional for public PKCE"></label></div>
-<div class="export-btn-row"><button type="button" id="x-save-config">Save X Credentials</button></div><p class="muted" id="x-config-msg" role="status"></p></details></div>
-</div></section>
-<div class="system-grid"><section class="panel system-panel"><h2>Local tools</h2><div id="system-tools">Checking installed tools…</div></section><section class="panel system-panel"><h2>Storage &amp; cache</h2><div id="system-storage">Measuring local folders…</div><div class="export-btn-row"><button type="button" id="sys-open-exports">Open exports folder</button><button type="button" id="clear-thumb-cache">Clear thumbnail cache</button></div><p class="muted" id="thumb-cache-result" role="status">Only cached JPEG previews are removed; your downloaded media and exports are never touched.</p></section><section class="panel system-panel"><h2>Local directories</h2><div id="system-paths"></div><p><button type="button" id="export-diagnostics">Export Diagnostic Bundle (.zip)</button></p><p class="muted" id="diagnostics-result" role="status">Metadata only. Saves in the local Snapmatic runtime.</p></section><section class="panel system-panel" id="brand-kit-panel"><h2>Brand Kits &amp; Settings Backup</h2><p class="muted">Save reusable channel brand kits (watermark, outro CTA, YouTube category, default export style) and back up all workspace settings/presets (never includes OAuth secrets).</p><div class="preset-bar"><select id="brand-kit-select" aria-label="Saved Brand Kit"><option value="">No saved Brand Kits</option></select><button type="button" id="brand-kit-apply" disabled>Apply</button><button type="button" id="brand-kit-delete" disabled>✕</button></div><div class="preset-save-row"><input id="brand-kit-name" type="text" maxlength="50" placeholder="Save current setup as Brand Kit…"><button type="button" id="brand-kit-save">Save Kit</button></div><div class="export-btn-row"><button type="button" id="settings-export-btn">Export Settings (.json)</button><label class="mini-btn file-btn">Import Settings (.json)<input id="settings-import-file" type="file" accept=".json,application/json" hidden></label></div><p class="muted" id="brand-kit-msg" role="status"></p></section><section class="panel system-panel"><h2>Safety lock</h2><p class="posting-lock">AUTO-POSTING: OFF</p><p>Public publishing and automatic posting are disabled at the server. YouTube draft uploads are strictly <strong>Private</strong>.</p><p>Loopback only (127.0.0.1) · credentials stay in Windows Credential Manager.</p></section><section class="panel system-panel"><details><summary><strong>Legacy provider &amp; intake diagnostics</strong></summary><div id="system-providers"></div><div id="phase4-source" role="status">Reading local intake status…</div><div id="phase4-platforms"></div><div id="phase4-cache-size" role="status">Reading managed cache size…</div><button type="button" id="phase4-cache-preview">Purge Verified Staging Cache (preview only)</button><p id="phase4-cache-result" class="muted" role="status">Deletion is locked off. Original, active and retained files are excluded.</p></details></section></div></main>
-<main class="wide-view" id="insights" hidden><div class="feature-heading"><div class="eyebrow">05 / ANALYTICS</div><h1>Channel Insights</h1><p>Live metrics and recent uploads synced directly from your connected YouTube, Instagram, and TikTok accounts. Pull winning hashtags straight into Viewfinder Studio.</p><div class="export-btn-row"><button type="button" id="insights-sync">Sync Live Analytics</button><output id="insights-status" class="muted" role="status"></output></div></div>
-<section class="kpi-grid" id="insights-kpis" aria-label="Connected account summary"></section>
-<section class="charts-grid" aria-label="Analytics charts">
-<div class="panel chart-card"><header><h3>Platform Performance</h3><small class="muted">Synced views &amp; engagement by platform</small></header><div id="insights-chart-platforms" class="chart-body"></div></div>
-<div class="panel chart-card"><header><h3>Growth Over Time</h3><select id="growth-metric" aria-label="Growth metric"><option value="followers">Followers / Subs</option><option value="views">Total Views</option><option value="likes">Recent Likes</option></select></header><div id="insights-chart-growth" class="chart-body"></div></div>
-<div class="panel chart-card"><header><h3>Top Hashtags &amp; Best Times</h3><small class="muted">Click any #tag to add to Studio</small></header><div id="insights-hashtags" class="hashtag-cloud"></div><div id="insights-best-times" class="best-times"></div></div>
-</section>
-<div class="searchbar"><label>Platform <select id="insights-provider"><option value="all">All platforms</option><option value="youtube">YouTube</option><option value="instagram">Instagram</option><option value="tiktok">TikTok</option></select></label><label>Sort <select id="insights-sort"><option value="recent">Most recent</option><option value="views">Most views</option><option value="likes">Most likes</option><option value="comments">Most comments</option></select></label><label>Search posts <input id="insights-search" type="search" placeholder="Title, caption, or #hashtag"></label></div>
-<section class="panel ledger-table" aria-label="Synced channel posts"><table><thead><tr><th>Post</th><th>Platform</th><th>Views</th><th>Likes</th><th>Comments</th><th>Published</th><th>Actions</th></tr></thead><tbody id="insights-rows"></tbody></table><div id="insights-empty" class="muted" role="status">Click Sync Live Analytics to pull recent YouTube uploads, Instagram posts, and TikTok videos.</div></section></main>
-<main class="wide-view" id="calendar" hidden><div class="feature-heading"><div class="eyebrow">06 / SCHEDULE</div><h1>Content Calendar</h1><p>Unified publishing calendar across your published YouTube, Instagram, and TikTok posts, scheduled YouTube drafts, and Profile queues.</p></div>
-<div class="cal-toolbar"><div class="cal-nav"><button type="button" id="cal-prev">← Prev</button><button type="button" id="cal-today">Today</button><button type="button" id="cal-next">Next →</button><strong id="cal-month-label">Month</strong></div>
-<div class="cal-filters"><select id="cal-provider" aria-label="Calendar platform filter"><option value="all">All platforms</option><option value="youtube">YouTube</option><option value="instagram">Instagram</option><option value="tiktok">TikTok</option><option value="x">X</option></select><span class="cal-legend"><i class="cal-dot pub"></i>Published <i class="cal-dot sched"></i>Scheduled <i class="cal-dot qd"></i>Queued</span></div></div>
-<div class="cal-layout"><section class="panel cal-board"><div class="cal-weekdays"><span>Sun</span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span></div><div id="cal-grid" class="cal-grid"></div></section>
-<aside class="panel cal-detail" id="cal-day-detail"><h3>Select a day</h3><p class="muted">Click any date on the calendar to inspect posts, scheduled drafts, and queued items.</p></aside></div></main>
-<main class="wide-view shell-manage shell-sources" id="profiles" hidden><iframe data-embed="/workspace/manage?section=profiles" title="Profiles" loading="lazy"></iframe></main><main class="wide-view shell-manage shell-sources" id="sources" hidden><iframe data-embed="/workspace/manage?section=sources" title="Sources" loading="lazy"></iframe></main><output id="ingest-toast" class="ingest-toast" aria-live="polite"></output><div id="sm-toast" class="sm-toast" role="status" aria-live="polite" hidden></div><footer class="shell-status" aria-label="Live workspace telemetry"><span id="sm-live-nvenc">FFmpeg · checking</span><span id="sm-live-source">yt-dlp · checking</span><span id="sm-live-queue">Film Roll · checking</span><a href="/workspace?view=system" data-shell-link="system">Posting locked off</a></footer><dialog class="p5-dialog" id="p5-command" aria-labelledby="p5-command-title"><header><h2 id="p5-command-title">Command palette</h2><button type="button" data-close aria-label="Close command palette">Close</button></header><input id="p5-search" aria-label="Find a command" placeholder="Find a command…" autocomplete="off"><div id="p5-results"></div></dialog><dialog class="p5-dialog" id="p5-help" aria-labelledby="p5-help-title"><header><h2 id="p5-help-title">Keyboard shortcuts</h2><button type="button" data-close autofocus>Close</button></header><dl><dt>Ctrl+K</dt><dd>Command palette</dd><dt>?</dt><dd>Keyboard shortcuts</dd><dt>\</dt><dd>Compare Source and Exported MP4 side-by-side</dd><dt>, / .</dt><dd>Step −1 / +1 frame (probed FPS)</dd><dt>Space / K</dt><dd>Play / pause in the viewfinder</dd><dt>J / L</dt><dd>Shuttle rewind (−2s) / fast-forward (1× → 1.5× → 2×)</dd><dt>M</dt><dd>Toggle preview mute</dd><dt>Left / Right</dt><dd>Seek by one second in the viewfinder</dd><dt>I / O</dt><dd>Set source trim In / Out</dd><dt>Ctrl+Enter</dt><dd>Approve selected clip</dd><dt>Shift+Click / Shift+Enter</dt><dd>Select a range for bulk Film Roll triage</dd></dl></dialog></body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Snapmatic · Vice Creator Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    if (window.tailwind) {
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              vice: {
+                bg: '#090812',
+                surface: '#110F1F',
+                card: '#161329',
+                border: '#2B254A',
+                pink: '#FF2E93',
+                magenta: '#D946EF',
+                cyan: '#00E5FF',
+                gold: '#FF9E2C',
+                mint: '#10F5A0',
+                crimson: '#FF3B5C',
+              }
+            },
+            fontFamily: {
+              display: ['"Space Grotesk"', '"Plus Jakarta Sans"', 'system-ui', 'sans-serif'],
+              sans: ['"Plus Jakarta Sans"', '"Segoe UI Variable"', 'system-ui', 'sans-serif'],
+              mono: ['"JetBrains Mono"', 'Consolas', 'ui-monospace', 'monospace'],
+            },
+            boxShadow: {
+              'vice-cyan': '0 0 22px -4px rgba(0, 229, 255, 0.45)',
+              'vice-pink': '0 0 24px -4px rgba(255, 46, 147, 0.48)',
+              'vice-sunset': '0 8px 28px -6px rgba(255, 46, 147, 0.35), 0 0 18px -6px rgba(0, 229, 255, 0.35)',
+              'vice-card': '0 14px 36px -14px rgba(4, 3, 14, 0.78)',
+            }
+          }
+        }
+      };
+    }
+  </script>
+  <link rel="stylesheet" href="/workspace.css">
+  <script src="/workspace-preflight.js" defer></script>
+  <script src="/workspace-platform-draft.js" defer></script>
+  <script src="/workspace-edit.js" defer></script>
+  <script src="/workspace-phase5.js" defer></script>
+  <script src="/workspace.js" defer></script>
+  <script src="/workspace-pro.js" defer></script>
+  <link rel="icon" href="/favicon.ico?v=aperture-1" sizes="any">
+  <link rel="icon" type="image/png" href="/icon-192.png?v=aperture-1" sizes="192x192">
+  <link rel="apple-touch-icon" href="/icon-192.png?v=aperture-1">
+  <link rel="manifest" href="/manifest.webmanifest?v=aperture-1">
+  <meta name="theme-color" content="#090812">
+</head>
+<body class="snapmatic-shell min-h-screen antialiased selection:bg-vice-pink/30 selection:text-white">
+
+  <!-- TOP COMMAND HEADER -->
+  <header class="top sticky top-0 z-30 backdrop-blur-xl">
+    <a class="identity group flex items-center gap-3 transition-transform duration-200 hover:scale-[1.01]" href="/workspace?view=studio" aria-label="Snapmatic home">
+      <div class="brand-aperture relative flex h-9 w-9 shrink-0 items-center justify-center rounded-xl p-[2px]">
+        <img src="/icon-192.png?v=aperture-1" alt="" width="30" height="30" class="h-full w-full rounded-[10px] object-contain">
+      </div>
+      <span class="font-display text-[17px] font-bold tracking-[0.12em] leading-none">
+        <span class="vice-brand-text">SNAPMATIC</span>
+        <small class="mt-1 block font-mono text-[9px] font-semibold tracking-[0.2em]">VICE CREATOR STUDIO</small>
+      </span>
+    </a>
+
+    <label class="channel-picker flex items-center gap-2 rounded-lg px-2.5 py-1 text-xs font-medium">
+      <span class="text-[10px] font-mono uppercase tracking-wider opacity-75">Channel</span>
+      <select id="channel-scope" aria-label="Select channel profile" class="rounded-md px-2 py-1 text-xs font-semibold outline-none transition">
+        <option value="all">All Channels</option>
+      </select>
+    </label>
+
+    <div class="credentials flex flex-wrap items-center gap-2" id="credentials" aria-label="Provider credential status"></div>
+
+    <div class="top-right-tools ml-auto flex flex-wrap items-center gap-2">
+      <button type="button" id="theme-toggle" class="theme-toggle-btn inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-all duration-200 hover:-translate-y-0.5" title="Switch Light / Dark theme" aria-label="Toggle Light or Dark theme">☀ Light</button>
+      <a class="readonly-pill inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-mono font-bold transition-all duration-200 hover:-translate-y-0.5" id="sm-tools-pill" href="/workspace?view=system" data-shell-link="system">Checking local tools…</a>
+      <a class="posting-lock inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[10px] font-mono font-bold tracking-wider transition-all duration-200 hover:-translate-y-0.5" href="/workspace?view=system" data-shell-link="system">AUTO-POSTING: OFF</a>
+    </div>
+  </header>
+
+  <!-- LEFT NAVIGATION RAIL -->
+  <div class="snapmatic-main-rail">
+    <nav class="view-nav" aria-label="Snapmatic views">
+      <div class="rail-section-label px-2 pb-1 pt-0.5 font-mono text-[9px] font-bold uppercase tracking-[0.18em] opacity-60">STUDIO DECK</div>
+      <a href="/workspace?view=studio" data-view="studio" class="nav-item-link group flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-[12.5px] font-semibold transition-all duration-200">
+        <svg class="h-4 w-4 shrink-0 opacity-80 group-hover:opacity-100" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
+        <span>Viewfinder Studio</span>
+      </a>
+      <a href="/workspace?view=gallery" data-view="gallery" class="nav-item-link group flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-[12.5px] font-semibold transition-all duration-200">
+        <svg class="h-4 w-4 shrink-0 opacity-80 group-hover:opacity-100" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>
+        <span>Film Roll Gallery</span>
+      </a>
+      <a href="/workspace?view=insights" data-view="insights" class="nav-item-link group flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-[12.5px] font-semibold transition-all duration-200">
+        <svg class="h-4 w-4 shrink-0 opacity-80 group-hover:opacity-100" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+        <span>Channel Insights</span>
+      </a>
+      <a href="/workspace?view=calendar" data-view="calendar" class="nav-item-link group flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-[12.5px] font-semibold transition-all duration-200">
+        <svg class="h-4 w-4 shrink-0 opacity-80 group-hover:opacity-100" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/></svg>
+        <span>Calendar</span>
+      </a>
+      <a href="/workspace?view=ledger" data-view="ledger" class="nav-item-link group flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-[12.5px] font-semibold transition-all duration-200">
+        <svg class="h-4 w-4 shrink-0 opacity-80 group-hover:opacity-100" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z"/><path d="M8 7h8"/><path d="M8 11h8"/><path d="M8 15h5"/></svg>
+        <span>Receipts &amp; Backups</span>
+      </a>
+      <a href="/workspace?view=system" data-view="system" class="nav-item-link group flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-[12.5px] font-semibold transition-all duration-200">
+        <svg class="h-4 w-4 shrink-0 opacity-80 group-hover:opacity-100" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span>Connections &amp; System</span>
+      </a>
+      <span class="nav-spacer"></span>
+      <div class="rail-quick-btns mt-2 grid grid-cols-[1fr_auto] gap-1.5">
+        <button id="p5-open-command" type="button" class="rail-cmd-btn flex items-center justify-between gap-1 rounded-xl px-2.5 py-2 text-[11px] font-semibold transition-all duration-200 hover:-translate-y-0.5">
+          <span>Commands</span>
+          <kbd class="rounded px-1.5 py-0.5 font-mono text-[9px]">Ctrl+K</kbd>
+        </button>
+        <button id="p5-open-help" type="button" aria-label="Keyboard shortcuts" class="rail-cmd-btn flex h-full w-9 items-center justify-center rounded-xl font-mono text-xs font-bold transition-all duration-200 hover:-translate-y-0.5">?</button>
+      </div>
+    </nav>
+
+    <nav class="utility-strip" aria-label="Workspace tools">
+      <span class="px-2 font-mono text-[9px] font-bold uppercase tracking-[0.18em]">WORKSPACE TOOLS</span>
+      <a href="/workspace?view=profiles" data-shell-link="profiles" class="group flex items-center gap-2.5 rounded-xl px-3 py-2 text-[12px] font-semibold transition-all duration-200">
+        <svg class="h-4 w-4 shrink-0 opacity-80 group-hover:opacity-100" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <span>Profiles</span>
+      </a>
+      <a href="/workspace?view=sources" data-shell-link="sources" class="group flex items-center gap-2.5 rounded-xl px-3 py-2 text-[12px] font-semibold transition-all duration-200">
+        <svg class="h-4 w-4 shrink-0 opacity-80 group-hover:opacity-100" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+        <span>Sources</span>
+      </a>
+      <span class="nav-spacer"></span>
+      <button type="button" id="streak-pill" class="streak-pill mt-2 w-full text-center transition-all duration-200 hover:-translate-y-0.5" title="Click to set your weekly posting goal">🔥 Streak: checking…</button>
+    </nav>
+  </div>
+
+  <!-- VIEW 01: VIEWFINDER STUDIO -->
+  <main class="desk" id="studio">
+
+    <!-- LEFT PANE: FILM ROLL QUEUE -->
+    <aside class="rail panel flex flex-col" aria-labelledby="roll-title">
+      <header class="panel-head">
+        <div class="eyebrow">01 / LIBRARY</div>
+        <h1 id="roll-title" class="font-display">Film Roll</h1>
+        <p id="roll-count">Loading indexed clips…</p>
+      </header>
+      <div class="rail-search">
+        <input id="roll-search" type="search" placeholder="Search Film Roll…" aria-label="Search Film Roll clips" class="transition-all duration-200">
+      </div>
+      <div id="filters" class="filters" role="group" aria-label="Filter Film Roll">
+        <button type="button" data-filter="all" aria-pressed="true">All</button>
+        <button type="button" data-filter="pending" aria-pressed="false">Pending Review</button>
+        <button type="button" data-filter="approved" aria-pressed="false">Approved</button>
+        <button type="button" data-filter="hold" aria-pressed="false">Hold</button>
+        <button type="button" data-filter="exported" aria-pressed="false">Exported</button>
+        <button type="button" data-filter="unposted" aria-pressed="false">Not Uploaded</button>
+        <button type="button" data-filter="toprated" aria-pressed="false">Top ★</button>
+      </div>
+      <details class="p5-triage">
+        <summary>Batch review triage</summary>
+        <div id="p5-batch">
+          <output id="p5-batch-size">Shift+Click or Shift+Enter to select a range</output>
+          <div>
+            <button type="button" data-triage="approve" disabled>Approve</button>
+            <button type="button" data-triage="hold" disabled>Hold</button>
+            <button type="button" data-triage="pending_review" disabled>Pending</button>
+            <button type="button" data-triage="remove" disabled>Remove</button>
+          </div>
+          <small>Bulk updates Film Roll status or removes from the Film Roll list. Original files on disk are never touched.</small>
+          <output id="p5-batch-result" aria-live="polite"></output>
+        </div>
+      </details>
+      <div id="roll" class="roll flex-1" aria-label="Indexed clips"></div>
+      <footer>
+        <span class="dot animate-pulse"></span>
+        <span id="connection">Opening local event feed…</span>
+      </footer>
+    </aside>
+
+    <!-- CENTER PANE: SNAPMATIC VIEWFINDER STAGE -->
+    <section class="stage panel" aria-labelledby="stage-title">
+      <header class="stage-head">
+        <div>
+          <div class="eyebrow">02 / SNAPMATIC LENS</div>
+          <h2 id="stage-title" class="font-display">Viewfinder</h2>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="hud-rec-badge hidden sm:inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider">
+            <span class="h-1.5 w-1.5 rounded-full bg-vice-pink animate-pulse"></span>9:16 CAM
+          </span>
+          <output id="stage-state" class="flag" aria-live="polite">STANDBY</output>
+        </div>
+      </header>
+
+      <div class="view-shell">
+        <div class="viewfinder rounded-2xl shadow-2xl" id="viewfinder" tabindex="0" aria-label="Vertical viewfinder. Space or K plays, J/L shuttle, arrows seek, M mutes, G toggles framing guides.">
+          <span class="corner tl"></span>
+          <span class="corner tr"></span>
+          <span class="corner bl"></span>
+          <span class="corner br"></span>
+          <video id="video" playsinline preload="metadata" aria-label="Selected clip"></video>
+          <div id="vf-hook-overlay" class="vf-hook" hidden></div>
+          <div id="vf-wm-overlay" class="vf-wm" hidden></div>
+          <div id="vf-mock-ui" class="vf-mock-ui" data-platform="tiktok" hidden aria-hidden="true">
+            <div class="vf-mock-top" id="vf-mock-top">Following · <strong>For You</strong></div>
+            <div class="vf-mock-rail">
+              <span title="Like">♥<small>12.4K</small></span>
+              <span title="Comment">💬<small>418</small></span>
+              <span title="Bookmark">🔖<small>1.9K</small></span>
+              <span title="Share">↗<small>620</small></span>
+            </div>
+            <div class="vf-mock-meta">
+              <strong id="vf-mock-handle">@cj_4_prez</strong>
+              <p id="vf-mock-caption">Your caption &amp; hashtags appear here…</p>
+            </div>
+          </div>
+          <div id="empty" class="overlay-empty">
+            <b>＋</b>
+            <span>SELECT A CLIP</span>
+            <small>SNAPMATIC PREVIEW MONITOR</small>
+          </div>
+          <div class="grid" id="grid" hidden aria-hidden="true"></div>
+          <div id="zones" class="zones" hidden aria-hidden="true"><span id="zone-label"></span></div>
+        </div>
+        <div class="p5-compare" id="p5-compare" hidden>
+          <strong id="p5-compare-label">Render</strong>
+          <video id="p5-compare-video" muted playsinline preload="metadata" aria-label="Verified comparison video"></video>
+          <small id="p5-compare-state" role="status"></small>
+        </div>
+      </div>
+
+      <div class="p5-playback" role="group" aria-label="Playback source and frame controls">
+        <button type="button" id="p5-source" disabled>Source</button>
+        <button type="button" id="p5-render" disabled>Exported</button>
+        <button type="button" id="p5-split" aria-pressed="false" disabled>Split comparison</button>
+        <button type="button" id="p5-step-back" disabled aria-label="Previous frame">−1 frame</button>
+        <button type="button" id="p5-step-next" disabled aria-label="Next frame">+1 frame</button>
+        <label class="inline-flex items-center gap-1.5 text-xs"><input type="checkbox" id="p5-loop" disabled> Loop In/Out</label>
+        <label class="speed-ctrl">Speed
+          <select id="sm-speed" aria-label="Playback speed">
+            <option value="0.5">0.5×</option>
+            <option value="1" selected>1×</option>
+            <option value="1.5">1.5×</option>
+            <option value="2">2×</option>
+          </select>
+        </label>
+      </div>
+
+      <label class="sm-volume text-xs font-mono">
+        <span>Volume</span>
+        <input id="sm-volume" type="range" min="0" max="100" value="70" aria-label="Preview volume">
+      </label>
+
+      <div class="transport">
+        <button id="play" type="button" aria-label="Play clip" disabled class="play-btn-vice transition-all duration-200 hover:scale-105 active:scale-95">▶</button>
+        <input id="seek" type="range" min="0" max="0" value="0" step="0.01" aria-label="Seek in clip" disabled>
+        <output id="time">00:00.000 / --:--.---</output>
+      </div>
+
+      <div class="trim-visual" id="trim-visual" hidden>
+        <div class="trim-track" id="trim-track" title="Click anywhere to seek · drag handles to trim">
+          <div class="trim-filmstrip" id="trim-filmstrip"></div>
+          <div class="trim-range" id="trim-range"></div>
+          <div class="trim-markers" id="trim-markers"></div>
+          <div class="trim-playhead" id="trim-playhead"></div>
+          <button type="button" class="trim-handle trim-handle-in" id="trim-handle-in" aria-label="Drag trim In handle" title="Drag to set Trim In"></button>
+          <button type="button" class="trim-handle trim-handle-out" id="trim-handle-out" aria-label="Drag trim Out handle" title="Drag to set Trim Out"></button>
+        </div>
+        <div class="trim-visual-meta">
+          <output id="trim-visual-range">00:00.000 → 00:00.000</output>
+          <output id="trim-visual-dur">Clip: 00:00.000</output>
+        </div>
+        <div class="marker-bar">
+          <input id="marker-label" type="text" maxlength="40" placeholder="Add marker at playhead (e.g. Glitch starts)…">
+          <button type="button" id="marker-add">+ Marker</button>
+          <div id="marker-list" class="marker-list"></div>
+        </div>
+      </div>
+
+      <div class="p5-waveform">
+        <div id="p5-scrub" aria-hidden="true"></div>
+        <small id="p5-scrub-note">Waveform and speech metadata unavailable</small>
+        <button id="p5-waveform-load" type="button" disabled class="mini-btn ml-1">Load local waveform</button>
+      </div>
+
+      <div class="cover-tools">
+        <div class="export-btn-row">
+          <button type="button" class="shutter" id="cover-shutter" disabled>Set Frame as Cover</button>
+          <button type="button" id="cover-auto-btn" disabled>Auto-Pick 3 Best Covers</button>
+        </div>
+        <output id="cover-offset" aria-live="polite">Cover not captured</output>
+        <div id="cover-candidates" class="cover-candidates w-full" hidden></div>
+        <img id="cover-image" alt="Captured 1080 by 1920 cover frame" class="rounded-lg" hidden>
+        <a id="cover-download" hidden>Save 1080 × 1920 cover PNG locally</a>
+        <details class="overlay-box w-full" id="cover-designer-box">
+          <summary>Cover Thumbnail Designer (Text + Vignette + Border)</summary>
+          <label>Cover headline <input id="cover-design-title" type="text" maxlength="50" placeholder="e.g. GTA 6 SECRET FOUND!"></label>
+          <div class="export-checks">
+            <label class="inline-check"><input type="checkbox" id="cover-design-vignette" checked> Contrast vignette</label>
+            <label class="inline-check"><input type="checkbox" id="cover-design-border"> Vice Neon accent border</label>
+          </div>
+          <div class="export-btn-row"><button type="button" id="cover-design-apply" disabled>Stamp Cover PNG</button></div>
+        </details>
+        <small>Manual cover suggestion; never sent automatically.</small>
+      </div>
+
+      <div class="guides">
+        <label class="inline-flex items-center gap-1.5"><input id="grid-toggle" type="checkbox" checked> Grid</label>
+        <label class="inline-flex items-center gap-1.5"><input id="safe-toggle" type="checkbox"> Safe zones</label>
+        <label class="inline-flex items-center gap-1.5"><input id="mock-ui-toggle" type="checkbox"> Platform UI</label>
+        <label class="inline-flex items-center gap-1.5"><input id="live-fx-preview" type="checkbox" checked> Live FX/Crop</label>
+        <button type="button" id="live-fx-hold" class="mini-btn" title="Hold to compare raw original">Hold: Original</button>
+        <select id="platform-zone" aria-label="Safe zone platform" title="Guide approximation">
+          <option value="tiktok">TikTok</option>
+          <option value="reels">Reels</option>
+          <option value="shorts">Shorts</option>
+          <option value="x">X</option>
+        </select>
+      </div>
+
+      <div class="clip-rating-bar" id="clip-rating-bar">
+        <span class="rating-stars" id="rating-stars" role="group" aria-label="Clip star rating">
+          <button type="button" data-star="1">★</button>
+          <button type="button" data-star="2">★</button>
+          <button type="button" data-star="3">★</button>
+          <button type="button" data-star="4">★</button>
+          <button type="button" data-star="5">★</button>
+        </span>
+        <div class="mood-pills" id="mood-pills">
+          <button type="button" data-mood="Banger">🔥 Banger</button>
+          <button type="button" data-mood="Funny">😂 Funny</button>
+          <button type="button" data-mood="Glitch">⚡ Glitch</button>
+          <button type="button" data-mood="Needs Edit">✂ Needs Edit</button>
+        </div>
+        <small class="muted">Keys 1–5 rate · A approve · H hold · N/P next/prev</small>
+      </div>
+
+      <div class="telemetry">
+        <div><small>FRAME</small><output id="frame">—</output></div>
+        <div><small>AVG BITRATE</small><output id="bitrate">—</output></div>
+        <div><small>SHA-256</small><output id="digest">—</output></div>
+        <div><small>CODEC</small><output id="codec">—</output></div>
+        <div><small>ENCODER</small><output id="encoder">—</output></div>
+        <div><small>RECEIPT</small><output id="receipt">—</output></div>
+      </div>
+
+      <div class="telemetry telemetry-audio">
+        <div><small>INTEGRATED LOUDNESS</small><output id="edit-lufs">Not measured</output></div>
+        <div><small>TRUE PEAK</small><output id="edit-peak">Not measured</output></div>
+      </div>
+
+      <div class="stage-actions flex-wrap">
+        <section class="workflow flex-1" aria-label="Clip workflow">
+          <div class="text-xs font-semibold"><strong id="wf-stage" class="text-vice-cyan">Review</strong> &rarr; Export</div>
+          <output id="wf-count" class="block font-mono text-[10px] opacity-75"></output>
+          <p id="wf-reason" class="my-1 text-xs opacity-80">Select a clip.</p>
+          <div class="mt-2 flex flex-wrap gap-1.5">
+            <button type="button" id="wf-primary" class="vice-btn-primary rounded-lg px-3 py-1.5 text-xs font-bold transition-all duration-200" disabled>Choose a clip</button>
+            <button type="button" id="wf-next" class="mini-btn" disabled>Save &amp; Next</button>
+            <button type="button" id="wf-undo" class="mini-btn" disabled>Undo</button>
+          </div>
+          <output id="wf-saved" role="status" class="mt-1 block font-mono text-[10px] opacity-70"></output>
+        </section>
+        <div class="flex flex-wrap items-center gap-2">
+          <button type="button" id="approve" class="shutter inline-flex items-center gap-2 transition-all duration-200 hover:-translate-y-0.5" disabled>
+            <img src="/icon-192.png?v=aperture-1" alt="" width="24" height="24" class="rounded-full"> Approve
+          </button>
+          <button type="button" id="hold-clip" class="hold-btn transition-all duration-200 hover:-translate-y-0.5" disabled>Hold</button>
+        </div>
+        <small class="w-full">Ctrl+Enter · Local review only. Approval never posts.</small>
+      </div>
+      <output id="message" role="status"></output>
+      <ol id="playback-proof" class="proof" aria-label="Film Roll playback check" hidden></ol>
+    </section>
+
+    <!-- RIGHT PANE: TABBED INSPECTOR -->
+    <aside class="inspector panel flex flex-col" aria-labelledby="inspect-title">
+      <header class="panel-head">
+        <div class="eyebrow">03 / STUDIO CONTROLS</div>
+        <h2 id="inspect-title" class="font-display">Inspector</h2>
+        <p id="inspect-description" class="muted" hidden></p>
+        <p id="inspect-state">No clip selected</p>
+      </header>
+
+      <div class="inspector-tabs" id="inspector-tabs" role="tablist" aria-label="Inspector sections">
+        <button type="button" role="tab" data-itab="captions" aria-selected="true">Captions</button>
+        <button type="button" role="tab" data-itab="export" aria-selected="false">Edit &amp; Export</button>
+        <button type="button" role="tab" data-itab="upload" aria-selected="false">Upload <span id="itab-upload-badge" class="itab-badge" hidden></span></button>
+        <button type="button" role="tab" data-itab="checks" aria-selected="false">Checks</button>
+      </div>
+
+      <div class="inspector-body flex-1">
+
+        <!-- TAB 1: CAPTIONS -->
+        <div class="itab-pane" data-itab-pane="captions">
+          <section aria-labelledby="draft-head">
+            <h3 id="draft-head" class="font-display">Caption desk</h3>
+            <p class="muted">Local draft · not sent or saved.</p>
+            <label>Title<input id="title" type="text" maxlength="200" placeholder="Clip title"></label>
+            <label>Caption<textarea id="caption" maxlength="10000" rows="5" placeholder="Write a caption…"></textarea></label>
+            <label>Hashtags<input id="tags" type="text" maxlength="1000" placeholder="#GTA6 #GTAVI #ViceCity #snapmatic"></label>
+
+            <div class="preset-box">
+              <div class="preset-bar">
+                <select id="preset-select" aria-label="Caption &amp; hashtag preset"><option value="">Loading presets…</option></select>
+                <button id="draft-preset" type="button" disabled>Apply</button>
+                <button id="preset-delete" type="button" title="Delete selected preset" disabled>✕</button>
+              </div>
+              <div class="preset-save-row">
+                <input id="preset-name" type="text" maxlength="60" placeholder="Save current as preset…">
+                <button id="preset-save" type="button">Save preset</button>
+              </div>
+            </div>
+
+            <div id="platform-draft-tools">
+              <details>
+                <summary>YouTube Shorts draft</summary>
+                <output id="draft-yt-title" class="muted"></output>
+                <output id="draft-yt-shorts" class="muted"></output>
+                <label>YouTube keyword tags, comma separated <input id="draft-yt-api-tags" maxlength="1600"></label>
+                <output id="draft-yt-api-count" class="muted" aria-live="polite"></output>
+                <label class="inline-check"><input id="draft-shorts" type="checkbox"> Include #Shorts</label>
+                <label class="inline-check"><input id="draft-youtube-override" type="checkbox"> Override YouTube description</label>
+                <textarea id="draft-youtube" maxlength="10000" rows="3" aria-label="YouTube description"></textarea>
+                <output id="draft-youtube-count" class="muted" aria-live="polite"></output>
+                <p class="warn" id="draft-yt-audio" hidden>Over 60 seconds: an active Content ID claim can block a Short. Check audio rights and Shorts Audio Library usage limits before posting.</p>
+              </details>
+              <details>
+                <summary>Instagram Reels draft</summary>
+                <label class="inline-check"><input id="draft-ig-share" type="checkbox"> Also share to Feed, if available (local preference only)</label>
+                <p id="draft-ig-placement" class="muted" hidden>Over 90 seconds: Instagram determines where this Reel appears. Placement is not guaranteed.</p>
+                <label class="inline-check"><input id="draft-trial" type="checkbox"> Trial Reel, manual graduation (local draft only)</label>
+                <label class="inline-check"><input id="draft-instagram-override" type="checkbox"> Override Instagram caption</label>
+                <textarea id="draft-instagram" maxlength="10000" rows="3" aria-label="Instagram caption"></textarea>
+                <output id="draft-instagram-count" class="muted" aria-live="polite"></output>
+                <p class="warn" id="draft-ig-discovery" hidden>Over 180 seconds: may not be recommended to new audiences.</p>
+              </details>
+              <details>
+                <summary>TikTok Manual Export</summary>
+                <label class="inline-check"><input id="draft-tiktok-override" type="checkbox"> Override TikTok editor text</label>
+                <textarea id="draft-tiktok" maxlength="10000" rows="3" aria-label="TikTok editor caption"></textarea>
+                <output id="draft-tiktok-count" class="muted" aria-live="polite"></output>
+                <p class="muted">Copy this caption for manual use. A captured cover can accompany a verified export; nothing is sent to TikTok.</p>
+                <output id="draft-tt-capacity" class="muted" aria-live="polite"></output>
+                <div class="export-btn-row">
+                  <button type="button" id="tt-copy">Copy caption + hashtags</button>
+                  <button type="button" id="tt-export" disabled>Create local export</button>
+                  <button type="button" id="tt-folder">Open export folder</button>
+                  <a href="/workspace?view=ledger" data-shell-link="ledger" class="oauth-link self-center">Verified backup links</a>
+                </div>
+                <output id="tt-result" aria-live="polite"></output>
+              </details>
+              <details>
+                <summary>X (Twitter) Post draft</summary>
+                <textarea id="draft-x" maxlength="280" rows="3" placeholder="Auto-filled from Title + Caption + Hashtags (280 chars max)…" aria-label="X post text"></textarea>
+                <output id="draft-x-count" class="muted" aria-live="polite">0/280 characters</output>
+                <div class="export-btn-row"><button type="button" id="x-copy">Copy X post text</button></div>
+              </details>
+              <details class="overlay-box">
+                <summary>Viral Hook &amp; Title Formula Helper</summary>
+                <div id="hook-helper-list" class="hook-helper-list"></div>
+              </details>
+              <div class="export-btn-row">
+                <button type="button" id="platform-draft-save" disabled>Save local draft</button>
+                <button type="button" id="auto-format-all" class="vice-btn-primary">Auto-Format All Platforms</button>
+                <button type="button" id="copy-all-captions">Copy All Captions</button>
+              </div>
+              <p id="platform-draft-result" class="muted" role="status">Select a verified preview.</p>
+            </div>
+          </section>
+        </div>
+
+        <!-- TAB 2: EDIT & EXPORT -->
+        <div class="itab-pane" data-itab-pane="export" hidden>
+          <section class="inspector-trim" aria-label="Trim and timing">
+            <h3 class="font-display">Trim and timing</h3>
+            <div class="trim-tools" aria-label="Non-destructive source trim">
+              <label>In <input id="trim-in" type="range" min="0" max="0" step="1" disabled></label>
+              <button id="trim-in-here" type="button" disabled>Set In (I)</button>
+              <label>Out <input id="trim-out" type="range" min="0" max="0" step="1" disabled></label>
+              <button id="trim-out-here" type="button" disabled>Set Out (O)</button>
+              <output id="trim-status" aria-live="polite">Select a verified preview</output>
+            </div>
+            <div class="export-btn-row">
+              <button type="button" id="trim-detect-silence" disabled>Auto-Trim Dead Air</button>
+            </div>
+            <output id="silence-status" class="muted" aria-live="polite"></output>
+          </section>
+
+          <section aria-labelledby="local-edit-heading">
+            <h3 id="local-edit-heading" class="font-display">Export Local MP4</h3>
+            <div class="preset-chips" id="export-presets-bar" aria-label="1-click platform export presets">
+              <button type="button" data-epreset="universal">Universal 9:16</button>
+              <button type="button" data-epreset="reels">IG Reels Safe</button>
+              <button type="button" data-epreset="shorts">YT Shorts Max</button>
+              <button type="button" data-epreset="x">X Crisp ≤140s</button>
+            </div>
+
+            <div class="export-grid">
+              <label>Framing
+                <select id="edit-framing" disabled>
+                  <option value="original">Original shape</option>
+                  <option value="center_crop">9:16 Center Crop</option>
+                  <option value="blurred_fit">Blurred-Background Fit</option>
+                </select>
+              </label>
+              <label>Quality
+                <select id="edit-quality" disabled>
+                  <option value="balanced">Balanced (CRF 20)</option>
+                  <option value="high">High Quality (CRF 16)</option>
+                  <option value="fast">Fast (CRF 23)</option>
+                </select>
+              </label>
+            </div>
+
+            <div id="crop-pan-row" class="pan-row" hidden>
+              <label>9:16 Crop Horizontal Pan <output id="crop-pan-val">Center</output>
+                <input id="edit-crop-pan" type="range" min="-100" max="100" value="0" step="2">
+              </label>
+            </div>
+
+            <div class="export-grid">
+              <label>Export Speed
+                <select id="edit-export-speed" disabled>
+                  <option value="1">1× Normal</option>
+                  <option value="1.1">1.1× Snappy</option>
+                  <option value="1.25">1.25× Fast</option>
+                </select>
+              </label>
+              <label>Rotate
+                <select id="edit-rotate" disabled>
+                  <option value="0">0°</option>
+                  <option value="90">90° CW</option>
+                  <option value="180">180°</option>
+                  <option value="270">270° CCW</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="export-checks">
+              <label class="inline-check"><input type="checkbox" id="edit-hw" disabled> <span id="edit-hw-label">Hardware encode (checking GPU…)</span></label>
+              <label class="inline-check"><input type="checkbox" id="edit-norm" disabled> Normalize audio (−14 LUFS)</label>
+              <label class="inline-check"><input type="checkbox" id="edit-fade-io" disabled> Smooth Fade In / Out (0.35s)</label>
+              <label class="inline-check"><input type="checkbox" id="edit-vivid" disabled> Vivid Color Pop (gaming contrast)</label>
+              <label class="inline-check"><input type="checkbox" id="edit-mirror" disabled> Mirror horizontal</label>
+              <label class="inline-check"><input type="checkbox" id="edit-zoom" disabled> Subtle Zoom (1.06×)</label>
+              <label class="inline-check"><input type="checkbox" id="edit-force-30fps" disabled> Lock 30fps (Reels safe)</label>
+              <label class="inline-check"><input type="checkbox" id="edit-mute" disabled> Mute audio</label>
+              <label class="inline-check"><input type="checkbox" id="edit-pack" checked disabled> Save caption .txt + cover .png pack</label>
+            </div>
+
+            <details class="overlay-box">
+              <summary>Audio Enhancer &amp; Background Music Bed</summary>
+              <div class="export-grid">
+                <label>Audio Preset
+                  <select id="edit-audio-preset">
+                    <option value="none">Original</option>
+                    <option value="voice">Voice Clarity</option>
+                    <option value="punch">Gameplay Punch</option>
+                    <option value="denoise">Noise Reduction</option>
+                  </select>
+                </label>
+                <label>Gain (<output id="edit-gain-val">0 dB</output>)
+                  <input id="edit-audio-gain" type="range" min="-12" max="12" value="0" step="1">
+                </label>
+              </div>
+              <div class="export-btn-row">
+                <button type="button" id="edit-music-pick">Choose Music Track…</button>
+                <button type="button" id="edit-music-clear" hidden>Remove</button>
+              </div>
+              <output id="edit-music-name" class="muted">No background music attached.</output>
+              <label>Music Bed Volume (<output id="edit-music-vol-val">−18 dB</output>)
+                <input id="edit-music-vol" type="range" min="-32" max="-6" value="-18" step="1">
+              </label>
+            </details>
+
+            <details class="overlay-box">
+              <summary>Hook banner, outro CTA &amp; watermark</summary>
+              <label>Top hook banner <input id="edit-hook" type="text" maxlength="80" placeholder="e.g. WAIT FOR THE ENDING…"></label>
+              <label>Outro CTA banner (last 2s) <input id="edit-outro-cta" type="text" maxlength="70" placeholder="e.g. Follow @cj_4_prez for Part 2!"></label>
+              <div class="export-grid">
+                <label>Watermark <input id="edit-watermark" type="text" maxlength="40" placeholder="@yourhandle"></label>
+                <label>Position
+                  <select id="edit-wm-pos">
+                    <option value="bottom_right">Bottom Right</option>
+                    <option value="bottom_left">Bottom Left</option>
+                    <option value="top_right">Top Right</option>
+                    <option value="top_left">Top Left</option>
+                  </select>
+                </label>
+              </div>
+            </details>
+
+            <details class="overlay-box">
+              <summary>Burn-in Subtitles (.srt)</summary>
+              <div class="export-grid">
+                <label>Style
+                  <select id="edit-srt-style">
+                    <option value="bold_yellow">CapCut Bold Yellow</option>
+                    <option value="clean_white">Clean White Outline</option>
+                  </select>
+                </label>
+                <label>Load .srt file <input id="edit-srt-file" type="file" accept=".srt,text/plain"></label>
+              </div>
+              <label>SRT content <textarea id="edit-srt-text" rows="4" placeholder="1&#10;00:00:00,000 --> 00:00:02,500&#10;WAIT FOR THIS CLIP!"></textarea></label>
+            </details>
+
+            <details class="overlay-box">
+              <summary>Split Long Clip into Multi-Part Shorts/Reels</summary>
+              <div class="export-grid">
+                <label>Seconds per part <input id="split-part-sec" type="number" min="15" max="180" value="55"></label>
+                <label>Hook prefix <input id="split-part-hook" type="text" maxlength="40" placeholder="e.g. GTA 6 CHAOS"></label>
+              </div>
+              <div class="export-btn-row"><button type="button" id="split-parts-go" disabled>Split &amp; Export Parts</button></div>
+              <p class="muted" id="split-parts-result" role="status"></p>
+            </details>
+
+            <div id="edit-zones" hidden>
+              <p class="muted">Choose each exact source rectangle (left, top, width and height in percent).</p>
+              <fieldset id="edit-facecam">
+                <legend>Facecam</legend>
+                <label>Left % <input type="number" min="0" max="99"></label>
+                <label>Top % <input type="number" min="0" max="99"></label>
+                <label>Width % <input type="number" min="1" max="100"></label>
+                <label>Height % <input type="number" min="1" max="100"></label>
+              </fieldset>
+              <fieldset id="edit-gameplay">
+                <legend>Gameplay</legend>
+                <label>Left % <input type="number" min="0" max="99"></label>
+                <label>Top % <input type="number" min="0" max="99"></label>
+                <label>Width % <input type="number" min="1" max="100"></label>
+                <label>Height % <input type="number" min="1" max="100"></label>
+              </fieldset>
+            </div>
+
+            <p class="muted" id="edit-transcript-state" hidden></p>
+            <div id="edit-transcript" hidden></div>
+
+            <div class="export-btn-row">
+              <button type="button" id="edit-transcode" class="vice-btn-primary" disabled>Export MP4 (FFmpeg)</button>
+              <button type="button" id="edit-open-derived" hidden>Play exported MP4</button>
+              <button type="button" id="export-zip-kit" disabled>Zip Post Kit</button>
+              <button type="button" id="edit-open-exports">Open exports folder</button>
+            </div>
+            <div class="export-progress-wrap" id="export-progress-wrap" hidden>
+              <progress id="export-progress" max="100" value="0"></progress>
+              <output id="export-progress-text">0%</output>
+              <button type="button" id="export-cancel" class="cancel-btn">Cancel</button>
+            </div>
+            <p class="muted" id="edit-state" role="status">Select a Film Roll clip to trim and export locally.</p>
+          </section>
+        </div>
+
+        <!-- TAB 3: UPLOAD -->
+        <div class="itab-pane" data-itab-pane="upload" hidden>
+          <section aria-label="Multi-platform upload" class="space-y-3">
+            <div id="clip-shipped-links" class="shipped-banner" hidden></div>
+            <div id="dup-hash-warning" class="dup-warning" hidden></div>
+
+            <div class="queue-handoff readiness-card" id="readiness-card">
+              <h4>Platform Readiness &amp; Pre-Upload Check</h4>
+              <div id="upload-readiness" class="readiness-grid">Select a clip to check Shorts, Reels, TikTok &amp; X readiness.</div>
+              <div id="upload-unexported-warn" class="warn" hidden>You have unexported edits (trim/crop/overlay/FX). Export first so uploads include your edits!</div>
+              <div class="export-btn-row">
+                <button type="button" id="upload-autofix-btn" hidden>Auto-Fix &amp; Export Compliant 9:16 MP4</button>
+                <button type="button" id="upload-shorts-cut-btn" hidden>Export ≤59s Guaranteed Short</button>
+                <button type="button" id="upload-reels-cut-btn" hidden>Export Reels-Safe ≤89s Variant</button>
+              </div>
+              <div class="export-progress-wrap" id="upload-progress-wrap" hidden>
+                <progress id="upload-progress" max="100" value="0"></progress>
+                <output id="upload-progress-text">Uploading…</output>
+              </div>
+              <details class="overlay-box">
+                <summary>Pre-Upload Caption &amp; File Preview</summary>
+                <div id="upload-summary-preview" class="muted">Select a clip to preview exact upload metadata.</div>
+              </details>
+            </div>
+
+            <div class="queue-handoff multi-ship-card" id="multi-ship-card">
+              <h4>One-Click Ship to Multiple Platforms</h4>
+              <div class="multi-ship-checks">
+                <label class="inline-check"><input type="checkbox" id="ship-chk-yt"> YouTube Shorts Draft</label>
+                <label class="inline-check"><input type="checkbox" id="ship-chk-ig"> Instagram (<select id="ship-ig-mode" aria-label="Instagram ship mode"><option value="container">Test Container</option><option value="publish">Publish Live</option></select>)</label>
+                <label class="inline-check"><input type="checkbox" id="ship-chk-tt"> TikTok Inbox Draft</label>
+                <label class="inline-check"><input type="checkbox" id="ship-chk-x"> X Video Post (Live)</label>
+              </div>
+              <div class="export-btn-row">
+                <button type="button" id="multi-ship-go" class="vice-btn-primary" disabled>Ship Selected Platforms</button>
+                <button type="button" id="batch-queue-add" disabled>+ Add to Batch Upload Queue</button>
+              </div>
+              <ul id="multi-ship-log" class="multi-ship-log" hidden></ul>
+            </div>
+
+            <div class="queue-handoff" id="batch-upload-card">
+              <h4>Batch Multi-Clip Upload Queue (<span id="batch-queue-count">0</span>)</h4>
+              <label class="inline-check"><input type="checkbox" id="batch-space-yt" checked> Auto-space YouTube scheduled drafts (1/day at 6 PM)</label>
+              <ul id="batch-queue-list" class="multi-ship-log"></ul>
+              <div class="export-btn-row">
+                <button type="button" id="batch-queue-run" disabled>Run Batch Upload Queue</button>
+                <button type="button" id="batch-queue-clear" class="cancel-btn" hidden>Clear Queue</button>
+              </div>
+            </div>
+
+            <div class="queue-handoff platform-card-yt">
+              <h4>YouTube Draft Upload</h4>
+              <div class="export-grid">
+                <label>Privacy
+                  <select id="yt-draft-privacy">
+                    <option value="private" selected>Private (default)</option>
+                    <option value="unlisted">Unlisted</option>
+                  </select>
+                </label>
+                <label>Category
+                  <select id="yt-draft-category">
+                    <option value="20" selected>Gaming</option>
+                    <option value="24">Entertainment</option>
+                    <option value="23">Comedy</option>
+                    <option value="22">People &amp; Blogs</option>
+                    <option value="28">Science &amp; Tech</option>
+                  </select>
+                </label>
+              </div>
+              <label>Schedule (optional, forces Private) <input id="yt-draft-schedule" type="datetime-local"></label>
+              <div class="preset-chips" id="yt-quick-sched">
+                <button type="button" data-qsched="today18">Today 6 PM</button>
+                <button type="button" data-qsched="tmrw12">Tmrw 12 PM</button>
+                <button type="button" data-qsched="tmrw18">Tmrw 6 PM</button>
+                <button type="button" data-qsched="nextopen">Next Open Slot</button>
+                <button type="button" data-qsched="clear">Clear</button>
+              </div>
+              <div class="export-checks">
+                <label class="inline-check"><input type="checkbox" id="yt-draft-shorts" checked> YouTube Short (adds #Shorts)</label>
+                <label class="inline-check"><input type="checkbox" id="yt-draft-thumb" checked> Attach captured 1080×1920 Cover PNG</label>
+                <label class="inline-check"><input type="checkbox" id="yt-draft-kids"> Made for Kids</label>
+              </div>
+              <div class="export-btn-row"><button type="button" id="yt-upload-draft" disabled>Upload Draft to YouTube</button></div>
+              <p class="muted" id="yt-upload-result" role="status">Connect YouTube in Connections &amp; System to upload drafts (Private or Unlisted only).</p>
+            </div>
+
+            <div class="queue-handoff platform-card-ig">
+              <h4>Instagram Reel Upload</h4>
+              <p class="muted">Direct upload from your PC via Meta resumable upload (auto-optimized 48 kHz AAC, Share to Feed &amp; Cover frame offset).</p>
+              <label class="inline-check"><input type="checkbox" id="ig-upload-share" checked> Also share Reel to Feed</label>
+              <label>Cover frame offset (<output id="ig-thumb-val">0.0s</output>) <input id="ig-thumb-slider" type="range" min="0" max="1000" value="0" step="100" disabled></label>
+              <div class="export-btn-row">
+                <button type="button" id="ig-upload-container" disabled>Upload Test Container (Unpublished)</button>
+                <button type="button" id="ig-publish-arm" disabled>Upload &amp; Publish Reel…</button>
+                <button type="button" id="ig-publish-confirm" class="confirm-publish-btn" hidden>Confirm: Publish Live to Instagram</button>
+              </div>
+              <p class="muted" id="ig-upload-result" role="status">Connect Instagram in Connections &amp; System to upload Reels directly.</p>
+            </div>
+
+            <div class="queue-handoff platform-card-tt">
+              <h4>TikTok Inbox Draft</h4>
+              <p class="muted">Uploads your MP4 straight to your TikTok phone app Inbox as a draft (never auto-posts publicly). Open TikTok Inbox to add sound &amp; post.</p>
+              <label class="inline-check"><input type="checkbox" id="tt-autocopy" checked> Auto-copy formatted TikTok caption on send</label>
+              <div class="export-btn-row"><button type="button" id="tt-upload-draft" disabled>Send Draft to TikTok Inbox</button></div>
+              <p class="muted" id="tt-upload-result" role="status">Connect TikTok in Connections &amp; System to send drafts straight to your TikTok Inbox.</p>
+            </div>
+
+            <div class="queue-handoff platform-card-x">
+              <h4>X (Twitter) Video Post</h4>
+              <textarea id="x-upload-text" maxlength="280" rows="2" placeholder="X post text (auto-filled, max 280 chars)…"></textarea>
+              <div class="export-btn-row">
+                <button type="button" id="x-post-arm" disabled>Upload &amp; Post to X…</button>
+                <button type="button" id="x-post-confirm" class="confirm-publish-btn" hidden>Confirm: Publish Live to X</button>
+              </div>
+              <p class="muted" id="x-upload-result" role="status">Connect X in Connections &amp; System to post video clips directly.</p>
+            </div>
+
+            <div class="queue-handoff">
+              <h4>Send to Profile Queue</h4>
+              <div class="queue-handoff-row">
+                <select id="queue-profile" aria-label="Target posting profile"><option value="">Choose a posting profile…</option></select>
+                <button type="button" id="queue-send" disabled>Send to Queue</button>
+              </div>
+              <p class="muted" id="queue-result" role="status">Queues this clip + caption for manual posting inside Profiles.</p>
+            </div>
+          </section>
+        </div>
+
+        <!-- TAB 4: CHECKS -->
+        <div class="itab-pane" data-itab-pane="checks" hidden>
+          <section>
+            <h3 class="font-display">Platform preflight</h3>
+            <div id="platform-preflight" aria-live="polite">Select a verified preview to see media checks and live metadata counts.</div>
+            <p class="muted">Advisories are not upload failures. Authorization and review-only rights are separate. Publishing remains off.</p>
+            <h3 class="mt-4 font-display">Connection status</h3>
+            <div id="platforms" class="platforms"></div>
+            <p class="muted">Platform toggles only change this session’s inspection.</p>
+          </section>
+          <section>
+            <h3 class="font-display">Drive verification</h3>
+            <span id="drive" class="flag warn">NOT VERIFIED</span>
+            <p id="drive-detail" class="muted">A source index is not a backup receipt.</p>
+          </section>
+        </div>
+      </div>
+
+      <footer>
+        <button class="publish" id="publish" type="button" disabled aria-disabled="true">Publish Selected</button>
+        <small>PUBLIC POSTING LOCKED</small>
+      </footer>
+    </aside>
+  </main>
+
+  <!-- VIEW 02: FILM ROLL GALLERY -->
+  <main class="wide-view" id="gallery" hidden>
+    <div class="feature-heading">
+      <div class="eyebrow">02 / INDEX</div>
+      <h1 class="font-display vice-heading">Film Roll Gallery</h1>
+      <p id="gallery-count">Loading the indexed queue…</p>
+    </div>
+    <div class="searchbar panel p-4">
+      <label>Search clips <input id="gallery-search" type="search" placeholder="Filename, title, or @source"></label>
+      <label>Source <select id="gallery-source-filter"><option value="all">All sources</option></select></label>
+      <label>Sort
+        <select id="gallery-sort">
+          <option value="recent">Recently added</option>
+          <option value="rating">Top rated ★</option>
+          <option value="title">Title A–Z</option>
+          <option value="largest">Largest first</option>
+        </select>
+      </label>
+      <div id="gallery-filters" class="filters" aria-label="Gallery filters">
+        <button data-filter="all" aria-pressed="true">All</button>
+        <button data-filter="pending" aria-pressed="false">Pending Review</button>
+        <button data-filter="approved" aria-pressed="false">Approved</button>
+        <button data-filter="hold" aria-pressed="false">Hold</button>
+        <button data-filter="exported" aria-pressed="false">Exported</button>
+        <button data-filter="unposted" aria-pressed="false">Not Uploaded</button>
+        <button data-filter="toprated" aria-pressed="false">Top ★</button>
+      </div>
+      <button type="button" id="gallery-export-approved" class="gallery-export-btn" title="Export all approved clips sequentially in the background">Export all approved</button>
+      <button type="button" id="gallery-clear-approved" class="gallery-clear-btn" title="Remove approved clips from Film Roll list (keeps files on disk)">Clear approved</button>
+    </div>
+    <div class="gallery-batch-bar" id="gallery-batch-bar" hidden>
+      <progress id="gallery-batch-progress" max="100" value="0"></progress>
+      <output id="gallery-batch-text"></output>
+      <button type="button" id="gallery-batch-cancel" class="cancel-btn">Cancel batch</button>
+    </div>
+    <div id="gallery-items" class="gallery-items"></div>
+    <ol id="gallery-proof" class="proof" hidden aria-label="Gallery poster check"></ol>
+  </main>
+
+  <!-- VIEW 03: EXPORTS & RECEIPTS -->
+  <main class="wide-view" id="ledger" hidden>
+    <div class="feature-heading">
+      <div class="eyebrow">03 / EXPORTS &amp; RECEIPTS</div>
+      <h1 class="font-display vice-heading">Exports &amp; Receipts</h1>
+      <p>Every local MP4 export rendered from Viewfinder Studio, plus verified provider receipts. Public auto-posting remains disabled.</p>
+    </div>
+    <div class="searchbar panel p-4">
+      <label>Filter exports &amp; receipts <input id="ledger-search" type="search" placeholder="Clip, source, framing, filename, or SHA"></label>
+      <button type="button" id="ledger-open-exports" class="gallery-export-btn">Open exports folder</button>
+    </div>
+    <section class="panel ledger-table mb-4" aria-label="Local export history">
+      <h2 class="section-subhead font-display">Local Export History</h2>
+      <table>
+        <thead><tr><th>Clip / Source</th><th>Framing &amp; Quality</th><th>Pack Files</th><th>Size</th><th>Exported</th><th>Actions</th></tr></thead>
+        <tbody id="export-history-rows"></tbody>
+      </table>
+      <div id="export-history-notice" class="muted" role="status">Loading local exports…</div>
+    </section>
+    <section class="panel ledger-table" aria-label="Cloud upload receipts">
+      <h2 class="section-subhead font-display">Cloud Upload Receipts (SHA-256 Tracked)</h2>
+      <table>
+        <thead><tr><th>Platform</th><th>Clip</th><th>Status / Privacy</th><th>Content SHA-256</th><th>Uploaded</th><th>Link</th></tr></thead>
+        <tbody id="upload-receipts-rows"></tbody>
+      </table>
+      <div id="upload-receipts-notice" class="muted" role="status">Loading upload receipts…</div>
+    </section>
+    <details class="legacy-ledger">
+      <summary>Controller &amp; provider receipts (<span id="ledger-count">0</span>)</summary>
+      <section class="panel ledger-table" aria-label="Backup and receipt ledger">
+        <table>
+          <thead><tr><th>Clip / State</th><th>Source SHA-256</th><th>Rendered SHA-256</th><th>Restore</th><th>Private YouTube</th><th>Unpublished Instagram</th><th>Restore actions</th></tr></thead>
+          <tbody id="ledger-records"></tbody>
+        </table>
+      </section>
+      <div id="ledger-notice" role="status"></div>
+    </details>
+  </main>
+
+  <!-- VIEW 04: CONNECTIONS & SYSTEM -->
+  <main class="wide-view" id="system" hidden>
+    <div class="feature-heading">
+      <div class="eyebrow">04 / DIAGNOSTICS</div>
+      <h1 class="font-display vice-heading">Connections &amp; System</h1>
+      <p>Connect your YouTube, Instagram, TikTok, and X accounts locally (stored securely in Windows Credential Manager), check installed tools, and manage storage.</p>
+      <nav class="utility-cards" aria-label="Connections tools">
+        <a href="/workspace?view=profiles" data-shell-link="profiles" class="transition-all duration-200 hover:-translate-y-0.5">
+          <strong>Profiles</strong>
+          <small>Creator posting profiles, queues, and analytics</small>
+        </a>
+        <a href="/workspace?view=sources" data-shell-link="sources" class="transition-all duration-200 hover:-translate-y-0.5">
+          <strong>Sources</strong>
+          <small>Content discovery, source folders, and sync</small>
+        </a>
+      </nav>
+    </div>
+
+    <section class="panel oauth-section" aria-label="Connect social accounts">
+      <h2 class="font-display">Connect Accounts</h2>
+      <p class="muted">OAuth tokens and client secrets are stored natively in Windows Credential Manager — never sent anywhere except Google, Meta, TikTok, or X directly from your PC. Public auto-posting stays locked off.</p>
+      <div class="oauth-grid">
+        <div class="oauth-card platform-card-yt" id="oauth-card-yt">
+          <header><strong class="oauth-title" id="yt-oauth-title">YouTube</strong><span id="yt-oauth-badge" class="flag warn">CHECKING…</span></header>
+          <div id="yt-oauth-meta" class="muted">Checking YouTube connection…</div>
+          <div class="export-btn-row">
+            <button type="button" id="yt-connect" disabled>Connect YouTube</button>
+            <button type="button" id="yt-refresh" hidden>Refresh status</button>
+            <button type="button" id="yt-disconnect" class="cancel-btn" hidden>Disconnect</button>
+          </div>
+          <a id="yt-auth-link" class="oauth-link" target="_blank" rel="noopener noreferrer" hidden>Open Google sign-in link manually ↗</a>
+          <details id="yt-oauth-setup">
+            <summary>Google OAuth Setup (Desktop Client)</summary>
+            <ol class="oauth-steps">
+              <li>Open Google Cloud Console → <strong>APIs &amp; Services → Library</strong> and enable <strong>YouTube Data API v3</strong>.</li>
+              <li>Go to <strong>Credentials → Create Credentials → OAuth client ID → Desktop app</strong> (or Web app with Redirect URI below).</li>
+              <li>Paste the downloaded JSON (or Client ID + Secret) below and click <strong>Save Credentials</strong>.</li>
+            </ol>
+            <div class="oauth-uri-row"><code id="yt-redirect-uri">http://127.0.0.1:3847/api/oauth/youtube/callback</code><button type="button" id="yt-copy-uri">Copy URI</button></div>
+            <label>Paste Google OAuth client JSON <textarea id="yt-client-json" rows="3" placeholder='{"installed":{"client_id":"...apps.googleusercontent.com","client_secret":"..."}}'></textarea></label>
+            <div class="export-grid">
+              <label>Or Client ID <input id="yt-client-id" type="text" placeholder="...apps.googleusercontent.com"></label>
+              <label>Client Secret <input id="yt-client-secret" type="password" placeholder="GOCSPX-..."></label>
+            </div>
+            <div class="export-btn-row"><button type="button" id="yt-save-config">Save YouTube Credentials</button></div>
+            <p class="muted" id="yt-config-msg" role="status"></p>
+          </details>
+        </div>
+
+        <div class="oauth-card platform-card-ig" id="oauth-card-ig">
+          <header><strong class="oauth-title" id="ig-oauth-title">Instagram</strong><span id="ig-oauth-badge" class="flag warn">CHECKING…</span></header>
+          <div id="ig-oauth-meta" class="muted">Checking Instagram connection…</div>
+          <div class="export-btn-row">
+            <button type="button" id="ig-connect" disabled>Connect Instagram</button>
+            <button type="button" id="ig-refresh" hidden>Refresh status</button>
+            <button type="button" id="ig-extend" hidden>Extend 60-Day Token</button>
+            <button type="button" id="ig-disconnect" class="cancel-btn" hidden>Disconnect</button>
+          </div>
+          <a id="ig-auth-link" class="oauth-link" target="_blank" rel="noopener noreferrer" hidden>Open Meta sign-in link manually ↗</a>
+          <details id="ig-oauth-setup">
+            <summary>Meta App Setup (Business / Creator)</summary>
+            <ol class="oauth-steps">
+              <li>Keep your Meta app in <strong>Development Mode</strong> (Meta blocks HTTP login in Live Mode) and add the exact <code>localhost</code> Redirect URI below under <strong>Facebook Login → Settings → Valid OAuth Redirect URIs</strong>.</li>
+              <li>Ensure your Instagram Business or Creator account is linked to a Facebook Page, then save App ID + Secret below.</li>
+              <li><strong>Or skip browser redirect completely:</strong> open <a class="oauth-link" href="https://developers.facebook.com/tools/explorer/" target="_blank" rel="noopener noreferrer">Meta Graph API Explorer ↗</a>, select your Snapmatic app, grant <code>instagram_basic</code> + <code>pages_show_list</code>, click <strong>Generate Access Token</strong>, and paste it below (Snapmatic automatically upgrades it to a 60-day token).</li>
+            </ol>
+            <div class="oauth-uri-row"><code id="ig-redirect-uri">http://localhost:3847/api/oauth/instagram/callback</code><button type="button" id="ig-copy-uri">Copy URI</button></div>
+            <div class="export-grid">
+              <label>Meta App ID <input id="ig-client-id" type="text" placeholder="123456789012345"></label>
+              <label>Meta App Secret <input id="ig-client-secret" type="password" placeholder="Meta App Secret"></label>
+            </div>
+            <div class="export-btn-row"><button type="button" id="ig-save-config">Save Instagram Credentials</button></div>
+            <label>Or paste Graph API Explorer Access Token <input id="ig-direct-token" type="password" placeholder="EAA..."></label>
+            <div class="export-btn-row"><button type="button" id="ig-token-connect">Connect with Access Token</button></div>
+            <p class="muted" id="ig-config-msg" role="status"></p>
+          </details>
+        </div>
+
+        <div class="oauth-card platform-card-tt" id="oauth-card-tt">
+          <header><strong class="oauth-title" id="tt-oauth-title">TikTok</strong><span id="tt-oauth-badge" class="flag warn">CHECKING…</span></header>
+          <div id="tt-oauth-meta" class="muted">Checking TikTok connection…</div>
+          <div class="export-btn-row">
+            <button type="button" id="tt-connect" disabled>Connect TikTok</button>
+            <button type="button" id="tt-refresh" hidden>Refresh status</button>
+            <button type="button" id="tt-disconnect" class="cancel-btn" hidden>Disconnect</button>
+            <button type="button" id="tt-sys-exports">Open exports folder</button>
+          </div>
+          <a id="tt-auth-link" class="oauth-link" target="_blank" rel="noopener noreferrer" hidden>Open TikTok sign-in link manually ↗</a>
+          <details id="tt-oauth-setup">
+            <summary>TikTok Developer Setup (Desktop Sandbox)</summary>
+            <ol class="oauth-steps">
+              <li>Open <a class="oauth-link" href="https://developers.tiktok.com/" target="_blank" rel="noopener noreferrer">TikTok for Developers ↗</a> → <strong>Manage apps</strong> → create an app and switch it to <strong>Sandbox</strong> mode (no public audit needed for your own account).</li>
+              <li>Add products: <strong>Login Kit</strong> (Desktop), <strong>Display API</strong>, and <strong>Content Posting API</strong> (enable Inbox / Share draft upload).</li>
+              <li>Under <strong>Login Kit → Desktop → Redirect URI</strong>, add the exact URI below, and add your TikTok account under <strong>Sandbox → Target Users</strong>.</li>
+              <li>Paste your Sandbox <strong>Client Key</strong> and <strong>Client Secret</strong> below, save, then click <strong>Connect TikTok</strong>.</li>
+            </ol>
+            <div class="oauth-uri-row"><code id="tt-redirect-uri">http://127.0.0.1:3847/api/oauth/tiktok/callback</code><button type="button" id="tt-copy-uri">Copy URI</button></div>
+            <div class="export-grid">
+              <label>TikTok Client Key <input id="tt-client-id" type="text" placeholder="sbaw..."></label>
+              <label>Client Secret <input id="tt-client-secret" type="password" placeholder="TikTok Client Secret"></label>
+            </div>
+            <div class="export-btn-row"><button type="button" id="tt-save-config">Save TikTok Credentials</button></div>
+            <p class="muted" id="tt-config-msg" role="status"></p>
+          </details>
+        </div>
+
+        <div class="oauth-card platform-card-x" id="oauth-card-x">
+          <header><strong class="oauth-title" id="x-oauth-title">X (Twitter)</strong><span id="x-oauth-badge" class="flag warn">CHECKING…</span></header>
+          <div id="x-oauth-meta" class="muted">Checking X connection…</div>
+          <div class="export-btn-row">
+            <button type="button" id="x-connect" disabled>Connect X</button>
+            <button type="button" id="x-refresh" hidden>Refresh status</button>
+            <button type="button" id="x-disconnect" class="cancel-btn" hidden>Disconnect</button>
+          </div>
+          <a id="x-auth-link" class="oauth-link" target="_blank" rel="noopener noreferrer" hidden>Open X sign-in link manually ↗</a>
+          <details id="x-oauth-setup">
+            <summary>X Developer Setup (OAuth 2.0 PKCE)</summary>
+            <ol class="oauth-steps">
+              <li>Open <a class="oauth-link" href="https://developer.x.com/en/portal/dashboard" target="_blank" rel="noopener noreferrer">X Developer Portal ↗</a> → App → <strong>User authentication settings</strong>.</li>
+              <li>Enable <strong>OAuth 2.0</strong> with <strong>Read and write</strong> permissions (Native / Desktop App), and add the Redirect URI below.</li>
+              <li>Paste your OAuth 2.0 <strong>Client ID</strong> (and Client Secret if confidential app) below, save, then click <strong>Connect X</strong>.</li>
+            </ol>
+            <div class="oauth-uri-row"><code id="x-redirect-uri">http://127.0.0.1:3847/api/oauth/x/callback</code><button type="button" id="x-copy-uri">Copy URI</button></div>
+            <div class="export-grid">
+              <label>X Client ID <input id="x-client-id" type="text" placeholder="OAuth 2.0 Client ID"></label>
+              <label>Client Secret (optional) <input id="x-client-secret" type="password" placeholder="Optional for public PKCE"></label>
+            </div>
+            <div class="export-btn-row"><button type="button" id="x-save-config">Save X Credentials</button></div>
+            <p class="muted" id="x-config-msg" role="status"></p>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <div class="system-grid">
+      <section class="panel system-panel">
+        <h2 class="font-display">Local tools</h2>
+        <div id="system-tools">Checking installed tools…</div>
+      </section>
+      <section class="panel system-panel">
+        <h2 class="font-display">Storage &amp; cache</h2>
+        <div id="system-storage">Measuring local folders…</div>
+        <div class="export-btn-row">
+          <button type="button" id="sys-open-exports">Open exports folder</button>
+          <button type="button" id="clear-thumb-cache">Clear thumbnail cache</button>
+        </div>
+        <p class="muted" id="thumb-cache-result" role="status">Only cached JPEG previews are removed; your downloaded media and exports are never touched.</p>
+      </section>
+      <section class="panel system-panel">
+        <h2 class="font-display">Local directories</h2>
+        <div id="system-paths"></div>
+        <div class="export-btn-row"><button type="button" id="export-diagnostics">Export Diagnostic Bundle (.zip)</button></div>
+        <p class="muted" id="diagnostics-result" role="status">Metadata only. Saves in the local Snapmatic runtime.</p>
+      </section>
+      <section class="panel system-panel" id="brand-kit-panel">
+        <h2 class="font-display">Brand Kits &amp; Settings Backup</h2>
+        <p class="muted">Save reusable channel brand kits (watermark, outro CTA, YouTube category, default export style) and back up all workspace settings/presets (never includes OAuth secrets).</p>
+        <div class="preset-bar mt-2">
+          <select id="brand-kit-select" aria-label="Saved Brand Kit"><option value="">No saved Brand Kits</option></select>
+          <button type="button" id="brand-kit-apply" disabled>Apply</button>
+          <button type="button" id="brand-kit-delete" disabled>✕</button>
+        </div>
+        <div class="preset-save-row mt-2">
+          <input id="brand-kit-name" type="text" maxlength="50" placeholder="Save current setup as Brand Kit…">
+          <button type="button" id="brand-kit-save">Save Kit</button>
+        </div>
+        <div class="export-btn-row">
+          <button type="button" id="settings-export-btn">Export Settings (.json)</button>
+          <label class="mini-btn file-btn">Import Settings (.json)<input id="settings-import-file" type="file" accept=".json,application/json" hidden></label>
+        </div>
+        <p class="muted" id="brand-kit-msg" role="status"></p>
+      </section>
+      <section class="panel system-panel">
+        <h2 class="font-display">Safety lock</h2>
+        <p class="posting-lock">AUTO-POSTING: OFF</p>
+        <p>Public publishing and automatic posting are disabled at the server. YouTube draft uploads are strictly <strong>Private</strong>.</p>
+        <p>Loopback only (127.0.0.1) · credentials stay in Windows Credential Manager.</p>
+      </section>
+      <section class="panel system-panel">
+        <details>
+          <summary><strong>Legacy provider &amp; intake diagnostics</strong></summary>
+          <div id="system-providers"></div>
+          <div id="phase4-source" role="status">Reading local intake status…</div>
+          <div id="phase4-platforms"></div>
+          <div id="phase4-cache-size" role="status">Reading managed cache size…</div>
+          <div class="export-btn-row"><button type="button" id="phase4-cache-preview">Purge Verified Staging Cache (preview only)</button></div>
+          <p id="phase4-cache-result" class="muted" role="status">Deletion is locked off. Original, active and retained files are excluded.</p>
+        </details>
+      </section>
+    </div>
+  </main>
+
+  <!-- VIEW 05: CHANNEL INSIGHTS -->
+  <main class="wide-view" id="insights" hidden>
+    <div class="feature-heading">
+      <div class="eyebrow">05 / ANALYTICS</div>
+      <h1 class="font-display vice-heading">Channel Insights</h1>
+      <p>Live metrics and recent uploads synced directly from your connected YouTube, Instagram, and TikTok accounts. Pull winning hashtags straight into Viewfinder Studio.</p>
+      <div class="export-btn-row items-center">
+        <button type="button" id="insights-sync" class="vice-btn-primary">Sync Live Analytics</button>
+        <output id="insights-status" class="muted" role="status"></output>
+      </div>
+    </div>
+    <section class="kpi-grid" id="insights-kpis" aria-label="Connected account summary"></section>
+    <section class="charts-grid" aria-label="Analytics charts">
+      <div class="panel chart-card">
+        <header><h3 class="font-display">Platform Performance</h3><small class="muted">Synced views &amp; engagement by platform</small></header>
+        <div id="insights-chart-platforms" class="chart-body"></div>
+      </div>
+      <div class="panel chart-card">
+        <header>
+          <h3 class="font-display">Growth Over Time</h3>
+          <select id="growth-metric" aria-label="Growth metric">
+            <option value="followers">Followers / Subs</option>
+            <option value="views">Total Views</option>
+            <option value="likes">Recent Likes</option>
+          </select>
+        </header>
+        <div id="insights-chart-growth" class="chart-body"></div>
+      </div>
+      <div class="panel chart-card">
+        <header><h3 class="font-display">Top Hashtags &amp; Best Times</h3><small class="muted">Click any #tag to add to Studio</small></header>
+        <div id="insights-hashtags" class="hashtag-cloud"></div>
+        <div id="insights-best-times" class="best-times"></div>
+      </div>
+    </section>
+    <div class="searchbar panel p-4">
+      <label>Platform
+        <select id="insights-provider">
+          <option value="all">All platforms</option>
+          <option value="youtube">YouTube</option>
+          <option value="instagram">Instagram</option>
+          <option value="tiktok">TikTok</option>
+        </select>
+      </label>
+      <label>Sort
+        <select id="insights-sort">
+          <option value="recent">Most recent</option>
+          <option value="views">Most views</option>
+          <option value="likes">Most likes</option>
+          <option value="comments">Most comments</option>
+        </select>
+      </label>
+      <label>Search posts <input id="insights-search" type="search" placeholder="Title, caption, or #hashtag"></label>
+    </div>
+    <section class="panel ledger-table" aria-label="Synced channel posts">
+      <table>
+        <thead><tr><th>Post</th><th>Platform</th><th>Views</th><th>Likes</th><th>Comments</th><th>Published</th><th>Actions</th></tr></thead>
+        <tbody id="insights-rows"></tbody>
+      </table>
+      <div id="insights-empty" class="muted p-4" role="status">Click Sync Live Analytics to pull recent YouTube uploads, Instagram posts, and TikTok videos.</div>
+    </section>
+  </main>
+
+  <!-- VIEW 06: CONTENT CALENDAR -->
+  <main class="wide-view" id="calendar" hidden>
+    <div class="feature-heading">
+      <div class="eyebrow">06 / SCHEDULE</div>
+      <h1 class="font-display vice-heading">Content Calendar</h1>
+      <p>Unified publishing calendar across your published YouTube, Instagram, and TikTok posts, scheduled YouTube drafts, and Profile queues.</p>
+    </div>
+    <div class="cal-toolbar panel p-3.5">
+      <div class="cal-nav">
+        <button type="button" id="cal-prev">← Prev</button>
+        <button type="button" id="cal-today">Today</button>
+        <button type="button" id="cal-next">Next →</button>
+        <strong id="cal-month-label" class="font-display">Month</strong>
+      </div>
+      <div class="cal-filters">
+        <select id="cal-provider" aria-label="Calendar platform filter">
+          <option value="all">All platforms</option>
+          <option value="youtube">YouTube</option>
+          <option value="instagram">Instagram</option>
+          <option value="tiktok">TikTok</option>
+          <option value="x">X</option>
+        </select>
+        <span class="cal-legend"><i class="cal-dot pub"></i>Published <i class="cal-dot sched"></i>Scheduled <i class="cal-dot qd"></i>Queued</span>
+      </div>
+    </div>
+    <div class="cal-layout">
+      <section class="panel cal-board">
+        <div class="cal-weekdays"><span>Sun</span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span></div>
+        <div id="cal-grid" class="cal-grid"></div>
+      </section>
+      <aside class="panel cal-detail" id="cal-day-detail">
+        <h3 class="font-display">Select a day</h3>
+        <p class="muted">Click any date on the calendar to inspect posts, scheduled drafts, and queued items.</p>
+      </aside>
+    </div>
+  </main>
+
+  <!-- EMBEDDED MANAGE VIEWS -->
+  <main class="wide-view shell-manage shell-sources" id="profiles" hidden>
+    <iframe data-embed="/workspace/manage?section=profiles" title="Profiles" loading="lazy"></iframe>
+  </main>
+  <main class="wide-view shell-manage shell-sources" id="sources" hidden>
+    <iframe data-embed="/workspace/manage?section=sources" title="Sources" loading="lazy"></iframe>
+  </main>
+
+  <!-- TOASTS & STATUS BAR -->
+  <output id="ingest-toast" class="ingest-toast" aria-live="polite"></output>
+  <div id="sm-toast" class="sm-toast" role="status" aria-live="polite" hidden></div>
+  <footer class="shell-status" aria-label="Live workspace telemetry">
+    <span id="sm-live-nvenc">FFmpeg · checking</span>
+    <span id="sm-live-source">yt-dlp · checking</span>
+    <span id="sm-live-queue">Film Roll · checking</span>
+    <a href="/workspace?view=system" data-shell-link="system" class="ml-auto font-semibold">Posting locked off</a>
+  </footer>
+
+  <!-- COMMAND PALETTE & KEYBOARD SHORTCUTS DIALOGS -->
+  <dialog class="p5-dialog" id="p5-command" aria-labelledby="p5-command-title">
+    <header>
+      <h2 id="p5-command-title" class="font-display text-lg font-bold">Command palette</h2>
+      <button type="button" data-close aria-label="Close command palette" class="mini-btn">Close</button>
+    </header>
+    <input id="p5-search" aria-label="Find a command" placeholder="Find a command…" autocomplete="off">
+    <div id="p5-results"></div>
+  </dialog>
+
+  <dialog class="p5-dialog" id="p5-help" aria-labelledby="p5-help-title">
+    <header>
+      <h2 id="p5-help-title" class="font-display text-lg font-bold">Keyboard shortcuts</h2>
+      <button type="button" data-close autofocus class="mini-btn">Close</button>
+    </header>
+    <dl>
+      <dt>Ctrl+K</dt><dd>Command palette</dd>
+      <dt>?</dt><dd>Keyboard shortcuts</dd>
+      <dt>\</dt><dd>Compare Source and Exported MP4 side-by-side</dd>
+      <dt>, / .</dt><dd>Step −1 / +1 frame (probed FPS)</dd>
+      <dt>Space / K</dt><dd>Play / pause in the viewfinder</dd>
+      <dt>J / L</dt><dd>Shuttle rewind (−2s) / fast-forward (1× → 1.5× → 2×)</dd>
+      <dt>M</dt><dd>Toggle preview mute</dd>
+      <dt>Left / Right</dt><dd>Seek by one second in the viewfinder</dd>
+      <dt>I / O</dt><dd>Set source trim In / Out</dd>
+      <dt>Ctrl+Enter</dt><dd>Approve selected clip</dd>
+      <dt>1–5 / A / H</dt><dd>Rate clip ★ / Approve / Hold · N / P for Next / Prev</dd>
+      <dt>Shift+Click / Shift+Enter</dt><dd>Select a range for bulk Film Roll triage</dd>
+    </dl>
+  </dialog>
+</body>
+</html>
