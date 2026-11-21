@@ -505,9 +505,18 @@
             <div class="queue-handoff multi-ship-card">
               <h4>✨ Original Content Studio (18 Creator Tools)</h4>
               <p class="muted">Turn clips into genuinely original commentary, reaction, breakdown &amp; comparison videos locally with FFmpeg.</p>
+              <div id="studio-no-clip-banner" class="dup-warning" style="margin:8px 0;">
+                <span>👆 Select a clip in Film Roll (left) to unlock Studio FX &amp; Export.</span>
+                <div><button type="button" id="studio-pick-first" class="mini-btn">Select First Clip</button></div>
+              </div>
               <div class="export-btn-row">
                 <button type="button" id="studio-export-now" class="vice-btn-primary" disabled>🚀 Export MP4 with Studio FX</button>
                 <button type="button" id="studio-reset-all" class="cancel-btn">Reset Studio FX</button>
+              </div>
+              <div class="export-progress-wrap" id="studio-export-progress-wrap" hidden>
+                <progress id="studio-export-progress" max="100" value="0"></progress>
+                <output id="studio-export-progress-text">0%</output>
+                <button type="button" id="studio-export-cancel" class="cancel-btn">Cancel</button>
               </div>
               <output id="studio-active-summary" class="muted" role="status">No Studio FX active yet.</output>
             </div>

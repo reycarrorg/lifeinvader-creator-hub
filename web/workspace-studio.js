@@ -667,9 +667,43 @@ if ($('studio-cmp-go')) $('studio-cmp-go').onclick = async () => {
 };
 
 // Export Now & Reset All Studio FX
-if ($('studio-export-now')) $('studio-export-now').onclick = () => {
- $('edit-transcode')?.click();
+if ($('studio-pick-first')) $('studio-pick-first').onclick = () => {
+ const list = app()?.getVisibleItems?.() || [];
+ const first = list.find(r => r.from_sources) || list[0];
+ if (first) {
+  app().select(first);
+  app().note('Selected "' + first.name + '" — Studio FX unlocked!');
+ } else {
+  app().note('No playable clips in Film Roll yet. Drop an MP4 or sync Sources first.');
+ }
 };
+
+if ($('studio-export-now')) $('studio-export-now').onclick = () => {
+ const row = app()?.getSelected?.();
+ if (!row?.from_sources) {
+  app().note('Select a Film Roll clip first before exporting.');
+  return;
+ }
+ const tBtn = $('edit-transcode');
+ if (!tBtn || tBtn.disabled) {
+  app().note('Waiting for video duration to finish loading — try again in a second.');
+  return;
+ }
+ if ($('studio-active-summary')) $('studio-active-summary').textContent = '⏳ Rendering MP4 with Studio FX…';
+ tBtn.click();
+};
+
+function syncClipSelectionUI(row) {
+ const ok = Boolean(row?.from_sources);
+ if ($('studio-export-now')) $('studio-export-now').disabled = !ok;
+ if ($('studio-no-clip-banner')) $('studio-no-clip-banner').hidden = ok;
+ populateCompareDropdowns();
+ syncStudioSummary();
+}
+
+window.addEventListener('snapmatic:exported', () => {
+ if ($('studio-active-summary')) $('studio-active-summary').textContent = '✓ ' + ($('edit-state')?.textContent || 'Exported MP4 with Studio FX!');
+});
 
 if ($('studio-reset-all')) $('studio-reset-all').onclick = () => {
  state.voiceover_path = null;
@@ -705,10 +739,7 @@ app()?.getVideo()?.addEventListener('timeupdate', () => {
 });
 
 window.addEventListener('snapmatic:clip-selected', e => {
- const ok = Boolean(e.detail?.row?.from_sources);
- if ($('studio-export-now')) $('studio-export-now').disabled = !ok;
- populateCompareDropdowns();
- syncStudioSummary();
+ syncClipSelectionUI(e.detail?.row);
 });
 
 // Expose export payload merger for workspace.js
@@ -744,7 +775,7 @@ window.snapmaticStudio = {
  populateCompareDropdowns,
 };
 
-setTimeout(populateCompareDropdowns, 1200);
+setTimeout(() => { populateCompareDropdowns(); syncClipSelectionUI(app()?.getSelected?.()); }, 1200);
 renderMontageList();
-syncStudioSummary();
+syncClipSelectionUI(app()?.getSelected?.());
 })();

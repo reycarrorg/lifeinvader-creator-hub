@@ -1036,6 +1036,12 @@ function updateExportProgressUI(p){
   if(bar)bar.value=Number(p?.percent)||0;
   if(txt)txt.textContent=(Number(p?.percent)||0)+'%'+(p?.encoder?' · '+p.encoder:'');
  }
+ const sWrap=$('studio-export-progress-wrap'),sBar=$('studio-export-progress'),sTxt=$('studio-export-progress-text');
+ if(sWrap){
+  sWrap.hidden=!exportJobActive;
+  if(sBar)sBar.value=Number(p?.percent)||0;
+  if(sTxt)sTxt.textContent=(Number(p?.percent)||0)+'%'+(p?.message?' · '+p.message:'');
+ }
  if(gBarWrap){
   gBarWrap.hidden=!(exportJobActive&&isBatch);
   if(isBatch){
@@ -1067,6 +1073,7 @@ async function cancelActiveExport(){
  try{await fetch('/api/workspace/film-roll/export-cancel',{method:'POST',credentials:'same-origin'});note('Cancelling export…');}catch{}
 }
 if($('export-cancel'))$('export-cancel').onclick=cancelActiveExport;
+if($('studio-export-cancel'))$('studio-export-cancel').onclick=cancelActiveExport;
 if($('gallery-batch-cancel'))$('gallery-batch-cancel').onclick=cancelActiveExport;
 
 const EXPORT_PREFS_KEY='snapmatic-export-prefs-v1';
@@ -1274,7 +1281,7 @@ $('edit-transcode').onclick=async()=>{
     {label:'Upload →',onClick:()=>setInspectorTab('upload')}
    ]);
    await reload();refreshLocalStatus();loadExportHistory();renderNvenc();phase5Panel();workFlow();
-  }catch(e){$('edit-state').textContent='Export failed: '+e.message;note('Export: '+e.message);}
+  }catch(e){$('edit-state').textContent='Export failed: '+e.message;if($('studio-active-summary'))$('studio-active-summary').textContent='✕ Export failed: '+e.message;note('Export: '+e.message);}
   finally{stopExportPoll();updateExportProgressUI({active:false});renderNvenc();}
   return;
  }

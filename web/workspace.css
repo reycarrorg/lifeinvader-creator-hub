@@ -72,6 +72,28 @@
   box-sizing: border-box;
 }
 
+html {
+  scroll-padding-top: 100px;
+}
+
+.inspector details,
+.inspector summary,
+.inspector button,
+.inspector input,
+.inspector select,
+.inspector textarea {
+  scroll-margin-top: 100px;
+}
+
+@media (min-width: 1221px) {
+  .desk > .rail,
+  .desk > .stage {
+    position: sticky;
+    top: 66px;
+    align-self: start;
+  }
+}
+
 [hidden] {
   display: none !important;
 }
@@ -2407,13 +2429,14 @@ input[type="checkbox"] {
 .snapmatic-shell .shell-sources iframe { height: calc(100dvh - 106px); min-height: 760px; }
 
 /* Toasts, Status Bar & Modals */
-.ingest-toast { position: fixed; right: 16px; bottom: 48px; z-index: 40; max-width: min(420px, 90vw); background: var(--panel-solid); color: var(--text); border: 1px solid var(--cyan); box-shadow: var(--shadow-glow-cyan); padding: 10px 14px; border-radius: 12px; font-size: 12.5px; }
+.ingest-toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 48px; z-index: 40; max-width: min(460px, 90vw); background: var(--panel-solid); color: var(--text); border: 1px solid var(--cyan); box-shadow: var(--shadow-glow-cyan); padding: 10px 14px; border-radius: 12px; font-size: 12.5px; }
 .ingest-toast:empty { display: none; }
 
 .sm-toast {
   position: fixed;
-  right: 18px;
-  bottom: 48px;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 18px;
   z-index: 45;
   display: flex;
   align-items: center;

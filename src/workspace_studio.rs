@@ -636,9 +636,9 @@ pub(crate) fn build_studio_video_filters(opts: &StudioExportOptions, out_dur_s: 
         let peak_extra = (opts.zoom_punch_scale.unwrap_or(1.35).clamp(1.12, 1.75)) - 1.0;
         let half = dur * 0.5;
         let t1 = t0 + dur;
-        // Single-pass smooth zoompan preserving 30fps and frame dimensions
+        // Single-pass smooth zoompan preserving 30fps and frame dimensions (using frame index on/30 so frame 0 is never NaN)
         filters.push(format!(
-            "zoompan=z='if(between(in_time\\,{t0:.2}\\,{t1:.2})\\,1+{peak_extra:.3}*(1-abs(in_time-{mid:.2})/{half:.2})\\,1)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1080x1920:fps=30",
+            "zoompan=z='if(between(on/30\\,{t0:.2}\\,{t1:.2})\\,1+{peak_extra:.3}*(1-abs(on/30-{mid:.2})/{half:.2})\\,1)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1080x1920:fps=30",
             mid = t0 + half
         ));
     }
@@ -852,7 +852,7 @@ pub(crate) fn apply_studio_post_passes(
             let layout = opts.reaction_cam_layout.as_deref().unwrap_or("corner_tr");
             if layout == "split_top" {
                 fc.push(format!(
-                    "[{ci}:v]scale=1080:640:force_original_aspect_ratio=increase,crop=1080:640[camv];{cur_v}scale=1080:1280:force_original_aspect_ratio=increase,crop=1080:1280[mainv];[camv][mainv]vstack=inputs=2[vcam]"
+                    "[{ci}:v]scale=1080:640:force_original_aspect_ratio=increase,crop=1080:640,setsar=1,fps=30,format=yuv420p[camv];{cur_v}scale=1080:1280:force_original_aspect_ratio=increase,crop=1080:1280,setsar=1,fps=30,format=yuv420p[mainv];[camv][mainv]vstack=inputs=2[vcam]"
                 ));
             } else {
                 let (ox, oy) = match layout {
@@ -862,7 +862,7 @@ pub(crate) fn apply_studio_post_passes(
                     _ => ("W-w-36", "140"),
                 };
                 fc.push(format!(
-                    "[{ci}:v]scale=310:310:force_original_aspect_ratio=increase,crop=310:310,pad=320:320:5:5:#00E5FF[camv];{cur_v}[camv]overlay={ox}:{oy}:shortest=1[vcam]"
+                    "[{ci}:v]scale=310:310:force_original_aspect_ratio=increase,crop=310:310,setsar=1,pad=320:320:5:5:#00E5FF[camv];{cur_v}[camv]overlay={ox}:{oy}:shortest=1[vcam]"
                 ));
             }
             cur_v = "[vcam]".to_owned();
@@ -933,7 +933,8 @@ pub(crate) fn apply_studio_post_passes(
             args.push("-filter_complex".into());
             args.push(fc.join(";"));
         }
-        args.extend(["-map".into(), cur_v]);
+        let map_v = if cur_v == "[0:v]" { "0:v".to_owned() } else { cur_v };
+        args.extend(["-map".into(), map_v]);
         if let Some(a_lbl) = cur_a {
             args.extend(["-map".into(), a_lbl]);
         } else if src_has_audio {
@@ -1305,7 +1306,7 @@ pub(crate) async fn render_montage(
             let safe_lbl = escape_drawtext(&label.chars().take(40).collect::<String>());
             let has_a = has_audio_stream(&ffmpeg, src);
             let vf = format!(
-                "crop='min(iw,ih*9/16)':'min(ih,iw*16/9)':'(iw-ow)/2':'(ih-oh)/2',scale=1080:1920:flags=lanczos{grade_str},drawtext={font_opt}expansion=none:enable='lt(t\\,2.2)':text='{safe_lbl}':fontcolor=#FFE600:fontsize=54:box=1:boxcolor=#FF2E93@0.86:boxborderw=18:x=(w-text_w)/2:y=h*0.14,fade=t=in:st=0:d=0.22"
+                "crop='min(iw,ih*9/16)':'min(ih,iw*16/9)':'(iw-ow)/2':'(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,fps=30,format=yuv420p{grade_str},drawtext={font_opt}expansion=none:enable='lt(t\\,2.2)':text='{safe_lbl}':fontcolor=#FFE600:fontsize=54:box=1:boxcolor=#FF2E93@0.86:boxborderw=18:x=(w-text_w)/2:y=h*0.14,fade=t=in:st=0:d=0.22"
             );
             let mut args: Vec<String> = vec![
                 "-y".into(), "-hide_banner".into(), "-loglevel".into(), "error".into(),
@@ -1436,11 +1437,11 @@ pub(crate) async fn render_comparison(
 
         let fc = if horizontal {
             format!(
-                "[0:v]scale=540:1920:force_original_aspect_ratio=increase,crop=540:1920,drawtext={font_opt}expansion=none:text='{safe_a}':fontcolor=white:fontsize=38:box=1:boxcolor=#FF2E93@0.88:boxborderw=14:x=(w-text_w)/2:y=h*0.14[va];[1:v]scale=540:1920:force_original_aspect_ratio=increase,crop=540:1920,drawtext={font_opt}expansion=none:text='{safe_b}':fontcolor=#090812:fontsize=38:box=1:boxcolor=#00E5FF@0.92:boxborderw=14:x=(w-text_w)/2:y=h*0.14[vb];[va][vb]hstack=inputs=2{grade},drawbox=x=538:y=0:w=4:h=ih:color=#00E5FF:t=fill,drawtext={font_opt}expansion=none:text='{safe_t}':fontcolor=#FFE600:fontsize=44:box=1:boxcolor=#090812@0.86:boxborderw=16:x=(w-text_w)/2:y=h*0.05[v]"
+                "[0:v]scale=540:1920:force_original_aspect_ratio=increase,crop=540:1920,setsar=1,fps=30,format=yuv420p,drawtext={font_opt}expansion=none:text='{safe_a}':fontcolor=white:fontsize=38:box=1:boxcolor=#FF2E93@0.88:boxborderw=14:x=(w-text_w)/2:y=h*0.14[va];[1:v]scale=540:1920:force_original_aspect_ratio=increase,crop=540:1920,setsar=1,fps=30,format=yuv420p,drawtext={font_opt}expansion=none:text='{safe_b}':fontcolor=#090812:fontsize=38:box=1:boxcolor=#00E5FF@0.92:boxborderw=14:x=(w-text_w)/2:y=h*0.14[vb];[va][vb]hstack=inputs=2{grade},drawbox=x=538:y=0:w=4:h=ih:color=#00E5FF:t=fill,drawtext={font_opt}expansion=none:text='{safe_t}':fontcolor=#FFE600:fontsize=44:box=1:boxcolor=#090812@0.86:boxborderw=16:x=(w-text_w)/2:y=h*0.05[v]"
             )
         } else {
             format!(
-                "[0:v]scale=1080:960:force_original_aspect_ratio=increase,crop=1080:960,drawtext={font_opt}expansion=none:text='{safe_a}':fontcolor=white:fontsize=42:box=1:boxcolor=#FF2E93@0.88:boxborderw=14:x=40:y=40[va];[1:v]scale=1080:960:force_original_aspect_ratio=increase,crop=1080:960,drawtext={font_opt}expansion=none:text='{safe_b}':fontcolor=#090812:fontsize=42:box=1:boxcolor=#00E5FF@0.92:boxborderw=14:x=40:y=40[vb];[va][vb]vstack=inputs=2{grade},drawbox=x=0:y=958:w=iw:h=5:color=#00E5FF:t=fill,drawtext={font_opt}expansion=none:text='{safe_t}':fontcolor=#FFE600:fontsize=44:box=1:boxcolor=#090812@0.86:boxborderw=16:x=(w-text_w)/2:y=(h-text_h)/2[v]"
+                "[0:v]scale=1080:960:force_original_aspect_ratio=increase,crop=1080:960,setsar=1,fps=30,format=yuv420p,drawtext={font_opt}expansion=none:text='{safe_a}':fontcolor=white:fontsize=42:box=1:boxcolor=#FF2E93@0.88:boxborderw=14:x=40:y=40[va];[1:v]scale=1080:960:force_original_aspect_ratio=increase,crop=1080:960,setsar=1,fps=30,format=yuv420p,drawtext={font_opt}expansion=none:text='{safe_b}':fontcolor=#090812:fontsize=42:box=1:boxcolor=#00E5FF@0.92:boxborderw=14:x=40:y=40[vb];[va][vb]vstack=inputs=2{grade},drawbox=x=0:y=958:w=iw:h=5:color=#00E5FF:t=fill,drawtext={font_opt}expansion=none:text='{safe_t}':fontcolor=#FFE600:fontsize=44:box=1:boxcolor=#090812@0.86:boxborderw=16:x=(w-text_w)/2:y=(h-text_h)/2[v]"
             )
         };
 
