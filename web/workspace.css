@@ -1428,7 +1428,7 @@ input[type="checkbox"] {
 
 .inspector-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 5px;
   padding: 7px 10px;
   border-block: 1px solid var(--line);
@@ -3273,4 +3273,161 @@ input[type="checkbox"] {
   border-color: rgba(255, 59, 92, 0.5);
   color: #ff6b86;
   background: rgba(255, 59, 92, 0.12);
+}
+
+/* ==========================================================================
+   ZERO-CDN NATIVE UTILITIES, CONDENSED SIDEBAR & STICKY EXPORT MP4 DOCK
+   ========================================================================== */
+
+.min-h-screen { min-height: 100vh; }
+.antialiased { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+.sticky { position: sticky; }
+.top-0 { top: 0; }
+.z-30 { z-index: 30; }
+.flex { display: flex; }
+.inline-flex { display: inline-flex; }
+.flex-col { flex-direction: column; }
+.flex-wrap { flex-wrap: wrap; }
+.flex-1 { flex: 1 1 0%; }
+.shrink-0 { flex-shrink: 0; }
+.items-center { align-items: center; }
+.justify-between { justify-content: space-between; }
+.justify-center { justify-content: center; }
+.gap-1 { gap: 4px; }
+.gap-1\.5 { gap: 6px; }
+.gap-2 { gap: 8px; }
+.gap-2\.5 { gap: 10px; }
+.gap-3 { gap: 12px; }
+.ml-auto { margin-left: auto; }
+.m-0 { margin: 0; }
+.mt-2 { margin-top: 8px; }
+.mb-4 { margin-bottom: 16px; }
+.p-3\.5 { padding: 14px; }
+.p-4 { padding: 16px; }
+.w-full { width: 100%; }
+.text-center { text-align: center; }
+.text-xs { font-size: 12px; }
+.text-lg { font-size: 18px; }
+.font-semibold { font-weight: 600; }
+.font-bold { font-weight: 700; }
+.font-display { font-family: var(--font-display); }
+.font-mono { font-family: var(--font-mono); }
+.rounded-md { border-radius: 6px; }
+.rounded-lg { border-radius: 8px; }
+.rounded-xl { border-radius: 12px; }
+.rounded-2xl { border-radius: 16px; }
+.shadow-2xl { box-shadow: 0 24px 50px -12px rgba(0, 0, 0, 0.72); }
+.space-y-3 > * + * { margin-top: 12px; }
+.animate-pulse { animation: smPulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+@keyframes smPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+
+/* Top header & condensed sidebar polish (zero Tailwind dependency) */
+.brand-aperture { width: 36px; height: 36px; padding: 2px; position: relative; }
+.brand-logo-img { width: 100%; height: 100%; border-radius: 10px; object-fit: contain; display: block; }
+.brand-wordmark { font-size: 17px; font-weight: 700; letter-spacing: 0.12em; line-height: 1; }
+.brand-sub { display: block; margin-top: 4px; font-size: 9px; font-weight: 600; letter-spacing: 0.2em; }
+.channel-picker { padding: 4px 10px; font-size: 12px; font-weight: 500; }
+.picker-lbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.75; }
+.channel-picker select { padding: 4px 8px; font-size: 12px; font-weight: 600; }
+.theme-toggle-btn { padding: 6px 12px; font-size: 12px; font-weight: 600; }
+.readonly-pill { padding: 6px 10px; font-size: 11px; font-weight: 700; }
+.top-right-tools .posting-lock { padding: 6px 10px; font-size: 10px; font-weight: 700; letter-spacing: 0.06em; }
+.rail-section-label { padding: 2px 8px 4px; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.18em; opacity: 0.6; }
+.nav-item-link { padding: 9px 12px; font-size: 12.5px; font-weight: 600; transition: all 0.16s ease; }
+.nav-ico { width: 16px; height: 16px; opacity: 0.85; }
+.rail-quick-btns { display: grid; grid-template-columns: 1fr auto; gap: 6px; margin-top: 8px; }
+.rail-cmd-btn { padding: 8px 10px; font-size: 11px; font-weight: 600; }
+.rail-cmd-btn kbd { padding: 2px 6px; border-radius: 5px; font-size: 9px; }
+.rail-help-btn { width: 36px; padding: 8px 0; font-size: 12px; font-weight: 700; }
+.streak-pill { margin-top: 8px; }
+
+/* View Sub-Tabs (Analytics | Calendar, Connections & Tools | Exports & Receipts) */
+.view-subtabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 12px;
+  border-radius: 11px;
+  border: 1px solid var(--line);
+  background: var(--card);
+}
+
+.view-subtabs a {
+  padding: 6px 14px;
+  border-radius: 8px;
+  font: 700 12px var(--font-sans);
+  color: var(--muted);
+  text-decoration: none;
+  transition: all 0.15s ease;
+}
+
+.view-subtabs a:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.view-subtabs a[aria-current="page"] {
+  background: var(--grad-vice-soft);
+  border: 1px solid rgba(0, 229, 255, 0.45);
+  color: var(--text);
+  box-shadow: 0 4px 14px -6px rgba(0, 229, 255, 0.5);
+}
+
+/* Compact Pro Studio status strip */
+.studio-status-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--card);
+}
+
+.studio-status-strip output {
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+/* Sticky Export MP4 Footer Dock on Studio Controls */
+.inspector.panel {
+  overflow: clip;
+}
+
+.inspector-export-dock {
+  position: sticky;
+  bottom: 26px;
+  z-index: 6;
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--line-strong);
+  border-radius: 0 0 16px 16px;
+  background: rgba(17, 15, 31, 0.96);
+  backdrop-filter: blur(12px);
+}
+
+:root[data-theme="light"] .inspector-export-dock {
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.export-dock-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.export-dock-main {
+  flex: 1;
+  padding: 9px 14px !important;
+  font: 700 12.5px var(--font-sans) !important;
+  border-radius: 10px !important;
+}
+
+.export-dock-status {
+  margin: 6px 0 0;
+  font-size: 10.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

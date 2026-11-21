@@ -104,6 +104,8 @@ pub(crate) struct TranscribeRequest {
     language: Option<String>,
     #[serde(default)]
     engine: Option<String>,
+    #[serde(default)]
+    force_refresh: bool,
 }
 
 #[derive(Deserialize, Default)]
@@ -592,10 +594,57 @@ async fn run_whisper_install(target_model: String) -> Result<(), String> {
                 "Download completed, but whisper-cli.exe or {file_name} was not found in tools/whisper/."
             ));
         }
+        prune_unused_whisper_files(&dir);
         Ok(())
     })
     .await
     .map_err(|e| format!("Install task panicked: {e}"))?
+}
+
+fn prune_unused_whisper_files(dir: &Path) {
+    // Keep only whisper-cli.exe + whisper.dll + ggml*.dll in extracted subdirs
+    let keep_files = |name: &str| -> bool {
+        let low = name.to_ascii_lowercase();
+        low == "whisper-cli.exe"
+            || low == "whisper.dll"
+            || (low.starts_with("ggml") && (low.ends_with(".dll") || low.ends_with(".bin")))
+    };
+    for sub in [dir.to_path_buf(), dir.join("Release")] {
+        if let Ok(entries) = std::fs::read_dir(&sub) {
+            for ent in entries.flatten() {
+                let p = ent.path();
+                if p.is_file()
+                    && let Some(name) = p.file_name().and_then(|s| s.to_str())
+                    && !keep_files(name)
+                {
+                    let _ = std::fs::remove_file(&p);
+                }
+            }
+        }
+    }
+    // Once ggml-small.en.bin is installed and verified, drop legacy ggml-base.en.bin (saves 141 MB)
+    let small = dir.join("ggml-small.en.bin");
+    let base = dir.join("ggml-base.en.bin");
+    if small.is_file()
+        && std::fs::metadata(&small).map(|m| m.len()).unwrap_or(0) > 400_000_000
+        && base.is_file()
+    {
+        let _ = std::fs::remove_file(&base);
+    }
+}
+
+fn studio_transcripts_dir(app: &App) -> PathBuf {
+    let dir = studio_media_dir(app).join("transcripts");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+fn whisper_optimal_threads() -> String {
+    let logical = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    let physical = (logical / 2).clamp(2, 8);
+    physical.to_string()
 }
 
 // ==========================================================================
@@ -987,6 +1036,8 @@ pub(crate) async fn transcribe_clip(
 
     let in_ms = input.in_ms.unwrap_or(0);
     let out_ms_opt = input.out_ms;
+    let force_refresh = input.force_refresh;
+    let cache_dir = studio_transcripts_dir(&app);
     let lang = input
         .language
         .as_deref()
@@ -1001,6 +1052,28 @@ pub(crate) async fn transcribe_clip(
             .unwrap_or(60_000);
         let end_ms = out_ms_opt.filter(|&e| e > in_ms).unwrap_or(dur_ms).min(dur_ms.max(1000));
         let span_ms = end_ms.saturating_sub(in_ms).max(500);
+
+        let engine_sig = if req_engine != "local"
+            && let Some(ref creds) = cloud_creds
+        {
+            format!("cloud-{}", creds.provider)
+        } else if let Some((_, ref mp)) = local_install {
+            let mn = mp.file_name().and_then(|s| s.to_str()).unwrap_or("local");
+            let (_, tier, _) = model_rank_and_tier(mn);
+            format!("local-{tier}")
+        } else {
+            "unknown".to_owned()
+        };
+        let cache_file = cache_dir.join(format!("{clip_id}_{in_ms}_{end_ms}_{lang}_{engine_sig}.json"));
+        if !force_refresh
+            && cache_file.is_file()
+            && let Ok(raw_cached) = std::fs::read_to_string(&cache_file)
+            && let Ok(mut cached_val) = serde_json::from_str::<Value>(&raw_cached)
+            && cached_val["words"].as_array().is_some_and(|a| !a.is_empty())
+        {
+            cached_val["cached"] = json!(true);
+            return Ok(cached_val);
+        }
 
         let stamp = uuid::Uuid::new_v4().simple();
         let wav_path = std::env::temp_dir().join(format!("snapmatic-whisper-{stamp}.wav"));
@@ -1042,12 +1115,17 @@ pub(crate) async fn transcribe_clip(
                 match cloud_res {
                     Ok((words, engine_label)) => {
                         let count = words.len();
-                        return Ok(json!({
+                        let payload = json!({
                             "words": words,
                             "word_count": count,
                             "duration_ms": span_ms,
-                            "engine": engine_label
-                        }));
+                            "engine": engine_label,
+                            "cached": false
+                        });
+                        if count > 0 {
+                            let _ = std::fs::write(&cache_file, payload.to_string());
+                        }
+                        return Ok(payload);
                     }
                     Err(err) => {
                         if req_engine == "cloud" || local_install.is_none() {
@@ -1096,6 +1174,7 @@ pub(crate) async fn transcribe_clip(
             .and_then(|s| s.to_str())
             .unwrap_or("ggml-base.en.bin");
         let (_, model_tier, dtw_preset) = model_rank_and_tier(model_name);
+        let threads = whisper_optimal_threads();
 
         let run_local = |use_dtw: bool| -> Result<std::process::Output, String> {
             let mut wcmd = std::process::Command::new(&whisper_bin);
@@ -1107,6 +1186,8 @@ pub(crate) async fn transcribe_clip(
                 .arg("-f")
                 .arg(&wav_path)
                 .args([
+                    "-t",
+                    &threads,
                     "-l",
                     &lang,
                     "-bs",
@@ -1154,12 +1235,17 @@ pub(crate) async fn transcribe_clip(
         };
         let words = parse_whisper_json_words(&raw);
         let count = words.len();
-        Ok(json!({
+        let payload = json!({
             "words": words,
             "word_count": count,
             "duration_ms": span_ms,
-            "engine": format!("whisper-local-{model_tier}-dtw")
-        }))
+            "engine": format!("whisper-local-{model_tier}-dtw"),
+            "cached": false
+        });
+        if count > 0 {
+            let _ = std::fs::write(&cache_file, payload.to_string());
+        }
+        Ok(payload)
     })
     .await
     .map_err(internal)?

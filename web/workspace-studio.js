@@ -4,6 +4,24 @@ const $ = id => document.getElementById(id);
 const app = () => window.snapmaticApp;
 
 const TPL_KEY = 'snapmatic-autocap-templates-v1';
+const CAP_CACHE_KEY = 'snapmatic-autocap-clips-v1';
+function readCapCache() { try { return JSON.parse(localStorage.getItem(CAP_CACHE_KEY) || '{}') || {}; } catch { return {}; } }
+function saveClipCaptions(clipId, words) {
+ if (!clipId) return;
+ try {
+  const map = readCapCache();
+  if (!Array.isArray(words) || !words.length) delete map[clipId];
+  else map[clipId] = { words, ts: Date.now() };
+  const keys = Object.keys(map).sort((a, b) => (map[b]?.ts || 0) - (map[a]?.ts || 0));
+  for (const k of keys.slice(25)) delete map[k];
+  localStorage.setItem(CAP_CACHE_KEY, JSON.stringify(map));
+ } catch {}
+}
+function loadClipCaptions(clipId) {
+ if (!clipId) return [];
+ const entry = readCapCache()[clipId];
+ return Array.isArray(entry?.words) ? entry.words : [];
+}
 const GRADE_CSS = {
  none: '',
  crisp_rec709: 'contrast(1.06) saturate(1.10) brightness(1.01)',
@@ -307,16 +325,18 @@ if ($('ac-cloud-clear')) $('ac-cloud-clear').onclick = async () => {
 // PRO LINE-BY-LINE TIMED TRANSCRIPT EDITOR (AutoCaption.io / TikTokCaptions.io style)
 // ==========================================================================
 function renderTranscriptLines() {
- const wrap = $('ac-editor-wrap'), list = $('ac-lines-list'), cnt = $('ac-word-count'), clr = $('ac-clear-words');
+ const wrap = $('ac-editor-wrap'), list = $('ac-lines-list'), cnt = $('ac-word-count'), clr = $('ac-clear-words'), rescan = $('ac-rescan-words');
  if (!wrap || !list) return;
  if (!state.words.length) {
   wrap.hidden = true;
   if (clr) clr.hidden = true;
+  if (rescan) rescan.hidden = true;
   list.replaceChildren();
   return;
  }
  wrap.hidden = false;
  if (clr) clr.hidden = false;
+ if (rescan) rescan.hidden = false;
  const cfg = getCaptionStyle();
  const phrases = buildPhrases(state.words, cfg.words_per_line);
  if (cnt) cnt.textContent = phrases.length + ' caption line' + (phrases.length === 1 ? '' : 's') + ' · ' + state.words.length + ' words';
@@ -380,6 +400,7 @@ function renderTranscriptLines() {
     });
     state.words.splice(firstIdx, spanCount, ...rebuilt);
    }
+   saveClipCaptions(app()?.getSelected?.()?.clip_id, state.words);
    renderTranscriptLines();
    syncStudioSummary();
   };
@@ -393,6 +414,7 @@ function renderTranscriptLines() {
   delBtn.title = 'Remove this caption line';
   delBtn.onclick = () => {
    state.words.splice(firstIdx, lastIdx - firstIdx + 1);
+   saveClipCaptions(app()?.getSelected?.()?.clip_id, state.words);
    renderTranscriptLines();
    syncStudioSummary();
   };
@@ -404,33 +426,36 @@ function renderTranscriptLines() {
 
 if ($('ac-clear-words')) $('ac-clear-words').onclick = () => {
  state.words = [];
+ saveClipCaptions(app()?.getSelected?.()?.clip_id, []);
  stopCaptionRaf();
  renderTranscriptLines();
  syncStudioSummary();
  if ($('ac-transcribe-status')) $('ac-transcribe-status').textContent = 'Cleared word captions.';
 };
 
-if ($('ac-transcribe-go')) $('ac-transcribe-go').onclick = async () => {
- const row = app()?.getSelected?.(), btn = $('ac-transcribe-go'), out = $('ac-transcribe-status');
- if (!row?.from_sources || btn.disabled) return;
+async function runTranscribe(forceRefresh = false) {
+ const row = app()?.getSelected?.(), btn = $('ac-transcribe-go'), rescan = $('ac-rescan-words'), out = $('ac-transcribe-status');
+ if (!row?.from_sources || btn?.disabled) return;
  if (!state.whisperReady && !state.cloudConfigured) {
   app().note('Click "Install Pro Whisper AI (488 MB)" first, or add a free Groq key.');
   return;
  }
- btn.disabled = true;
+ if (btn) btn.disabled = true;
+ if (rescan) rescan.disabled = true;
  const modeDesc = state.cloudConfigured ? 'Cloud Whisper Large-v3-Turbo' : ('Local Whisper ' + (state.hasSmall ? 'Small.en + DTW' : 'Base.en + DTW'));
- if (out) out.textContent = 'Isolating vocals & aligning spoken words with ' + modeDesc + '…';
+ if (out) out.textContent = (forceRefresh ? 'Re-scanning vocals & aligning words with ' : 'Isolating vocals & aligning spoken words with ') + modeDesc + '…';
  try {
   const es = app().getEditState();
   const r = await app().get('/api/workspace/studio/transcribe/' + encodeURIComponent(row.clip_id), {
    method: 'POST', headers: { 'Content-Type': 'application/json' },
-   body: JSON.stringify({ in_ms: es?.in_ms || 0, out_ms: es?.out_ms || null, language: 'en', engine: 'auto' })
+   body: JSON.stringify({ in_ms: es?.in_ms || 0, out_ms: es?.out_ms || null, language: 'en', engine: 'auto', force_refresh: Boolean(forceRefresh) })
   });
   state.words = Array.isArray(r.words) ? r.words : [];
+  saveClipCaptions(row.clip_id, state.words);
   renderTranscriptLines();
   syncStudioSummary();
   if (state.words.length) {
-   const eng = r.engine || modeDesc;
+   const eng = (r.engine || modeDesc) + (r.cached ? ' · instant cache' : '');
    if (out) out.textContent = '✓ Aligned ' + state.words.length + ' spoken words (' + eng + ')! Press Play to preview 60fps karaoke.';
    app().note('✨ Auto-generated ' + state.words.length + ' word-aligned captions (' + eng + ')!');
   } else {
@@ -441,9 +466,13 @@ if ($('ac-transcribe-go')) $('ac-transcribe-go').onclick = async () => {
   if (out) out.textContent = 'Transcription failed: ' + e.message;
   app().note('Transcription failed: ' + e.message);
  } finally {
+  if (rescan) rescan.disabled = false;
   syncClipSelectionUI(app()?.getSelected?.());
  }
-};
+}
+
+if ($('ac-transcribe-go')) $('ac-transcribe-go').onclick = () => runTranscribe(false);
+if ($('ac-rescan-words')) $('ac-rescan-words').onclick = () => runTranscribe(true);
 
 // Style preset cards, colors, sliders & checkboxes
 document.querySelectorAll('#ac-style-grid button[data-ac-preset]').forEach(btn => {
@@ -890,13 +919,19 @@ function syncClipSelectionUI(row) {
 }
 
 window.addEventListener('snapmatic:clip-selected', e => {
- state.words = [];
+ const row = e.detail?.row;
  stopCaptionRaf();
+ state.words = row?.clip_id ? loadClipCaptions(row.clip_id) : [];
  if ($('ac-highlights-list')) $('ac-highlights-list').replaceChildren();
  if ($('ac-highlights-status')) $('ac-highlights-status').textContent = '';
  if ($('hook-gen-topic')) $('hook-gen-topic').value = '';
+ if ($('ac-transcribe-status')) {
+  $('ac-transcribe-status').textContent = state.words.length
+   ? '✓ Restored ' + state.words.length + ' saved caption words for this clip.'
+   : 'Uses vocal-isolated Whisper AI + DTW word alignment for tight karaoke sync.';
+ }
  renderTranscriptLines();
- syncClipSelectionUI(e.detail?.row);
+ syncClipSelectionUI(row);
  renderGeneratedHooks();
 });
 

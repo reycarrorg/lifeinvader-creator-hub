@@ -7,44 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet">
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    if (window.tailwind) {
-      tailwind.config = {
-        theme: {
-          extend: {
-            colors: {
-              vice: {
-                bg: '#090812',
-                surface: '#110F1F',
-                card: '#161329',
-                border: '#2B254A',
-                pink: '#FF2E93',
-                magenta: '#D946EF',
-                cyan: '#00E5FF',
-                gold: '#FF9E2C',
-                mint: '#10F5A0',
-                crimson: '#FF3B5C',
-              }
-            },
-            fontFamily: {
-              display: ['"Space Grotesk"', '"Plus Jakarta Sans"', 'system-ui', 'sans-serif'],
-              sans: ['"Plus Jakarta Sans"', '"Segoe UI Variable"', 'system-ui', 'sans-serif'],
-              mono: ['"JetBrains Mono"', 'Consolas', 'ui-monospace', 'monospace'],
-            },
-            boxShadow: {
-              'vice-cyan': '0 0 22px -4px rgba(0, 229, 255, 0.45)',
-              'vice-pink': '0 0 24px -4px rgba(255, 46, 147, 0.48)',
-              'vice-sunset': '0 8px 28px -6px rgba(255, 46, 147, 0.35), 0 0 18px -6px rgba(0, 229, 255, 0.35)',
-              'vice-card': '0 14px 36px -14px rgba(4, 3, 14, 0.78)',
-            }
-          }
-        }
-      };
-    }
-  </script>
   <link rel="stylesheet" href="/workspace.css">
-  <script src="/workspace-preflight.js" defer></script>
   <script src="/workspace-platform-draft.js" defer></script>
   <script src="/workspace-edit.js" defer></script>
   <script src="/workspace-phase5.js" defer></script>
@@ -57,23 +20,23 @@
   <link rel="manifest" href="/manifest.webmanifest?v=aperture-1">
   <meta name="theme-color" content="#090812">
 </head>
-<body class="snapmatic-shell min-h-screen antialiased selection:bg-vice-pink/30 selection:text-white">
+<body class="snapmatic-shell min-h-screen antialiased">
 
   <!-- TOP COMMAND HEADER -->
-  <header class="top sticky top-0 z-30 backdrop-blur-xl">
-    <a class="identity group flex items-center gap-3 transition-transform duration-200 hover:scale-[1.01]" href="/workspace?view=studio" aria-label="Snapmatic home">
-      <div class="brand-aperture relative flex h-9 w-9 shrink-0 items-center justify-center rounded-xl p-[2px]">
-        <img src="/icon-192.png?v=aperture-1" alt="" width="30" height="30" class="h-full w-full rounded-[10px] object-contain">
+  <header class="top sticky top-0 z-30">
+    <a class="identity flex items-center gap-3" href="/workspace?view=studio" aria-label="Snapmatic home">
+      <div class="brand-aperture flex shrink-0 items-center justify-center rounded-xl">
+        <img src="/icon-192.png?v=aperture-1" alt="" width="30" height="30" class="brand-logo-img">
       </div>
-      <span class="font-display text-[17px] font-bold tracking-[0.12em] leading-none">
+      <span class="brand-wordmark font-display">
         <span class="vice-brand-text">SNAPMATIC</span>
-        <small class="mt-1 block font-mono text-[9px] font-semibold tracking-[0.2em]">VICE CREATOR STUDIO</small>
+        <small class="brand-sub font-mono">VICE CREATOR STUDIO</small>
       </span>
     </a>
 
-    <label class="channel-picker flex items-center gap-2 rounded-lg px-2.5 py-1 text-xs font-medium">
-      <span class="text-[10px] font-mono uppercase tracking-wider opacity-75">Channel</span>
-      <select id="channel-scope" aria-label="Select channel profile" class="rounded-md px-2 py-1 text-xs font-semibold outline-none transition">
+    <label class="channel-picker flex items-center gap-2 rounded-lg">
+      <span class="picker-lbl font-mono">Channel</span>
+      <select id="channel-scope" aria-label="Select channel profile" class="rounded-md">
         <option value="all">All Channels</option>
       </select>
     </label>
@@ -81,62 +44,54 @@
     <div class="credentials flex flex-wrap items-center gap-2" id="credentials" aria-label="Provider credential status"></div>
 
     <div class="top-right-tools ml-auto flex flex-wrap items-center gap-2">
-      <button type="button" id="theme-toggle" class="theme-toggle-btn inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-all duration-200 hover:-translate-y-0.5" title="Switch Light / Dark theme" aria-label="Toggle Light or Dark theme">☀ Light</button>
-      <a class="readonly-pill inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-mono font-bold transition-all duration-200 hover:-translate-y-0.5" id="sm-tools-pill" href="/workspace?view=system" data-shell-link="system">Checking local tools…</a>
-      <a class="posting-lock inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[10px] font-mono font-bold tracking-wider transition-all duration-200 hover:-translate-y-0.5" href="/workspace?view=system" data-shell-link="system">AUTO-POSTING: OFF</a>
+      <button type="button" id="theme-toggle" class="theme-toggle-btn inline-flex items-center gap-1.5 rounded-lg" title="Switch Light / Dark theme" aria-label="Toggle Light or Dark theme">☀ Light</button>
+      <a class="readonly-pill inline-flex items-center gap-1.5 rounded-lg font-mono" id="sm-tools-pill" href="/workspace?view=system" data-shell-link="system">Checking local tools…</a>
+      <a class="posting-lock inline-flex items-center gap-1.5 rounded-lg font-mono" href="/workspace?view=system" data-shell-link="system">AUTO-POSTING: OFF</a>
     </div>
   </header>
 
-  <!-- LEFT NAVIGATION RAIL -->
+  <!-- LEFT NAVIGATION RAIL (CONDENSED) -->
   <div class="snapmatic-main-rail">
     <nav class="view-nav" aria-label="Snapmatic views">
-      <div class="rail-section-label px-2 pb-1 pt-0.5 font-mono text-[9px] font-bold uppercase tracking-[0.18em] opacity-60">STUDIO DECK</div>
-      <a href="/workspace?view=studio" data-view="studio" class="nav-item-link group flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-[12.5px] font-semibold transition-all duration-200">
-        <svg class="h-4 w-4 shrink-0 opacity-80 group-hover:opacity-100" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
+      <div class="rail-section-label font-mono">STUDIO DECK</div>
+      <a href="/workspace?view=studio" data-view="studio" class="nav-item-link flex items-center gap-2.5 rounded-xl">
+        <svg class="nav-ico shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
         <span>Viewfinder Studio</span>
       </a>
-      <a href="/workspace?view=gallery" data-view="gallery" class="nav-item-link group flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-[12.5px] font-semibold transition-all duration-200">
-        <svg class="h-4 w-4 shrink-0 opacity-80 group-hover:opacity-100" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>
+      <a href="/workspace?view=gallery" data-view="gallery" class="nav-item-link flex items-center gap-2.5 rounded-xl">
+        <svg class="nav-ico shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>
         <span>Film Roll Gallery</span>
       </a>
-      <a href="/workspace?view=insights" data-view="insights" class="nav-item-link group flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-[12.5px] font-semibold transition-all duration-200">
-        <svg class="h-4 w-4 shrink-0 opacity-80 group-hover:opacity-100" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
-        <span>Channel Insights</span>
+      <a href="/workspace?view=insights" data-view="insights" class="nav-item-link flex items-center gap-2.5 rounded-xl">
+        <svg class="nav-ico shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+        <span>Insights &amp; Calendar</span>
       </a>
-      <a href="/workspace?view=calendar" data-view="calendar" class="nav-item-link group flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-[12.5px] font-semibold transition-all duration-200">
-        <svg class="h-4 w-4 shrink-0 opacity-80 group-hover:opacity-100" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/></svg>
-        <span>Calendar</span>
-      </a>
-      <a href="/workspace?view=ledger" data-view="ledger" class="nav-item-link group flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-[12.5px] font-semibold transition-all duration-200">
-        <svg class="h-4 w-4 shrink-0 opacity-80 group-hover:opacity-100" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z"/><path d="M8 7h8"/><path d="M8 11h8"/><path d="M8 15h5"/></svg>
-        <span>Receipts &amp; Backups</span>
-      </a>
-      <a href="/workspace?view=system" data-view="system" class="nav-item-link group flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-[12.5px] font-semibold transition-all duration-200">
-        <svg class="h-4 w-4 shrink-0 opacity-80 group-hover:opacity-100" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
-        <span>Connections &amp; System</span>
+      <a href="/workspace?view=system" data-view="system" class="nav-item-link flex items-center gap-2.5 rounded-xl">
+        <svg class="nav-ico shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span>System &amp; Receipts</span>
       </a>
       <span class="nav-spacer"></span>
-      <div class="rail-quick-btns mt-2 grid grid-cols-[1fr_auto] gap-1.5">
-        <button id="p5-open-command" type="button" class="rail-cmd-btn flex items-center justify-between gap-1 rounded-xl px-2.5 py-2 text-[11px] font-semibold transition-all duration-200 hover:-translate-y-0.5">
+      <div class="rail-quick-btns">
+        <button id="p5-open-command" type="button" class="rail-cmd-btn flex items-center justify-between gap-1 rounded-xl">
           <span>Commands</span>
-          <kbd class="rounded px-1.5 py-0.5 font-mono text-[9px]">Ctrl+K</kbd>
+          <kbd class="font-mono">Ctrl+K</kbd>
         </button>
-        <button id="p5-open-help" type="button" aria-label="Keyboard shortcuts" class="rail-cmd-btn flex h-full w-9 items-center justify-center rounded-xl font-mono text-xs font-bold transition-all duration-200 hover:-translate-y-0.5">?</button>
+        <button id="p5-open-help" type="button" aria-label="Keyboard shortcuts" class="rail-cmd-btn rail-help-btn flex items-center justify-center rounded-xl font-mono">?</button>
       </div>
     </nav>
 
     <nav class="utility-strip" aria-label="Workspace tools">
-      <span class="px-2 font-mono text-[9px] font-bold uppercase tracking-[0.18em]">WORKSPACE TOOLS</span>
-      <a href="/workspace?view=profiles" data-shell-link="profiles" class="group flex items-center gap-2.5 rounded-xl px-3 py-2 text-[12px] font-semibold transition-all duration-200">
-        <svg class="h-4 w-4 shrink-0 opacity-80 group-hover:opacity-100" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      <span class="rail-section-label font-mono">WORKSPACE TOOLS</span>
+      <a href="/workspace?view=profiles" data-shell-link="profiles" class="nav-item-link flex items-center gap-2.5 rounded-xl">
+        <svg class="nav-ico shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
         <span>Profiles</span>
       </a>
-      <a href="/workspace?view=sources" data-shell-link="sources" class="group flex items-center gap-2.5 rounded-xl px-3 py-2 text-[12px] font-semibold transition-all duration-200">
-        <svg class="h-4 w-4 shrink-0 opacity-80 group-hover:opacity-100" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+      <a href="/workspace?view=sources" data-shell-link="sources" class="nav-item-link flex items-center gap-2.5 rounded-xl">
+        <svg class="nav-ico shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
         <span>Sources</span>
       </a>
       <span class="nav-spacer"></span>
-      <button type="button" id="streak-pill" class="streak-pill mt-2 w-full text-center transition-all duration-200 hover:-translate-y-0.5" title="Click to set your weekly posting goal">🔥 Streak: checking…</button>
+      <button type="button" id="streak-pill" class="streak-pill w-full text-center" title="Click to set your weekly posting goal">🔥 Streak: checking…</button>
     </nav>
   </div>
 
@@ -315,16 +270,15 @@
       </header>
 
       <div class="inspector-tabs" id="inspector-tabs" role="tablist" aria-label="Studio control sections">
-        <button type="button" role="tab" data-itab="captions" aria-selected="true">Captions</button>
-        <button type="button" role="tab" data-itab="create" aria-selected="false">Create ✨ <span id="itab-create-badge" class="itab-badge" hidden></span></button>
-        <button type="button" role="tab" data-itab="export" aria-selected="false">Export</button>
+        <button type="button" role="tab" data-itab="create" aria-selected="true">Create ✨ <span id="itab-create-badge" class="itab-badge" hidden></span></button>
+        <button type="button" role="tab" data-itab="captions" aria-selected="false">Captions</button>
         <button type="button" role="tab" data-itab="upload" aria-selected="false">Upload <span id="itab-upload-badge" class="itab-badge" hidden></span></button>
       </div>
 
       <div class="inspector-body flex-1">
 
         <!-- TAB 1: CAPTIONS -->
-        <div class="itab-pane" data-itab-pane="captions">
+        <div class="itab-pane" data-itab-pane="captions" hidden>
           <section aria-labelledby="draft-head" class="space-y-3">
             <div>
               <h3 id="draft-head" class="font-display">Caption Desk</h3>
@@ -384,25 +338,15 @@
         </div>
 
         <!-- TAB 2: CREATE ✨ (PRO AUTOCAPTION AI & STUDIO) -->
-        <div class="itab-pane" data-itab-pane="create" hidden>
+        <div class="itab-pane" data-itab-pane="create">
           <section aria-label="AutoCaption and Pro Studio" class="space-y-3">
-            <div class="queue-handoff multi-ship-card">
-              <h4>✨ AutoCaption &amp; Pro Studio</h4>
-              <p class="muted">Pro word-by-word karaoke captions (AutoCaption.io / TikTokCaptions.io style), jump-cuts, viral highlights, voice polish &amp; .cube LUTs.</p>
-              <div id="studio-no-clip-banner" class="dup-warning" style="margin:8px 0;">
-                <span>👆 Select a clip in Film Roll (left) to start captioning &amp; exporting.</span>
-                <div><button type="button" id="studio-pick-first" class="mini-btn">Select First Clip</button></div>
-              </div>
-              <div class="export-btn-row">
-                <button type="button" id="studio-export-now" class="vice-btn-primary" disabled>🚀 Export MP4 with Captions</button>
-                <button type="button" id="studio-reset-all" class="cancel-btn">Reset</button>
-              </div>
-              <div class="export-progress-wrap" id="studio-export-progress-wrap" hidden>
-                <progress id="studio-export-progress" max="100" value="0"></progress>
-                <output id="studio-export-progress-text">0%</output>
-                <button type="button" id="studio-export-cancel" class="cancel-btn">Cancel</button>
-              </div>
+            <div class="studio-status-strip">
               <output id="studio-active-summary" class="muted" role="status">No Pro Studio effects active yet.</output>
+              <button type="button" id="studio-reset-all" class="mini-btn cancel-btn">Reset</button>
+            </div>
+            <div id="studio-no-clip-banner" class="dup-warning" style="margin:4px 0;">
+              <span>👆 Select a clip in Film Roll (left) to start captioning &amp; exporting.</span>
+              <div><button type="button" id="studio-pick-first" class="mini-btn">Select First Clip</button></div>
             </div>
 
             <!-- TOOL 1: PRO AUTOCAPTION AI STUDIO -->
@@ -419,6 +363,7 @@
 
               <div class="export-btn-row">
                 <button type="button" id="ac-transcribe-go" class="vice-btn-primary" disabled>✨ Auto-Generate Captions</button>
+                <button type="button" id="ac-rescan-words" class="mini-btn" hidden title="Ignore cache and re-transcribe fresh">↻ Re-scan</button>
                 <button type="button" id="ac-clear-words" class="cancel-btn" hidden>Clear</button>
               </div>
               <output id="ac-transcribe-status" class="muted" role="status">Uses vocal-isolated Whisper AI + DTW word alignment for tight karaoke sync.</output>
@@ -614,28 +559,7 @@
           </section>
         </div>
 
-        <!-- TAB 3: EXPORT (CLEAN — EXPORT MP4 ONLY) -->
-        <div class="itab-pane" data-itab-pane="export" hidden>
-          <section aria-labelledby="local-edit-heading" class="space-y-3">
-            <div class="queue-handoff multi-ship-card">
-              <h3 id="local-edit-heading" class="font-display">Export MP4</h3>
-              <p class="muted">Renders a platform-ready 9:16 H.264 MP4 with your Viewfinder trim and any active Pro Studio captions, voice polish, or color grades.</p>
-              <div class="export-btn-row" style="margin-top:10px;">
-                <button type="button" id="edit-transcode" class="vice-btn-primary" disabled>Export MP4</button>
-                <button type="button" id="edit-open-derived" hidden>Play Exported MP4</button>
-                <button type="button" id="edit-open-exports">Open Exports Folder</button>
-              </div>
-              <div class="export-progress-wrap" id="export-progress-wrap" hidden>
-                <progress id="export-progress" max="100" value="0"></progress>
-                <output id="export-progress-text">0%</output>
-                <button type="button" id="export-cancel" class="cancel-btn">Cancel</button>
-              </div>
-              <p class="muted" id="edit-state" role="status">Select a clip in Film Roll to export.</p>
-            </div>
-          </section>
-        </div>
-
-        <!-- TAB 4: UPLOAD (CLEAN MULTI-PLATFORM SHIP) -->
+        <!-- TAB 3: UPLOAD (CLEAN MULTI-PLATFORM SHIP) -->
         <div class="itab-pane" data-itab-pane="upload" hidden>
           <section aria-label="Multi-platform upload" class="space-y-3">
             <div id="clip-shipped-links" class="shipped-banner" hidden></div>
@@ -644,7 +568,7 @@
             <div class="queue-handoff readiness-card" id="readiness-card">
               <h4>Platform Readiness</h4>
               <div id="upload-readiness" class="readiness-grid">Select a clip to check Shorts, Reels, TikTok &amp; X readiness.</div>
-              <div id="upload-unexported-warn" class="warn" hidden>You have unexported edits. Export MP4 first so uploads include your edits!</div>
+              <div id="upload-unexported-warn" class="warn" hidden>You have unexported edits. Click Export MP4 below first!</div>
               <div class="export-btn-row">
                 <button type="button" id="upload-autofix-btn" hidden>Auto-Fix &amp; Export 9:16 MP4</button>
                 <button type="button" id="upload-shorts-cut-btn" hidden>Export ≤59s Short</button>
@@ -687,6 +611,21 @@
         </div>
 
       </div>
+
+      <!-- STICKY EXPORT MP4 DOCK (ALWAYS 1 CLICK AWAY FROM EVERY TAB) -->
+      <footer class="inspector-export-dock" aria-label="Export MP4">
+        <div class="export-progress-wrap" id="export-progress-wrap" hidden>
+          <progress id="export-progress" max="100" value="0"></progress>
+          <output id="export-progress-text">0%</output>
+          <button type="button" id="export-cancel" class="cancel-btn">Cancel</button>
+        </div>
+        <div class="export-dock-row">
+          <button type="button" id="edit-transcode" class="vice-btn-primary export-dock-main" disabled>Export MP4</button>
+          <button type="button" id="edit-open-derived" class="mini-btn" hidden>▶ Play</button>
+          <button type="button" id="edit-open-exports" class="mini-btn" title="Open local exports folder">📁 Folder</button>
+        </div>
+        <p class="muted export-dock-status" id="edit-state" role="status">Select a clip in Film Roll to export.</p>
+      </footer>
     </aside>
   </main>
 
@@ -732,7 +671,11 @@
   <!-- VIEW 03: EXPORTS & RECEIPTS -->
   <main class="wide-view" id="ledger" hidden>
     <div class="feature-heading">
-      <div class="eyebrow">03 / EXPORTS &amp; RECEIPTS</div>
+      <div class="view-subtabs" role="tablist" aria-label="System and Receipts views">
+        <a href="/workspace?view=system" data-shell-link="system">Connections &amp; Tools</a>
+        <a href="/workspace?view=ledger" data-shell-link="ledger" aria-current="page">Exports &amp; Receipts</a>
+      </div>
+      <div class="eyebrow">04 / EXPORTS &amp; RECEIPTS</div>
       <h1 class="font-display vice-heading">Exports &amp; Receipts</h1>
       <p>Every local MP4 export rendered from Viewfinder Studio, plus verified provider receipts. Public auto-posting remains disabled.</p>
     </div>
@@ -771,6 +714,10 @@
   <!-- VIEW 04: CONNECTIONS & SYSTEM -->
   <main class="wide-view" id="system" hidden>
     <div class="feature-heading">
+      <div class="view-subtabs" role="tablist" aria-label="System and Receipts views">
+        <a href="/workspace?view=system" data-shell-link="system" aria-current="page">Connections &amp; Tools</a>
+        <a href="/workspace?view=ledger" data-shell-link="ledger">Exports &amp; Receipts</a>
+      </div>
       <div class="eyebrow">04 / DIAGNOSTICS</div>
       <h1 class="font-display vice-heading">Connections &amp; System</h1>
       <p>Connect your YouTube, Instagram, TikTok, and X accounts locally (stored securely in Windows Credential Manager), check installed tools, and manage storage.</p>
@@ -963,7 +910,11 @@
   <!-- VIEW 05: CHANNEL INSIGHTS -->
   <main class="wide-view" id="insights" hidden>
     <div class="feature-heading">
-      <div class="eyebrow">05 / ANALYTICS</div>
+      <div class="view-subtabs" role="tablist" aria-label="Insights and Calendar views">
+        <a href="/workspace?view=insights" data-shell-link="insights" aria-current="page">Analytics</a>
+        <a href="/workspace?view=calendar" data-shell-link="calendar">Content Calendar</a>
+      </div>
+      <div class="eyebrow">03 / ANALYTICS</div>
       <h1 class="font-display vice-heading">Channel Insights</h1>
       <p>Live metrics and recent uploads synced directly from your connected YouTube, Instagram, and TikTok accounts. Pull winning hashtags straight into Viewfinder Studio.</p>
       <div class="export-btn-row items-center">
@@ -1032,7 +983,11 @@
   <!-- VIEW 06: CONTENT CALENDAR -->
   <main class="wide-view" id="calendar" hidden>
     <div class="feature-heading">
-      <div class="eyebrow">06 / SCHEDULE</div>
+      <div class="view-subtabs" role="tablist" aria-label="Insights and Calendar views">
+        <a href="/workspace?view=insights" data-shell-link="insights">Analytics</a>
+        <a href="/workspace?view=calendar" data-shell-link="calendar" aria-current="page">Content Calendar</a>
+      </div>
+      <div class="eyebrow">03 / SCHEDULE</div>
       <h1 class="font-display vice-heading">Content Calendar</h1>
       <p>Unified publishing calendar across your published YouTube, Instagram, and TikTok posts, scheduled YouTube drafts, and Profile queues.</p>
     </div>
