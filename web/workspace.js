@@ -132,23 +132,80 @@ function loadChannelProfiles(){
 }
 loadChannelProfiles();
 
-let oauthStatus=null;
+let oauthStatus=null, analyticsData=null, analyticsLoad=null, igArmTimer=null;
+function igDaysLeft(info){
+ if(!info?.connected||!Number.isSafeInteger(info.expires_at)||info.expires_at<=0)return null;
+ return (info.expires_at-(Date.now()/1000))/86400;
+}
+function disarmIgPublish(){
+ if(igArmTimer){clearTimeout(igArmTimer);igArmTimer=null;}
+ const arm=$('ig-publish-arm'),conf=$('ig-publish-confirm');
+ if(conf)conf.hidden=true;
+ if(arm)arm.hidden=false;
+}
+function renderShipBadges(row){
+ if(!row?.yt_video_id&&!row?.ig_media_id)return null;
+ const wrap=node('span',undefined,'ship-badges');
+ if(row.yt_video_id)wrap.append(node('span','YT ✓','ship-badge ship-yt'));
+ if(row.ig_media_id)wrap.append(node('span','IG ✓','ship-badge ship-ig'));
+ return wrap;
+}
+function renderClipShippedBanner(row){
+ const box=$('clip-shipped-links');
+ if(!box)return;
+ if(!row||(!row.yt_video_id&&!row.ig_media_id)){box.hidden=true;box.replaceChildren();return;}
+ box.hidden=false;
+ const parts=[node('strong','Already uploaded:')];
+ if(row.yt_video_id){
+  const a=node('a','YouTube Studio ('+row.yt_video_id+') ↗','oauth-link');
+  a.href='https://studio.youtube.com/video/'+encodeURIComponent(row.yt_video_id)+'/edit';a.target='_blank';a.rel='noopener noreferrer';
+  parts.push(node('span','YT ✓','ship-badge ship-yt'),a);
+ }
+ if(row.ig_media_id){
+  parts.push(node('span','IG ✓','ship-badge ship-ig'));
+  if(row.ig_permalink){
+   const a=node('a','Instagram Reel ↗','oauth-link');a.href=row.ig_permalink;a.target='_blank';a.rel='noopener noreferrer';
+   parts.push(a);
+  }else{
+   parts.push(node('span','Media '+row.ig_media_id,'muted'));
+  }
+ }
+ box.replaceChildren(...parts);
+}
 function syncYoutubeDraftButton(){
  const btn=$('yt-upload-draft'),out=$('yt-upload-result');
- if(!btn)return;
- const connected=Boolean(oauthStatus?.youtube?.connected);
- btn.disabled=!connected||!selected?.from_sources;
- if(out&&!out.dataset.busy){
-  out.textContent=!connected?'Connect YouTube in Connections & System to upload private drafts (never public).':selected?.from_sources?'Uploads '+(selected.exported?'your exported MP4':'this source clip')+' strictly as a Private draft in YouTube Studio.':'Select a Film Roll clip to upload a Private draft.';
+ const ytConn=Boolean(oauthStatus?.youtube?.connected);
+ const sched=$('yt-draft-schedule'),priv=$('yt-draft-privacy');
+ if(sched&&priv){
+  if(sched.value){priv.value='private';priv.disabled=true;}
+  else priv.disabled=!ytConn||!selected?.from_sources;
  }
+ if(btn)btn.disabled=!ytConn||!selected?.from_sources;
+ if(out&&!out.dataset.busy){
+  const mode=sched?.value?'scheduled Private':(priv?.value==='unlisted'?'Unlisted':'Private');
+  out.textContent=!ytConn?'Connect YouTube in Connections & System to upload drafts (Private or Unlisted only).':selected?.from_sources?(selected.yt_video_id?'Already uploaded to YouTube ('+selected.yt_video_id+'). Uploading again creates a separate draft.':'Uploads '+(selected.exported?'your exported MP4':'this source clip')+' as a '+mode+' draft in YouTube Studio.'):'Select a Film Roll clip to upload a draft.';
+ }
+ const igTest=$('ig-upload-container'),igArm=$('ig-publish-arm'),igOut=$('ig-upload-result');
+ const igConn=Boolean(oauthStatus?.instagram?.connected);
+ if(igTest)igTest.disabled=!igConn||!selected?.from_sources;
+ if(igArm)igArm.disabled=!igConn||!selected?.from_sources;
+ if(igOut&&!igOut.dataset.busy){
+  igOut.textContent=!igConn?'Connect Instagram in Connections & System to upload Reels directly.':selected?.from_sources?(selected.ig_media_id?'Already published to Instagram ('+selected.ig_media_id+').':'Ready to upload '+(selected.exported?'your exported MP4':'this source clip')+' directly to '+(oauthStatus.instagram.handle||'Instagram')+'.'):'Select a Film Roll clip to upload a Reel.';
+ }
+ renderClipShippedBanner(selected);
 }
+if($('yt-draft-schedule'))$('yt-draft-schedule').onchange=syncYoutubeDraftButton;
+if($('yt-draft-privacy'))$('yt-draft-privacy').onchange=syncYoutubeDraftButton;
 function renderOAuthCard(prefix,info,label){
  const badge=$(prefix+'-oauth-badge'),meta=$(prefix+'-oauth-meta'),conn=$(prefix+'-connect');
- const ref=$(prefix+'-refresh'),disc=$(prefix+'-disconnect'),uri=$(prefix+'-redirect-uri'),setup=$(prefix+'-oauth-setup');
+ const ref=$(prefix+'-refresh'),disc=$(prefix+'-disconnect'),ext=$(prefix+'-extend'),uri=$(prefix+'-redirect-uri'),setup=$(prefix+'-oauth-setup');
  if(!badge||!info)return;
  if(uri&&info.redirect_uri)uri.textContent=info.redirect_uri;
  if(info.connected){
-  badge.textContent='CONNECTED';badge.className='flag ready';
+  const days=prefix==='ig'?igDaysLeft(info):null;
+  const expiring=days!==null&&days<7;
+  badge.textContent=expiring?(days<=0?'TOKEN EXPIRED':'EXPIRES IN '+Math.max(1,Math.ceil(days))+'D'):'CONNECTED';
+  badge.className='flag '+(expiring?'warn':'ready');
   const parts=[info.account_name,info.handle].filter(Boolean).join(' · ');
   const stats=[];
   if(Number.isSafeInteger(info.subscribers))stats.push(info.subscribers.toLocaleString()+' '+(prefix==='yt'?'subscribers':'followers'));
@@ -157,6 +214,7 @@ function renderOAuthCard(prefix,info,label){
   if(conn){conn.textContent='Reconnect '+label;conn.disabled=false;}
   if(ref)ref.hidden=false;
   if(disc)disc.hidden=false;
+  if(ext){ext.hidden=false;ext.classList.toggle('extend-highlight',expiring);}
   if(setup&&!setup.dataset.touched)setup.open=false;
  }else if(info.client_configured){
   badge.textContent='READY TO CONNECT';badge.className='flag warn';
@@ -164,12 +222,14 @@ function renderOAuthCard(prefix,info,label){
   if(conn){conn.textContent='Connect '+label;conn.disabled=false;}
   if(ref)ref.hidden=true;
   if(disc)disc.hidden=true;
+  if(ext)ext.hidden=true;
  }else{
   badge.textContent='NOT CONFIGURED';badge.className='flag warn';
   meta.textContent='Save your OAuth credentials below, then click Connect '+label+'.'+(info.last_error?' Last error: '+info.last_error:'');
   if(conn){conn.textContent='Connect '+label;conn.disabled=true;}
   if(ref)ref.hidden=true;
   if(disc)disc.hidden=true;
+  if(ext)ext.hidden=true;
  }
 }
 function refreshOAuthStatus(){
@@ -181,6 +241,15 @@ function refreshOAuthStatus(){
   syncYoutubeDraftButton();
  }).catch(()=>{});
 }
+if($('ig-extend'))$('ig-extend').onclick=async()=>{
+ const btn=$('ig-extend');btn.disabled=true;
+ try{
+  const r=await get('/api/oauth/instagram/extend',{method:'POST'});
+  note('Extended Instagram token until '+new Date(r.expires_at*1000).toLocaleDateString()+'.');
+  await refreshOAuthStatus();
+ }catch(e){note('Token extend failed: '+e.message);}
+ finally{btn.disabled=false;}
+};
 for(const [prefix,prov] of [['yt','youtube'],['ig','instagram']]){
  if($(prefix+'-oauth-setup'))$(prefix+'-oauth-setup').addEventListener('toggle',e=>{e.currentTarget.dataset.touched='1';});
  if($(prefix+'-copy-uri'))$(prefix+'-copy-uri').onclick=async()=>{
@@ -250,26 +319,195 @@ if($('ig-token-connect'))$('ig-token-connect').onclick=async()=>{
 if($('yt-upload-draft'))$('yt-upload-draft').onclick=async()=>{
  const row=selected,btn=$('yt-upload-draft'),out=$('yt-upload-result');
  if(!row?.from_sources||btn.disabled)return;
- btn.disabled=true;if(out){out.dataset.busy='1';out.textContent='Uploading Private draft to YouTube Studio…';}
+ const schedRaw=($('yt-draft-schedule')?.value||'').trim();
+ let publish_at=null;
+ if(schedRaw){
+  const dt=new Date(schedRaw);
+  if(Number.isNaN(dt.getTime())){note('Enter a valid schedule date and time.');return;}
+  publish_at=dt.toISOString();
+ }
+ const privacy=publish_at?'private':($('yt-draft-privacy')?.value||'private');
+ const wantThumb=Boolean($('yt-draft-thumb')?.checked&&coverUrl);
+ btn.disabled=true;if(out){out.dataset.busy='1';out.textContent='Uploading '+privacy.toUpperCase()+' draft to YouTube Studio'+(wantThumb?' (with cover thumbnail)…':'…');}
  try{
   const common={title:$('title').value.trim()||row.name,caption:$('caption').value.trim(),tags:$('tags').value.trim()};
   const mats=pd.materialize(common,pdState?.overrides||{},pdState||{});
+  const thumbData=wantThumb?await coverBase64():null;
   const res=await get('/api/oauth/youtube/upload-draft/'+encodeURIComponent(row.clip_id),{
    method:'POST',headers:{'Content-Type':'application/json'},
-   body:JSON.stringify({title:common.title,description:mats.youtube,tags:$('draft-yt-api-tags')?.value||common.tags,use_source:!row.exported})
+   body:JSON.stringify({title:common.title,description:mats.youtube,tags:$('draft-yt-api-tags')?.value||common.tags,use_source:!row.exported,privacy,publish_at,thumbnail_png_base64:thumbData})
   });
+  row.yt_video_id=res.video_id;
   if(out){
    delete out.dataset.busy;
-   const a=node('a','Open Private Draft in YouTube Studio ↗');a.href=res.studio_url;a.target='_blank';a.rel='noopener noreferrer';a.className='oauth-link';
-   out.replaceChildren('Uploaded PRIVATE draft ('+res.video_id+'). ',a);
+   const a=node('a','Open Draft in YouTube Studio ↗');a.href=res.studio_url;a.target='_blank';a.rel='noopener noreferrer';a.className='oauth-link';
+   const extra=(res.publish_at?' · Scheduled':'')+(res.thumbnail_uploaded?' · Thumbnail set':res.thumbnail_note?' · Thumbnail skipped: '+res.thumbnail_note:'');
+   out.replaceChildren('Uploaded '+String(res.privacy||'private').toUpperCase()+' draft ('+res.video_id+')'+extra+'. ',a);
   }
-  note('Uploaded Private draft to YouTube Studio ('+res.video_id+').');
-  loadExportHistory();
+  note('Uploaded '+String(res.privacy||'private').toUpperCase()+' draft to YouTube Studio ('+res.video_id+').');
+  renderClipShippedBanner(row);reload();loadExportHistory();
  }catch(e){
   if(out){delete out.dataset.busy;out.textContent='Upload failed: '+e.message;}
   note('YouTube upload failed: '+e.message);
  }finally{syncYoutubeDraftButton();}
 };
+async function runInstagramUpload(publish){
+ const row=selected,testBtn=$('ig-upload-container'),armBtn=$('ig-publish-arm'),confBtn=$('ig-publish-confirm'),out=$('ig-upload-result');
+ if(!row?.from_sources)return;
+ disarmIgPublish();
+ if(testBtn)testBtn.disabled=true;
+ if(armBtn)armBtn.disabled=true;
+ if(confBtn)confBtn.disabled=true;
+ if(out){out.dataset.busy='1';out.textContent=publish?'Uploading MP4 to Instagram & publishing Reel (waiting for Meta video processing)…':'Uploading unpublished test container to Instagram (waiting for Meta video processing)…';}
+ try{
+  const common={title:$('title').value.trim()||row.name,caption:$('caption').value.trim(),tags:$('tags').value.trim()};
+  const mats=pd.materialize(common,pdState?.overrides||{},pdState||{});
+  const res=await get('/api/oauth/instagram/upload-reel/'+encodeURIComponent(row.clip_id),{
+   method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({
+    caption:mats.instagram,
+    share_to_feed:Boolean($('draft-ig-share')?.checked),
+    thumb_offset_ms:pdState?.cover?.thumb_offset_ms??null,
+    use_source:!row.exported,
+    publish:Boolean(publish)
+   })
+  });
+  if(res.published&&res.media_id){
+   row.ig_media_id=res.media_id;
+   row.ig_permalink=res.permalink||'';
+   if(out){
+    delete out.dataset.busy;
+    if(res.permalink){
+     const a=node('a','Open Reel on Instagram ↗');a.href=res.permalink;a.target='_blank';a.rel='noopener noreferrer';a.className='oauth-link';
+     out.replaceChildren('Published Reel ('+res.media_id+'). ',a);
+    }else{
+     out.textContent='Published Reel ('+res.media_id+').';
+    }
+   }
+   note('Published Instagram Reel ('+res.media_id+')!');
+   renderClipShippedBanner(row);reload();loadExportHistory();
+  }else{
+   if(out){delete out.dataset.busy;out.textContent='Unpublished test container FINISHED (ID: '+res.container_id+'). Not published to feed.';}
+   note('Uploaded unpublished Instagram test container ('+res.container_id+').');
+  }
+ }catch(e){
+  if(out){delete out.dataset.busy;out.textContent='Instagram upload failed: '+e.message;}
+  note('Instagram upload failed: '+e.message);
+ }finally{
+  if(confBtn)confBtn.disabled=false;
+  syncYoutubeDraftButton();
+ }
+}
+if($('ig-upload-container'))$('ig-upload-container').onclick=()=>runInstagramUpload(false);
+if($('ig-publish-arm'))$('ig-publish-arm').onclick=()=>{
+ if($('ig-publish-arm').disabled)return;
+ $('ig-publish-arm').hidden=true;
+ if($('ig-publish-confirm')){$('ig-publish-confirm').hidden=false;$('ig-publish-confirm').focus();}
+ if(igArmTimer)clearTimeout(igArmTimer);
+ igArmTimer=setTimeout(disarmIgPublish,10000);
+};
+if($('ig-publish-confirm'))$('ig-publish-confirm').onclick=()=>runInstagramUpload(true);
+
+function extractHashtags(text){
+ const matches=String(text||'').match(/#[\p{L}\p{N}_]+/gu)||[];
+ return Array.from(new Set(matches.map(s=>s.toLowerCase()))).join(' ');
+}
+function renderInsights(){
+ const kpis=$('insights-kpis'),tbody=$('insights-rows'),empty=$('insights-empty');
+ if(!kpis||!tbody)return;
+ const acc=analyticsData?.accounts||{};
+ const posts=Array.isArray(analyticsData?.posts)?analyticsData.posts:[];
+ const yt=acc.youtube, ig=acc.instagram;
+ const totalViews=posts.reduce((s,p)=>s+(Number(p.views)||0),0);
+ const totalLikes=posts.reduce((s,p)=>s+(Number(p.likes)||0),0);
+ const totalComments=posts.reduce((s,p)=>s+(Number(p.comments)||0),0);
+ const makeCard=(label,val,sub)=>{
+  const c=node('div',undefined,'kpi-card');
+  c.append(node('small',label),node('strong',val),node('span',sub));
+  return c;
+ };
+ kpis.replaceChildren(
+  makeCard('YouTube',yt?.status==='connected'?(Number.isSafeInteger(yt.subscribers)?yt.subscribers.toLocaleString()+' subs':'Connected'):'Not connected',yt?.status==='connected'?([yt.account_name,yt.handle,Number.isSafeInteger(yt.media_count)?yt.media_count.toLocaleString()+' videos':null].filter(Boolean).join(' · ')||'Synced'):'Connect in Connections & System'),
+  makeCard('Instagram',ig?.status==='connected'?(Number.isSafeInteger(ig.subscribers)?ig.subscribers.toLocaleString()+' followers':'Connected'):'Not connected',ig?.status==='connected'?([ig.handle||ig.account_name,Number.isSafeInteger(ig.media_count)?ig.media_count.toLocaleString()+' posts':null].filter(Boolean).join(' · ')||'Synced'):'Connect in Connections & System'),
+  makeCard('Recent Views ('+posts.length+' posts)',totalViews.toLocaleString(),'Across synced YouTube uploads'),
+  makeCard('Recent Engagement',totalLikes.toLocaleString()+' likes',totalComments.toLocaleString()+' comments across synced posts')
+ );
+ const prov=$('insights-provider')?.value||'all';
+ const sort=$('insights-sort')?.value||'recent';
+ const q=($('insights-search')?.value||'').trim().toLocaleLowerCase();
+ const list=posts.filter(p=>{
+  if(prov!=='all'&&p.provider!==prov)return false;
+  if(!q)return true;
+  return [p.title,p.caption,p.provider,p.media_type].filter(Boolean).join(' ').toLocaleLowerCase().includes(q);
+ }).slice();
+ if(sort==='views')list.sort((a,b)=>(b.views||0)-(a.views||0));
+ else if(sort==='likes')list.sort((a,b)=>(b.likes||0)-(a.likes||0));
+ else if(sort==='comments')list.sort((a,b)=>(b.comments||0)-(a.comments||0));
+ else list.sort((a,b)=>String(b.published_at||'').localeCompare(String(a.published_at||'')));
+ tbody.replaceChildren(...list.map(p=>{
+  const tr=node('tr');
+  const postTd=node('td'),wrap=node('div',undefined,'insight-post');
+  if(p.thumbnail_url){const im=node('img',undefined,'insight-thumb');im.src=p.thumbnail_url;im.alt='';im.loading='lazy';im.referrerPolicy='no-referrer';wrap.append(im);}
+  const cap=node('div',undefined,'insight-caption');
+  const titleText=p.title||'(Untitled)';
+  cap.append(node('strong',titleText));
+  if(p.caption&&p.caption!==p.title)cap.append(node('small',p.caption.slice(0,140)));
+  wrap.append(cap);postTd.append(wrap);
+  const platTd=node('td');
+  platTd.append(node('span',p.provider==='youtube'?'YouTube':'Instagram','ship-badge '+(p.provider==='youtube'?'ship-yt':'ship-ig')));
+  const pubStr=p.published_at?new Date(p.published_at).toLocaleDateString():'—';
+  const actTd=node('td'),actWrap=node('div',undefined,'exp-actions');
+  if(p.permalink){
+   const a=node('a','Open ↗','oauth-link');a.href=p.permalink;a.target='_blank';a.rel='noopener noreferrer';
+   actWrap.append(a);
+  }
+  const tags=extractHashtags((p.title||'')+' '+(p.caption||''));
+  if(tags){
+   const reuse=node('button','Use hashtags in Studio');reuse.type='button';reuse.title=tags;
+   reuse.onclick=()=>{
+    $('tags').value=pd.mergeTags($('tags').value,tags);
+    pdVersion++;refreshDraftEditor();renderPreflight();workflowDirty();
+    showView('studio',true);
+    note('Added winning hashtags to Studio caption desk.');
+   };
+   actWrap.append(reuse);
+  }
+  actTd.append(actWrap);
+  tr.append(postTd,platTd,node('td',p.provider==='youtube'||p.views>0?Number(p.views||0).toLocaleString():'—'),node('td',Number(p.likes||0).toLocaleString()),node('td',Number(p.comments||0).toLocaleString()),node('td',pubStr),actTd);
+  return tr;
+ }));
+ if(empty)empty.textContent=list.length?list.length+' synced post'+(list.length===1?'':'s')+' shown':posts.length?'No synced posts match this filter.':'No synced posts yet. Click Sync Live Analytics to pull recent YouTube uploads and Instagram posts.';
+}
+function loadInsights(){
+ if(analyticsLoad)return analyticsLoad;
+ analyticsLoad=get('/api/oauth/analytics').then(d=>{
+  analyticsData=d;renderInsights();
+ }).catch(()=>{if($('insights-status'))$('insights-status').textContent='Could not load analytics.';}).finally(()=>{analyticsLoad=null;});
+ return analyticsLoad;
+}
+async function syncInsights(){
+ const btn=$('insights-sync'),out=$('insights-status');
+ if(btn)btn.disabled=true;
+ if(out)out.textContent='Syncing live stats from YouTube & Instagram…';
+ try{
+  const r=await get('/api/oauth/analytics/sync',{method:'POST'});
+  const notes=[];
+  if(r.youtube_synced>0)notes.push('YouTube: '+r.youtube_synced+' videos');
+  else if(r.youtube_error)notes.push('YouTube error: '+r.youtube_error);
+  if(r.instagram_synced>0)notes.push('Instagram: '+r.instagram_synced+' posts');
+  else if(r.instagram_error)notes.push('Instagram error: '+r.instagram_error);
+  const msg=notes.length?'Synced '+notes.join(' · '):'Sync complete (connect YouTube or Instagram to pull posts).';
+  if(out)out.textContent=msg;
+  note(msg);
+  await Promise.all([loadInsights(),refreshOAuthStatus(),loadChannelProfiles()]);
+ }catch(e){
+  if(out)out.textContent='Sync failed: '+e.message;
+  note('Analytics sync failed: '+e.message);
+ }finally{if(btn)btn.disabled=false;}
+}
+if($('insights-sync'))$('insights-sync').onclick=syncInsights;
+for(const id of ['insights-provider','insights-sort']){if($(id))$(id).onchange=renderInsights;}
+if($('insights-search'))$('insights-search').oninput=renderInsights;
 $('export-diagnostics').onclick=async()=>{
  const b=$('export-diagnostics'),out=$('diagnostics-result');b.disabled=true;
  try{const r=await get('/api/workspace/diagnostics',{method:'POST'});out.textContent='Saved '+r.file+' to '+r.location+'. Nothing shared.';}catch(e){out.textContent=e.message;}finally{b.disabled=false;}
@@ -352,6 +590,30 @@ async function cancelActiveExport(){
 if($('export-cancel'))$('export-cancel').onclick=cancelActiveExport;
 if($('gallery-batch-cancel'))$('gallery-batch-cancel').onclick=cancelActiveExport;
 
+const EXPORT_PREFS_KEY='snapmatic-export-prefs-v1';
+function readExportPrefs(){try{return JSON.parse(localStorage.getItem(EXPORT_PREFS_KEY)||'{}')||{};}catch{return {};}}
+function saveExportPrefs(){
+ try{
+  localStorage.setItem(EXPORT_PREFS_KEY,JSON.stringify({
+   framing:$('edit-framing')?.value||'original',
+   quality:$('edit-quality')?.value||'balanced',
+   normalize_audio:Boolean($('edit-norm')?.checked),
+   use_hw_encode:Boolean($('edit-hw')?.checked),
+   save_caption_txt:Boolean($('edit-pack')?.checked),
+   watermark_text:$('edit-watermark')?.value||'',
+   watermark_pos:$('edit-wm-pos')?.value||'bottom_right',
+  }));
+ }catch{}
+}
+function applyExportPrefs(){
+ const p=readExportPrefs();
+ if($('edit-quality')&&['balanced','high','fast'].includes(p.quality))$('edit-quality').value=p.quality;
+ if($('edit-norm')&&typeof p.normalize_audio==='boolean')$('edit-norm').checked=p.normalize_audio;
+ if($('edit-hw')&&typeof p.use_hw_encode==='boolean')$('edit-hw').checked=p.use_hw_encode;
+ if($('edit-pack')&&typeof p.save_caption_txt==='boolean')$('edit-pack').checked=p.save_caption_txt;
+ if($('edit-watermark')&&typeof p.watermark_text==='string')$('edit-watermark').value=p.watermark_text;
+ if($('edit-wm-pos')&&['bottom_right','bottom_left','top_right','top_left'].includes(p.watermark_pos))$('edit-wm-pos').value=p.watermark_pos;
+}
 function updateOverlayPreview(){
  const hook=$('edit-hook')?.value.trim()||'';
  const wm=$('edit-watermark')?.value.trim()||'';
@@ -360,8 +622,11 @@ function updateOverlayPreview(){
  if(hEl){hEl.textContent=hook;hEl.hidden=!hook;}
  if(wEl){wEl.textContent=wm;wEl.dataset.pos=pos;wEl.hidden=!wm;}
 }
-for(const id of ['edit-hook','edit-watermark']){if($(id))$(id).addEventListener('input',updateOverlayPreview);}
-if($('edit-wm-pos'))$('edit-wm-pos').onchange=updateOverlayPreview;
+applyExportPrefs();
+updateOverlayPreview();
+for(const id of ['edit-hook','edit-watermark']){if($(id))$(id).addEventListener('input',()=>{updateOverlayPreview();if(id==='edit-watermark')saveExportPrefs();});}
+if($('edit-wm-pos'))$('edit-wm-pos').onchange=()=>{updateOverlayPreview();saveExportPrefs();};
+for(const id of ['edit-quality','edit-norm','edit-hw','edit-pack']){if($(id))$(id).addEventListener('change',saveExportPrefs);}
 
 function renderNvenc(){
  const isSourceClip=Boolean(selected?.from_sources);
@@ -447,6 +712,10 @@ function buildCaptionPackText(){
  parts.push('TIKTOK:\n'+mats.tiktok);
  return parts.join('\n\n---\n\n');
 }
+if($('copy-all-captions'))$('copy-all-captions').onclick=async()=>{
+ try{await navigator.clipboard.writeText(buildCaptionPackText());note('Copied all platform captions (YouTube, Instagram & TikTok).');}
+ catch{note('Clipboard unavailable. Select and copy manually.');}
+};
 $('edit-transcode').onclick=async()=>{
  const button=$('edit-transcode');
  if(selected?.from_sources){
@@ -520,10 +789,12 @@ function knownDuration(row){
  return row&&Number(f?.size)===row.preview_bytes&&d>0&&Number.isFinite(d)?Math.ceil(d*1000):null;
 }
 function resetEdit(row){
+ const savedFraming=readExportPrefs().framing;
+ const defFraming=row?.from_sources&&['original','center_crop','blurred_fit'].includes(savedFraming)?savedFraming:(row?.from_sources?'original':'center_crop');
  const d=row?.clip_id===phase3Clip?20800:knownDuration(row),key=row?.clip_id+':'+row?.preview_sha256;
- editState=d?(editSessions.get(key)||{clip_id:row.clip_id,media_sha256:row.preview_sha256,duration_ms:d,in_ms:0,out_ms:d,framing:row.from_sources?'original':'center_crop',facecam:[],gameplay:[]}):null;
+ editState=d?(editSessions.get(key)||{clip_id:row.clip_id,media_sha256:row.preview_sha256,duration_ms:d,in_ms:0,out_ms:d,framing:defFraming,facecam:[],gameplay:[]}):null;
  if(editState)editSessions.set(key,editState);approvedSeed();
- $('edit-framing').value=editState?.framing||(row?.from_sources?'original':'center_crop');$('edit-zones').hidden=$('edit-framing').value!=='dual_zone';
+ $('edit-framing').value=editState?.framing||defFraming;$('edit-zones').hidden=$('edit-framing').value!=='dual_zone';
  if($('edit-mute'))$('edit-mute').checked=false;
  for(const name of ['facecam','gameplay'])document.querySelectorAll('#edit-'+name+' input').forEach((x,i)=>x.value=editState?.[name]?.[i]??'');
  showTranscript();updateTrim();renderNvenc();
@@ -589,7 +860,7 @@ for(const which of ['in','out']){
   if(video.readyState>=2&&Number.isFinite(video.currentTime))setTrim(which,Math.floor(video.currentTime*1000));
  };
 }
-$('edit-framing').onchange=()=>{if(editState){editState.framing=$('edit-framing').value;editState.dirty=true;}$('edit-zones').hidden=$('edit-framing').value!=='dual_zone';renderNvenc();};
+$('edit-framing').onchange=()=>{if(editState){editState.framing=$('edit-framing').value;editState.dirty=true;}$('edit-zones').hidden=$('edit-framing').value!=='dual_zone';saveExportPrefs();renderNvenc();};
 for(const name of ['facecam','gameplay'])document.querySelectorAll('#edit-'+name+' input').forEach((x,i)=>x.addEventListener('input',()=>{if(editState){editState[name][i]=x.value===''?null:Number(x.value);editState.dirty=true;}renderNvenc();}));
 document.addEventListener('keydown',e=>{
  if(activeView!=='studio'||e.ctrlKey||e.altKey||e.metaKey||e.repeat||e.target.closest('input,textarea,select,[contenteditable]'))return;
@@ -917,6 +1188,7 @@ function shown(row,mode=filter){
  if(mode==='pending')return row.state==='pending_review'||(row.state==='READY_FOR_REVIEW'&&row.review==='PENDING');
  if(mode==='approved')return row.state==='approved';
  if(mode==='exported')return row.state==='exported'||row.exported===true;
+ if(mode==='unposted')return !row.yt_video_id&&!row.ig_media_id;
  if(mode==='ready')return row.state==='READY_FOR_REVIEW'||row.state==='approved'||row.state==='exported';
  if(mode==='workflow-render')return row.state==='pending_review'&&!row.preview_only;
  if(mode==='workflow-export')return row.manual_export_ready===true||row.exported===true;
@@ -931,9 +1203,9 @@ function updateGuides(){
  const [ratios,name,right,bottom]=guides[$('platform-zone').value];$('zones').style.setProperty('--zone',ratios);$('zones').style.setProperty('--right',right);$('zones').style.setProperty('--bottom',bottom);$('zone-label').textContent=name;
 }
 function showView(mode,push=false){
- if(!['studio','gallery','ledger','system','profiles','sources'].includes(mode))mode='studio';
+ if(!['studio','gallery','insights','ledger','system','profiles','sources'].includes(mode))mode='studio';
  activeView=mode;
- for(const id of ['studio','gallery','ledger','system','profiles','sources'])$(id).hidden=id!==mode;
+ for(const id of ['studio','gallery','insights','ledger','system','profiles','sources'])$(id).hidden=id!==mode;
  document.querySelectorAll('.view-nav [data-view]').forEach(a=>{if(a.dataset.view===mode)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');});
  document.querySelectorAll('.utility-strip [data-shell-link]').forEach(a=>{if(a.dataset.shellLink===mode)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');});
  if(push&&new URLSearchParams(location.search).get('view')!==mode)history.pushState(null,'','/workspace?view='+mode);
@@ -941,6 +1213,7 @@ function showView(mode,push=false){
  if(mode==='profiles'||mode==='sources'){const frame=$(mode).querySelector('iframe');if(frame&&!frame.hasAttribute('src')){frame.onload=()=>syncIframeThemes(document.documentElement.dataset.theme==='light'?'light':'dark');frame.src=frame.dataset.embed;}else{syncIframeThemes(document.documentElement.dataset.theme==='light'?'light':'dark');}}
  if(mode==='studio')refreshLocalStatus();
  if(mode==='gallery'){renderGallery();inspectMetadata();refreshLocalStatus();if(indexReady)reload();}
+ if(mode==='insights'){loadInsights();refreshOAuthStatus();}
  if(mode==='ledger'){renderExportHistory();loadExportHistory();renderLedger();if(ledgerReady)loadLedger();}
  if(mode==='system'){renderSystem();updatePhase4();cacheUsage();refreshLocalStatus();refreshOAuthStatus();}
 }
@@ -978,6 +1251,7 @@ function renderGallery(){
   if(r.poster_available){const i=node('img');i.alt='';i.src=endpoint(r,'poster');i.loading='lazy';i.onerror=()=>i.replaceWith(node('span','POSTER HELD','gallery-placeholder'));b.append(i);}
   else b.append(node('span',r.state==='test_hold'?'PRIVATE TEST HOLD':'NO POSTER','gallery-placeholder'));
   b.append(node('strong',r.name),node('small',(labels[r.state]||r.state)+(r.source_name?' · '+r.source_name:'')+(r.exported?' · MP4':''),tone(r)));
+  const ship=renderShipBadges(r);if(ship)b.append(ship);
   const m=node('small',(dimensions.get(r.clip_id)||'Resolution unmeasured')+' · '+(durations.has(r.clip_id)?time(durations.get(r.clip_id)):'--:--'),'dimensions');
   if(r.import_metadata?.description){const summary=node('small',r.import_metadata.description,'import-description');summary.title=r.import_metadata.description;b.append(summary);} b.append(m);b.onclick=()=>{showView('studio',true);select(r);$('viewfinder').focus();};
   if(r.from_sources){
@@ -1058,6 +1332,16 @@ function renderExportHistory(){
    const openBtn=node('button','Open in Studio');openBtn.type='button';
    openBtn.onclick=()=>{showView('studio',true);select(clipMatch);$('viewfinder').focus();};
    actWrap.append(openBtn);
+  }
+  if(r.youtube_video_id){
+   const ytA=node('a','YouTube Studio ↗','oauth-link');
+   ytA.href='https://studio.youtube.com/video/'+encodeURIComponent(r.youtube_video_id)+'/edit';ytA.target='_blank';ytA.rel='noopener noreferrer';
+   actWrap.append(ytA);
+  }
+  if(r.ig_permalink){
+   const igA=node('a','Instagram Reel ↗','oauth-link');
+   igA.href=r.ig_permalink;igA.target='_blank';igA.rel='noopener noreferrer';
+   actWrap.append(igA);
   }
   actTd.append(actWrap);
   tr.append(titleTd,setTd,node('td',files,r.exists?'verified':'warn'),node('td',fmtBytes(r.bytes)),node('td',healthTime(r.exported_at)),actTd);
@@ -1182,8 +1466,11 @@ function renderProviders(){
   const oa=oauthStatus?.[id];
   if(oa?.connected){
    const tag=oa.handle||oa.account_name||'';
-   const badge=node('a',providerNames[id].toUpperCase()+(tag?' '+tag:'')+' · CONNECTED','ready');
-   badge.title=providerNames[id]+' connected ('+tag+') · Public auto-posting OFF';
+   const days=id==='instagram'?igDaysLeft(oa):null;
+   const expiring=days!==null&&days<7;
+   const statusWord=expiring?(days<=0?'TOKEN EXPIRED':'EXPIRES IN '+Math.max(1,Math.ceil(days))+'D'):'CONNECTED';
+   const badge=node('a',providerNames[id].toUpperCase()+(tag?' '+tag:'')+' · '+statusWord,expiring?'warn':'ready');
+   badge.title=providerNames[id]+' connected ('+tag+')'+(expiring?' · Extend your 60-day token in Connections & System!':' · Public auto-posting OFF');
    badge.href='/workspace?view=system';badge.onclick=e=>{e.preventDefault();showView('system',true);};return badge;
   }
   const p=(activeProfile()?providers:[]).find(x=>x.provider===id), health=p?.health||'unknown';
@@ -1218,7 +1505,7 @@ function renderRoll(restore=false){
   let thumb;
   if(row.poster_available){thumb=node('img',undefined,'thumb');thumb.alt='';thumb.loading='lazy';thumb.src=endpoint(row,'poster');thumb.onerror=()=>thumb.replaceWith(node('span',String(i+1).padStart(2,'0'),'thumb'));}
   else thumb=node('span',String(i+1).padStart(2,'0'),'thumb');
-  const words=node('span');words.append(node('strong',row.name),node('small',(labels[row.state]||row.state)+(row.source_name?' · '+row.source_name:'')+(row.caption_status==='no_speech'?' · No speech':'')+(durations.has(row.clip_id)?' · '+time(durations.get(row.clip_id)):' · --:--'),tone(row)));b.append(thumb,words);
+  const words=node('span');words.append(node('strong',row.name),node('small',(labels[row.state]||row.state)+(row.source_name?' · '+row.source_name:'')+(row.caption_status==='no_speech'?' · No speech':'')+(durations.has(row.clip_id)?' · '+time(durations.get(row.clip_id)):' · --:--'),tone(row)));const ship=renderShipBadges(row);if(ship)words.append(ship);b.append(thumb,words);
   const eligible=phase5Visible().some(r=>r.clip_id===row.clip_id);const decision=p5Labels.get(p5Key(row));if(decision)words.append(node('small','LOCAL LABEL · '+decision));b.classList.toggle('p5-picked',phase5.batch.has(row.clip_id));b.onclick=e=>{if(e.shiftKey&&eligible){phase5.range(phase5Visible().map(r=>r.clip_id),row.clip_id);renderRoll(true);}else {if(eligible)phase5.setAnchor(row.clip_id);select(row);}};return b;
  }));
  phase5Tray();if(!visible.length)roll.append(node('p','No clips match this filter.','muted'));
@@ -1269,7 +1556,7 @@ function probeFilmRoll(row,turn){
  }).catch(()=>{});
 }
 function saveDraft(){if(selected){drafts.set(selected.clip_id,{title:$('title').value,caption:$('caption').value,tags:$('tags').value});if(pdState)pdCache.set(pdKey(selected),pdState);}}
-function select(row){workflowFlush();saveDraft();selected=row;derivedMode=false;$('p5-loop').checked=false;generation++;cancelFrameWatch();stopVideo();note('');renderRoll(true);
+function select(row){workflowFlush();saveDraft();disarmIgPublish();selected=row;derivedMode=false;$('p5-loop').checked=false;generation++;cancelFrameWatch();stopVideo();note('');renderRoll(true);
  $('stage-state').textContent=(labels[row.state]||row.state).toUpperCase();$('stage-state').className='flag '+tone(row);
  $('inspect-description').textContent=row.import_metadata?.description||'';$('inspect-description').hidden=!row.import_metadata?.description;
  $('inspect-state').textContent=row.name+(row.source_name?' · '+row.source_name:'')+(row.preview_only&&!row.from_sources?' · Preview only':'');
@@ -1716,8 +2003,12 @@ $('p5-batch').querySelectorAll('[data-triage]').forEach(b=>b.onclick=async()=>{
 const p5Dialogs=[$('p5-command'),$('p5-help')];
 const p5Commands=[
  ['Viewfinder Studio',()=>showView('studio',true)],['Film Roll Gallery',()=>showView('gallery',true)],
+ ['Channel Insights',()=>showView('insights',true)],['Sync Live Analytics',()=>{showView('insights',true);syncInsights();}],
  ['Exports & Receipts',()=>showView('ledger',true)],['Connections & System',()=>showView('system',true)],
  ['Profiles',()=>showView('profiles',true)],['Sources',()=>showView('sources',true)],
+ ['Copy All Platform Captions',()=>$('copy-all-captions')?.click(),()=>Boolean(selected)],
+ ['Upload Draft to YouTube',()=>$('yt-upload-draft')?.click(),()=>Boolean(selected?.from_sources&&oauthStatus?.youtube?.connected)],
+ ['Upload Instagram Reel (Test Container)',()=>$('ig-upload-container')?.click(),()=>Boolean(selected?.from_sources&&oauthStatus?.instagram?.connected)],
  ['Toggle Light / Dark Theme',()=>applyShellTheme(document.documentElement.dataset.theme==='light'?'dark':'light')],
  ['Open Exports Folder',()=>$('edit-open-exports')?.click()],
  ['Toggle Source / Exported',()=>phase5Swap(derivedMode?'source':'render'),phase5SourcePair],

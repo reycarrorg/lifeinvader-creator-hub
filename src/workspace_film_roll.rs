@@ -130,6 +130,27 @@ pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
             [],
         )?;
     }
+    for col in ["yt_video_id", "ig_media_id", "ig_permalink"] {
+        if !cols.iter().any(|c| c == col) {
+            db.execute(
+                &format!("ALTER TABLE workspace_film_roll ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"),
+                [],
+            )?;
+        }
+    }
+    let hcols: Vec<String> = {
+        let mut stmt = db.prepare("PRAGMA table_info(workspace_export_history)")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for col in ["youtube_video_id", "ig_permalink"] {
+        if !hcols.iter().any(|c| c == col) {
+            db.execute(
+                &format!("ALTER TABLE workspace_export_history ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"),
+                [],
+            )?;
+        }
+    }
     let preset_count: i64 = db
         .query_row("SELECT COUNT(*) FROM workspace_caption_presets", [], |r| r.get(0))
         .unwrap_or(0);
@@ -522,7 +543,7 @@ fn dir_stats(root: &Path, max_depth: usize) -> (u64, u64) {
     (bytes, files)
 }
 
-fn decode_base64(raw: &str) -> Option<Vec<u8>> {
+pub(crate) fn decode_base64(raw: &str) -> Option<Vec<u8>> {
     let trimmed = raw.trim();
     let payload = trimmed
         .strip_prefix("data:image/png;base64,")
@@ -1646,7 +1667,8 @@ pub(crate) async fn export_history(State(app): State<App>) -> ApiResult<Json<Val
         let mut stmt = db
             .prepare(
                 "SELECT id, clip_id, title, source_name, file_name, caption_file, cover_file,
-                        framing, quality, in_ms, out_ms, muted, normalized_audio, bytes, exported_at
+                        framing, quality, in_ms, out_ms, muted, normalized_audio, bytes, exported_at,
+                        youtube_video_id, ig_permalink
                  FROM workspace_export_history
                  ORDER BY exported_at DESC, id DESC
                  LIMIT 200",
@@ -1657,6 +1679,8 @@ pub(crate) async fn export_history(State(app): State<App>) -> ApiResult<Json<Val
                 let file_name: String = r.get(4)?;
                 let caption_file: String = r.get(5)?;
                 let cover_file: String = r.get(6)?;
+                let yt_id: String = r.get(15)?;
+                let ig_link: String = r.get(16)?;
                 Ok(json!({
                     "id": r.get::<_, i64>(0)?,
                     "clip_id": r.get::<_, String>(1)?,
@@ -1674,6 +1698,8 @@ pub(crate) async fn export_history(State(app): State<App>) -> ApiResult<Json<Val
                     "normalized_audio": r.get::<_, i64>(12)? != 0,
                     "bytes": r.get::<_, i64>(13)?,
                     "exported_at": r.get::<_, i64>(14)?,
+                    "youtube_video_id": if yt_id.is_empty() { None } else { Some(yt_id) },
+                    "ig_permalink": if ig_link.is_empty() { None } else { Some(ig_link) },
                 }))
             })
             .map_err(internal)?;
@@ -1953,12 +1979,28 @@ pub(crate) async fn channel_profiles(State(app): State<App>) -> Response {
 }
 
 pub(crate) fn rows(app: &App) -> store::Result<Vec<Value>> {
-    let entries: Vec<(String, i64, String, String, String, i64, String, String, String, String)> = {
+    struct RollRow {
+        clip_id: String,
+        source_id: i64,
+        path: String,
+        title: String,
+        description: String,
+        saved_bytes: i64,
+        review_state: String,
+        exported_path: String,
+        source_name: String,
+        source_platform: String,
+        yt_video_id: String,
+        ig_media_id: String,
+        ig_permalink: String,
+    }
+    let entries: Vec<RollRow> = {
         let db = app.db.lock().map_err(|_| store::Error("storage_unavailable"))?;
         let mut stmt = db
             .prepare(
                 "SELECT f.clip_id, f.source_id, f.path, f.title, f.description, f.bytes,
-                        f.review_state, f.exported_path, p.name, p.platform
+                        f.review_state, f.exported_path, p.name, p.platform,
+                        f.yt_video_id, f.ig_media_id, f.ig_permalink
                  FROM workspace_film_roll f
                  JOIN profiles p ON p.id = f.source_id
                  WHERE p.archived = 0 AND p.role = 'source'
@@ -1968,18 +2010,21 @@ pub(crate) fn rows(app: &App) -> store::Result<Vec<Value>> {
             .map_err(|_| store::Error("storage_unavailable"))?;
         let mapped = stmt
             .query_map([], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, i64>(1)?,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, String>(3)?,
-                    r.get::<_, String>(4)?,
-                    r.get::<_, i64>(5)?,
-                    r.get::<_, String>(6)?,
-                    r.get::<_, String>(7)?,
-                    r.get::<_, String>(8)?,
-                    r.get::<_, String>(9)?,
-                ))
+                Ok(RollRow {
+                    clip_id: r.get(0)?,
+                    source_id: r.get(1)?,
+                    path: r.get(2)?,
+                    title: r.get(3)?,
+                    description: r.get(4)?,
+                    saved_bytes: r.get(5)?,
+                    review_state: r.get(6)?,
+                    exported_path: r.get(7)?,
+                    source_name: r.get(8)?,
+                    source_platform: r.get(9)?,
+                    yt_video_id: r.get(10)?,
+                    ig_media_id: r.get(11)?,
+                    ig_permalink: r.get(12)?,
+                })
             })
             .map_err(|_| store::Error("storage_unavailable"))?;
         mapped
@@ -1989,52 +2034,43 @@ pub(crate) fn rows(app: &App) -> store::Result<Vec<Value>> {
 
     let out_dir = exports_dir(app);
     let mut out = Vec::with_capacity(entries.len());
-    for (
-        clip_id,
-        source_id,
-        path,
-        title,
-        description,
-        saved_bytes,
-        review_state,
-        exported_path,
-        source_name,
-        source_platform,
-    ) in entries
-    {
-        let Ok(resolved) = source::resolve_file(app, source_id, &path, "source") else {
+    for e in entries {
+        let Ok(resolved) = source::resolve_file(app, e.source_id, &e.path, "source") else {
             continue;
         };
         let bytes = std::fs::metadata(&resolved)
             .map(|m| m.len())
-            .unwrap_or(saved_bytes.max(0) as u64);
-        let name = if title.is_empty() {
-            path.rsplit(['\\', '/']).next().unwrap_or("Downloaded video").to_owned()
+            .unwrap_or(e.saved_bytes.max(0) as u64);
+        let name = if e.title.is_empty() {
+            e.path.rsplit(['\\', '/']).next().unwrap_or("Downloaded video").to_owned()
         } else {
-            title
+            e.title
         };
-        let has_export = !exported_path.is_empty() && out_dir.join(&exported_path).is_file();
+        let has_export = !e.exported_path.is_empty() && out_dir.join(&e.exported_path).is_file();
         let mut row = json!({
             "kind": "original",
-            "clip_id": clip_id,
-            "source_id": source_id,
-            "source_name": source_name,
-            "source_platform": source_platform,
-            "source_path": path,
+            "clip_id": e.clip_id,
+            "source_id": e.source_id,
+            "source_name": e.source_name,
+            "source_platform": e.source_platform,
+            "source_path": e.path,
             "name": name,
-            "state": review_state,
+            "state": e.review_state,
             "preview_only": true,
             "preview_available": true,
             "poster_available": true,
             "preview_bytes": bytes,
-            "preview_sha256": clip_id,
+            "preview_sha256": e.clip_id,
             "exported": has_export,
-            "exported_file": if has_export { Some(exported_path) } else { None },
-            "export_url": if has_export { Some(format!("/api/workspace/film-roll/{clip_id}/export")) } else { None },
+            "exported_file": if has_export { Some(e.exported_path) } else { None },
+            "export_url": if has_export { Some(format!("/api/workspace/film-roll/{}/export", e.clip_id)) } else { None },
+            "yt_video_id": if e.yt_video_id.is_empty() { None } else { Some(e.yt_video_id) },
+            "ig_media_id": if e.ig_media_id.is_empty() { None } else { Some(e.ig_media_id) },
+            "ig_permalink": if e.ig_permalink.is_empty() { None } else { Some(e.ig_permalink) },
             "from_sources": true,
         });
-        if !description.is_empty() {
-            row["import_metadata"] = json!({ "description": description });
+        if !e.description.is_empty() {
+            row["import_metadata"] = json!({ "description": e.description });
         }
         out.push(row);
     }

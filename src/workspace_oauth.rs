@@ -40,6 +40,21 @@ pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
             last_checked_at INTEGER,
             last_error TEXT NOT NULL DEFAULT '',
             extra_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE TABLE IF NOT EXISTS workspace_channel_posts (
+            provider TEXT NOT NULL,
+            post_id TEXT NOT NULL,
+            title TEXT NOT NULL DEFAULT '',
+            caption TEXT NOT NULL DEFAULT '',
+            permalink TEXT NOT NULL DEFAULT '',
+            thumbnail_url TEXT NOT NULL DEFAULT '',
+            published_at TEXT NOT NULL DEFAULT '',
+            views INTEGER NOT NULL DEFAULT 0,
+            likes INTEGER NOT NULL DEFAULT 0,
+            comments INTEGER NOT NULL DEFAULT 0,
+            media_type TEXT NOT NULL DEFAULT '',
+            synced_at INTEGER NOT NULL DEFAULT (unixepoch()),
+            PRIMARY KEY (provider, post_id)
         );",
     )?;
     let cols: Vec<String> = {
@@ -513,12 +528,36 @@ pub(crate) struct YoutubeDraftUploadInput {
     #[serde(default)]
     tags: Option<String>,
     #[serde(default)]
+    privacy: Option<String>,
+    #[serde(default)]
+    publish_at: Option<String>,
+    #[serde(default)]
+    thumbnail_png_base64: Option<String>,
+    #[serde(default)]
     use_source: bool,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct InstagramTokenInput {
     access_token: String,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct InstagramReelUploadInput {
+    #[serde(default)]
+    caption: Option<String>,
+    #[serde(default = "default_true")]
+    share_to_feed: bool,
+    #[serde(default)]
+    thumb_offset_ms: Option<u64>,
+    #[serde(default)]
+    use_source: bool,
+    #[serde(default)]
+    publish: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -1188,6 +1227,88 @@ pub(crate) async fn disconnect(
     Ok(Json(json!({ "provider": provider, "disconnected": true })))
 }
 
+fn sync_posting_queue_url(app: &App, clip_id: &str, platform_name: &str, post_url: &str) {
+    let Some((source_id, source_path)) = crate::workspace_film_roll::resolve_source_ref(app, clip_id) else {
+        return;
+    };
+    if let Ok(db) = app.db.lock() {
+        let _ = db.execute(
+            "UPDATE posting_queue
+             SET state='posted', post_url=?1, updated_at=datetime('now')
+             WHERE source_id=?2 AND path=?3
+               AND profile_id IN (SELECT id FROM profiles WHERE role='destination' AND platform=?4)",
+            params![post_url, source_id, source_path, platform_name],
+        );
+    }
+}
+
+fn record_analytics_snapshot(
+    app: &App,
+    platform_name: &str,
+    followers: Option<i64>,
+    views: Option<i64>,
+    likes: Option<i64>,
+    comments: Option<i64>,
+) {
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let now_str = chrono::Utc::now().to_rfc3339();
+    if let Ok(db) = app.db.lock()
+        && let Ok(Some(pid)) = db
+            .query_row(
+                "SELECT id FROM profiles WHERE role='destination' AND archived=0 AND platform=?1 ORDER BY id LIMIT 1",
+                [platform_name],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()
+    {
+        let _ = db.execute(
+            "INSERT INTO analytics_snapshots(profile_id, date, post_id, followers, views, likes, comments, source, updated_at)
+             VALUES(?1, ?2, '', ?3, ?4, ?5, ?6, 'oauth_api', ?7)
+             ON CONFLICT(profile_id, date, post_id) DO UPDATE SET
+               followers=COALESCE(excluded.followers, analytics_snapshots.followers),
+               views=COALESCE(excluded.views, analytics_snapshots.views),
+               likes=COALESCE(excluded.likes, analytics_snapshots.likes),
+               comments=COALESCE(excluded.comments, analytics_snapshots.comments),
+               source='oauth_api',
+               updated_at=excluded.updated_at",
+            params![pid, today, followers, views, likes, comments, now_str],
+        );
+    }
+}
+
+fn resolve_upload_file(app: &App, clip_id: &str, use_source: bool) -> ApiResult<(std::path::PathBuf, String)> {
+    let db = app.db.lock().map_err(internal)?;
+    let row: Option<(String, String)> = db
+        .query_row(
+            "SELECT title, exported_path FROM workspace_film_roll WHERE clip_id=?1",
+            [clip_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(internal)?;
+    let Some((title, exported_path)) = row else {
+        return Err((StatusCode::NOT_FOUND, "Clip not found in Film Roll.".into()));
+    };
+    drop(db);
+    let path = if !use_source
+        && !exported_path.is_empty()
+        && !exported_path.contains(['/', '\\', ':', '\0'])
+        && !exported_path.starts_with('.')
+    {
+        let p = crate::workspace_film_roll::exports_dir(app).join(&exported_path);
+        if p.is_file() {
+            p
+        } else {
+            crate::workspace_film_roll::resolve_video(app, clip_id)
+                .ok_or_else(|| (StatusCode::NOT_FOUND, "Video file unavailable.".into()))?
+        }
+    } else {
+        crate::workspace_film_roll::resolve_video(app, clip_id)
+            .ok_or_else(|| (StatusCode::NOT_FOUND, "Video file unavailable.".into()))?
+    };
+    Ok((path, title))
+}
+
 pub(crate) async fn upload_youtube_private_draft(
     State(app): State<App>,
     AxumPath(clip_id): AxumPath<String>,
@@ -1196,41 +1317,40 @@ pub(crate) async fn upload_youtube_private_draft(
     if !crate::workspace_media::hex(&clip_id) {
         return Err(bad("Invalid clip ID."));
     }
-    let (file_path, fallback_title) = {
-        let db = app.db.lock().map_err(internal)?;
-        let row: Option<(String, String)> = db
-            .query_row(
-                "SELECT title, exported_path FROM workspace_film_roll WHERE clip_id=?1",
-                [&clip_id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()
-            .map_err(internal)?;
-        let Some((title, exported_path)) = row else {
-            return Err((StatusCode::NOT_FOUND, "Clip not found in Film Roll.".into()));
-        };
-        let path = if !input.use_source
-            && !exported_path.is_empty()
-            && !exported_path.contains(['/', '\\', ':', '\0'])
-            && !exported_path.starts_with('.')
-        {
-            let p = crate::workspace_film_roll::exports_dir(&app).join(&exported_path);
-            if p.is_file() {
-                p
-            } else {
-                crate::workspace_film_roll::resolve_video(&app, &clip_id)
-                    .ok_or_else(|| (StatusCode::NOT_FOUND, "Video file unavailable.".into()))?
-            }
-        } else {
-            crate::workspace_film_roll::resolve_video(&app, &clip_id)
-                .ok_or_else(|| (StatusCode::NOT_FOUND, "Video file unavailable.".into()))?
-        };
-        (path, title)
-    };
+    let (file_path, fallback_title) = resolve_upload_file(&app, &clip_id, input.use_source)?;
     let meta = std::fs::metadata(&file_path).map_err(internal)?;
     if meta.len() == 0 || meta.len() > 250 * 1024 * 1024 {
         return Err(bad("Video must be between 1 byte and 250 MiB for draft upload."));
     }
+
+    let publish_at = input
+        .publish_at
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            chrono::DateTime::parse_from_rfc3339(s)
+                .map(|dt| dt.to_rfc3339())
+                .map_err(|_| bad("Scheduled publish time must be a valid ISO timestamp."))
+        })
+        .transpose()?;
+
+    // Server-enforced PRIVATE or UNLISTED only. Scheduled publish requires privacyStatus="private".
+    let privacy = if publish_at.is_some() {
+        "private".to_owned()
+    } else {
+        match input.privacy.as_deref() {
+            Some("unlisted") => "unlisted".to_owned(),
+            _ => "private".to_owned(),
+        }
+    };
+
+    let thumb_bytes = input
+        .thumbnail_png_base64
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .and_then(crate::workspace_film_roll::decode_base64)
+        .filter(|b| b.len() >= 8 && b.len() <= 2 * 1024 * 1024 && b.starts_with(b"\x89PNG\r\n\x1a\n"));
 
     let title = input
         .title
@@ -1257,13 +1377,21 @@ pub(crate) async fn upload_youtube_private_draft(
         .filter(|s| !s.is_empty())
         .take(30)
         .collect();
+    let privacy_clone = privacy.clone();
+    let publish_at_clone = publish_at.clone();
 
-    let uploaded = tokio::task::spawn_blocking(move || -> Result<String, String> {
+    let (video_id, thumb_uploaded, thumb_note) = tokio::task::spawn_blocking(move || -> Result<(String, bool, Option<String>), String> {
         let (access_token, _) = refresh_youtube_access_token()?;
         let video_bytes = std::fs::read(&file_path).map_err(|e| format!("Could not read MP4: {e}"))?;
         let auth = format!("Bearer {access_token}");
         let len_str = video_bytes.len().to_string();
-        // Server-enforced PRIVATE draft ONLY. Public auto-posting is never permitted.
+        let mut status_obj = json!({
+            "privacyStatus": privacy_clone,
+            "selfDeclaredMadeForKids": false
+        });
+        if let Some(when) = publish_at_clone {
+            status_obj["publishAt"] = json!(when);
+        }
         let metadata = json!({
             "snippet": {
                 "title": title,
@@ -1271,10 +1399,7 @@ pub(crate) async fn upload_youtube_private_draft(
                 "tags": tags,
                 "categoryId": "20"
             },
-            "status": {
-                "privacyStatus": "private",
-                "selfDeclaredMadeForKids": false
-            }
+            "status": status_obj
         });
         let meta_bytes = serde_json::to_vec(&metadata).map_err(|e| e.to_string())?;
         let init_resp = platform::https_request(
@@ -1326,23 +1451,553 @@ pub(crate) async fn upload_youtube_private_draft(
             .filter(|s| !s.is_empty())
             .ok_or_else(|| "YouTube upload succeeded but returned no video ID.".to_owned())?
             .to_owned();
-        Ok(video_id)
+
+        let mut thumb_ok = false;
+        let mut thumb_err = None;
+        if let Some(png) = thumb_bytes {
+            let tpath = format!("/upload/youtube/v3/thumbnails/set?videoId={}&uploadType=media", url_encode(&video_id));
+            match platform::https_request(
+                "www.googleapis.com",
+                "POST",
+                &tpath,
+                &[("Authorization", &auth), ("Content-Type", "image/png")],
+                &png,
+                30_000,
+            ) {
+                Ok(r) if r.status == 200 => thumb_ok = true,
+                Ok(r) => {
+                    let ev: Value = serde_json::from_slice(&r.body).unwrap_or_default();
+                    thumb_err = Some(
+                        ev["error"]["message"]
+                            .as_str()
+                            .unwrap_or("Channel may require phone verification for custom thumbnails.")
+                            .to_owned(),
+                    );
+                }
+                Err(e) => thumb_err = Some(e),
+            }
+        }
+        Ok((video_id, thumb_ok, thumb_err))
     })
     .await
     .map_err(internal)?
     .map_err(bad)?;
 
+    let studio_url = format!("https://studio.youtube.com/video/{video_id}/edit");
     if let Ok(db) = app.db.lock() {
         let _ = db.execute(
+            "UPDATE workspace_film_roll SET yt_video_id=?1 WHERE clip_id=?2",
+            params![video_id, clip_id],
+        );
+        let _ = db.execute(
             "UPDATE workspace_export_history SET youtube_video_id=?1 WHERE id=(SELECT id FROM workspace_export_history WHERE clip_id=?2 ORDER BY id DESC LIMIT 1)",
-            params![uploaded, clip_id],
+            params![video_id, clip_id],
         );
     }
+    sync_posting_queue_url(&app, &clip_id, "youtube", &studio_url);
     Ok(Json(json!({
-        "video_id": uploaded,
-        "privacy": "private",
-        "studio_url": format!("https://studio.youtube.com/video/{uploaded}/edit")
+        "video_id": video_id,
+        "privacy": privacy,
+        "publish_at": publish_at,
+        "thumbnail_uploaded": thumb_uploaded,
+        "thumbnail_note": thumb_note,
+        "studio_url": studio_url
     })))
+}
+
+pub(crate) async fn upload_instagram_reel(
+    State(app): State<App>,
+    AxumPath(clip_id): AxumPath<String>,
+    Json(input): Json<InstagramReelUploadInput>,
+) -> ApiResult<Json<Value>> {
+    if !crate::workspace_media::hex(&clip_id) {
+        return Err(bad("Invalid clip ID."));
+    }
+    let (file_path, _) = resolve_upload_file(&app, &clip_id, input.use_source)?;
+    let meta = std::fs::metadata(&file_path).map_err(internal)?;
+    if meta.len() == 0 || meta.len() > 250 * 1024 * 1024 {
+        return Err(bad("Reel video must be between 1 byte and 250 MiB."));
+    }
+    let ig_id: String = {
+        let db = app.db.lock().map_err(internal)?;
+        db.query_row(
+            "SELECT account_id FROM workspace_oauth_accounts WHERE provider='instagram' AND status='connected'",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(internal)?
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| bad("Connect Instagram in Connections & System first."))?
+    };
+    let tokens = platform::vault_read(token_target("instagram").unwrap())
+        .ok_or_else(|| bad("Instagram token missing. Reconnect Instagram."))?;
+    let access_token = tokens["access_token"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| bad("Instagram token missing. Reconnect Instagram."))?
+        .to_owned();
+
+    let caption = input
+        .caption
+        .as_deref()
+        .unwrap_or("")
+        .chars()
+        .take(2200)
+        .collect::<String>();
+    let share_to_feed = input.share_to_feed;
+    let thumb_offset = input.thumb_offset_ms;
+    let do_publish = input.publish;
+
+    let result = tokio::task::spawn_blocking(move || -> Result<(String, Option<String>, Option<String>), String> {
+        let video_bytes = std::fs::read(&file_path).map_err(|e| format!("Could not read MP4: {e}"))?;
+        let file_size = video_bytes.len().to_string();
+
+        // Step 1: Create resumable Reels container on Graph API
+        let mut form = format!(
+            "media_type=REELS&upload_type=resumable&share_to_feed={}&access_token={}",
+            if share_to_feed { "true" } else { "false" },
+            url_encode(&access_token),
+        );
+        if !caption.trim().is_empty() {
+            form.push_str("&caption=");
+            form.push_str(&url_encode(caption.trim()));
+        }
+        if let Some(off) = thumb_offset {
+            form.push_str("&thumb_offset=");
+            form.push_str(&off.to_string());
+        }
+        let init_path = format!("/v21.0/{}/media", url_encode(&ig_id));
+        let init_resp = platform::https_request(
+            "graph.facebook.com",
+            "POST",
+            &init_path,
+            &[("Content-Type", "application/x-www-form-urlencoded")],
+            form.as_bytes(),
+            20_000,
+        )?;
+        let init_val: Value = serde_json::from_slice(&init_resp.body).unwrap_or_default();
+        if init_resp.status != 200 {
+            let msg = init_val["error"]["message"]
+                .as_str()
+                .unwrap_or("Instagram rejected Reel container creation.");
+            return Err(msg.to_owned());
+        }
+        let container_id = init_val["id"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "Instagram did not return a container ID.".to_owned())?
+            .to_owned();
+        let upload_uri = init_val["uri"]
+            .as_str()
+            .filter(|s| s.starts_with("https://rupload.facebook.com/"))
+            .ok_or_else(|| "Instagram did not return a rupload.facebook.com upload URI.".to_owned())?;
+        let upload_path = upload_uri
+            .strip_prefix("https://rupload.facebook.com")
+            .ok_or_else(|| "Invalid rupload URI.".to_owned())?;
+
+        // Step 2: Upload raw MP4 bytes directly to rupload.facebook.com (no cloud hosting required!)
+        let oauth_hdr = format!("OAuth {access_token}");
+        let up_resp = platform::https_request(
+            "rupload.facebook.com",
+            "POST",
+            upload_path,
+            &[
+                ("Authorization", &oauth_hdr),
+                ("offset", "0"),
+                ("file_size", &file_size),
+                ("Content-Type", "application/octet-stream"),
+            ],
+            &video_bytes,
+            180_000,
+        )?;
+        if up_resp.status != 200 {
+            let ev: Value = serde_json::from_slice(&up_resp.body).unwrap_or_default();
+            let msg = ev["debug_info"]["message"]
+                .as_str()
+                .or_else(|| ev["error"]["message"].as_str())
+                .unwrap_or("Instagram rupload video transfer failed.");
+            return Err(msg.to_owned());
+        }
+
+        // Step 3: Poll container processing until FINISHED (up to 60s)
+        let status_path = format!(
+            "/v21.0/{}?fields=status_code,status&access_token={}",
+            url_encode(&container_id),
+            url_encode(&access_token),
+        );
+        let mut finished = false;
+        for _ in 0..30 {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            let sresp = platform::https_request("graph.facebook.com", "GET", &status_path, &[], &[], 15_000)?;
+            let sval: Value = serde_json::from_slice(&sresp.body).unwrap_or_default();
+            match sval["status_code"].as_str() {
+                Some("FINISHED") => {
+                    finished = true;
+                    break;
+                }
+                Some("ERROR") | Some("EXPIRED") => {
+                    let msg = sval["status"].as_str().unwrap_or("Instagram video processing failed.");
+                    return Err(msg.to_owned());
+                }
+                _ => {}
+            }
+        }
+        if !finished {
+            return Err("Instagram is still processing this video container. Try again in a moment.".to_owned());
+        }
+
+        if !do_publish {
+            return Ok((container_id, None, None));
+        }
+
+        // Step 4: Publish finished container (only when user explicitly confirmed publish=true)
+        let pub_path = format!("/v21.0/{}/media_publish", url_encode(&ig_id));
+        let pub_body = format!(
+            "creation_id={}&access_token={}",
+            url_encode(&container_id),
+            url_encode(&access_token),
+        );
+        let pub_resp = platform::https_request(
+            "graph.facebook.com",
+            "POST",
+            &pub_path,
+            &[("Content-Type", "application/x-www-form-urlencoded")],
+            pub_body.as_bytes(),
+            30_000,
+        )?;
+        let pub_val: Value = serde_json::from_slice(&pub_resp.body).unwrap_or_default();
+        if pub_resp.status != 200 {
+            let msg = pub_val["error"]["message"]
+                .as_str()
+                .unwrap_or("Instagram rejected Reel publish.");
+            return Err(msg.to_owned());
+        }
+        let media_id = pub_val["id"].as_str().map(str::to_owned);
+        let mut permalink = None;
+        if let Some(mid) = media_id.as_deref() {
+            let p_path = format!(
+                "/v21.0/{}?fields=permalink&access_token={}",
+                url_encode(mid),
+                url_encode(&access_token),
+            );
+            if let Ok(pr) = platform::https_request("graph.facebook.com", "GET", &p_path, &[], &[], 10_000)
+                && pr.status == 200
+                && let Ok(pv) = serde_json::from_slice::<Value>(&pr.body)
+            {
+                permalink = pv["permalink"].as_str().map(str::to_owned);
+            }
+        }
+        Ok((container_id, media_id, permalink))
+    })
+    .await
+    .map_err(internal)?
+    .map_err(bad)?;
+
+    let (container_id, media_id, permalink) = result;
+    if let Some(mid) = media_id.as_deref() {
+        let link = permalink.as_deref().unwrap_or("");
+        if let Ok(db) = app.db.lock() {
+            let _ = db.execute(
+                "UPDATE workspace_film_roll SET ig_media_id=?1, ig_permalink=?2 WHERE clip_id=?3",
+                params![mid, link, clip_id],
+            );
+            let _ = db.execute(
+                "UPDATE workspace_export_history SET ig_permalink=?1 WHERE id=(SELECT id FROM workspace_export_history WHERE clip_id=?2 ORDER BY id DESC LIMIT 1)",
+                params![link, clip_id],
+            );
+        }
+        if !link.is_empty() {
+            sync_posting_queue_url(&app, &clip_id, "instagram", link);
+        }
+    }
+    Ok(Json(json!({
+        "container_id": container_id,
+        "published": media_id.is_some(),
+        "media_id": media_id,
+        "permalink": permalink
+    })))
+}
+
+pub(crate) async fn extend_instagram_token(State(app): State<App>) -> ApiResult<Json<Value>> {
+    let client = platform::vault_read(client_target("instagram").unwrap())
+        .ok_or_else(|| bad("Instagram App ID & Secret are not configured."))?;
+    let tokens = platform::vault_read(token_target("instagram").unwrap())
+        .ok_or_else(|| bad("Instagram is not connected."))?;
+    let cid = client["client_id"].as_str().unwrap_or("").to_owned();
+    let csec = client["client_secret"].as_str().unwrap_or("").to_owned();
+    let cur = tokens["access_token"].as_str().unwrap_or("").to_owned();
+    if cid.is_empty() || csec.is_empty() || cur.is_empty() {
+        return Err(bad("Missing Instagram credentials or token."));
+    }
+    let app_clone = app.clone();
+    let new_exp = tokio::task::spawn_blocking(move || -> Result<i64, String> {
+        let ll_path = format!(
+            "/v21.0/oauth/access_token?grant_type=fb_exchange_token&client_id={}&client_secret={}&fb_exchange_token={}",
+            url_encode(&cid),
+            url_encode(&csec),
+            url_encode(&cur),
+        );
+        let resp = platform::https_request("graph.facebook.com", "GET", &ll_path, &[], &[], 15_000)?;
+        let parsed: Value = serde_json::from_slice(&resp.body)
+            .map_err(|_| "Unreadable response from Meta token exchange.".to_owned())?;
+        if resp.status != 200 {
+            let msg = parsed["error"]["message"]
+                .as_str()
+                .unwrap_or("Meta rejected token extension.");
+            return Err(msg.to_owned());
+        }
+        let next_tok = parsed["access_token"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "Meta did not return a refreshed token.".to_owned())?
+            .to_owned();
+        let exp = now_unix() + parsed["expires_in"].as_i64().unwrap_or(5_184_000);
+        platform::vault_write(
+            token_target("instagram").unwrap(),
+            &json!({ "access_token": next_tok, "expires_at": exp }),
+        )?;
+        if let Ok(db) = app_clone.db.lock() {
+            let _ = db.execute(
+                "UPDATE workspace_oauth_accounts SET expires_at=?1, last_checked_at=?2, last_error='' WHERE provider='instagram'",
+                params![exp, now_unix()],
+            );
+        }
+        Ok(exp)
+    })
+    .await
+    .map_err(internal)?
+    .map_err(bad)?;
+    Ok(Json(json!({ "provider": "instagram", "expires_at": new_exp })))
+}
+
+pub(crate) async fn sync_analytics(State(app): State<App>) -> ApiResult<Json<Value>> {
+    let app_clone = app.clone();
+    let report = tokio::task::spawn_blocking(move || -> Value {
+        let mut yt_synced = 0usize;
+        let mut yt_err: Option<String> = None;
+        let mut ig_synced = 0usize;
+        let mut ig_err: Option<String> = None;
+
+        // 1. Sync YouTube channel stats + last 25 uploads
+        if let Ok((tok, exp)) = refresh_youtube_access_token() {
+            let auth = format!("Bearer {tok}");
+            match platform::https_request(
+                "www.googleapis.com",
+                "GET",
+                "/youtube/v3/channels?part=snippet,statistics,contentDetails&mine=true",
+                &[("Authorization", &auth)],
+                &[],
+                15_000,
+            ) {
+                Ok(r) if r.status == 200 => {
+                    if let Ok(v) = serde_json::from_slice::<Value>(&r.body)
+                        && let Some(ch) = v["items"].as_array().and_then(|a| a.first())
+                    {
+                        let ch_id = ch["id"].as_str().unwrap_or("");
+                        let ch_name = ch["snippet"]["title"].as_str().unwrap_or("YouTube");
+                        let ch_handle = ch["snippet"]["customUrl"].as_str().unwrap_or("");
+                        let subs = ch["statistics"]["subscriberCount"].as_str().and_then(|s| s.parse::<i64>().ok());
+                        let total_views = ch["statistics"]["viewCount"].as_str().and_then(|s| s.parse::<i64>().ok());
+                        let vid_count = ch["statistics"]["videoCount"].as_str().and_then(|s| s.parse::<i64>().ok());
+                        let _ = save_account_row(&app_clone, "youtube", "connected", ch_id, ch_name, ch_handle, "", subs, vid_count, Some(exp), "");
+
+                        let mut sum_likes = 0i64;
+                        let mut sum_comments = 0i64;
+                        if let Some(uploads) = ch["contentDetails"]["relatedPlaylists"]["uploads"].as_str() {
+                            let pl_path = format!(
+                                "/youtube/v3/playlistItems?part=contentDetails&maxResults=25&playlistId={}",
+                                url_encode(uploads)
+                            );
+                            if let Ok(plr) = platform::https_request("www.googleapis.com", "GET", &pl_path, &[("Authorization", &auth)], &[], 15_000)
+                                && plr.status == 200
+                                && let Ok(plv) = serde_json::from_slice::<Value>(&plr.body)
+                            {
+                                let ids: Vec<String> = plv["items"]
+                                    .as_array()
+                                    .into_iter()
+                                    .flatten()
+                                    .filter_map(|x| x["contentDetails"]["videoId"].as_str().map(str::to_owned))
+                                    .collect();
+                                if !ids.is_empty() {
+                                    let vpath = format!(
+                                        "/youtube/v3/videos?part=snippet,statistics&id={}",
+                                        url_encode(&ids.join(","))
+                                    );
+                                    if let Ok(vr) = platform::https_request("www.googleapis.com", "GET", &vpath, &[("Authorization", &auth)], &[], 15_000)
+                                        && vr.status == 200
+                                        && let Ok(vv) = serde_json::from_slice::<Value>(&vr.body)
+                                        && let Some(items) = vv["items"].as_array()
+                                        && let Ok(db) = app_clone.db.lock()
+                                    {
+                                        for item in items {
+                                            let pid = item["id"].as_str().unwrap_or("");
+                                            if pid.is_empty() { continue; }
+                                            let title = item["snippet"]["title"].as_str().unwrap_or("");
+                                            let desc = item["snippet"]["description"].as_str().unwrap_or("");
+                                            let pub_at = item["snippet"]["publishedAt"].as_str().unwrap_or("");
+                                            let thumb = item["snippet"]["thumbnails"]["medium"]["url"]
+                                                .as_str()
+                                                .or_else(|| item["snippet"]["thumbnails"]["default"]["url"].as_str())
+                                                .unwrap_or("");
+                                            let views = item["statistics"]["viewCount"].as_str().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+                                            let likes = item["statistics"]["likeCount"].as_str().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+                                            let comments = item["statistics"]["commentCount"].as_str().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+                                            sum_likes += likes;
+                                            sum_comments += comments;
+                                            let link = format!("https://www.youtube.com/watch?v={pid}");
+                                            let _ = db.execute(
+                                                "INSERT INTO workspace_channel_posts(provider, post_id, title, caption, permalink, thumbnail_url, published_at, views, likes, comments, media_type, synced_at)
+                                                 VALUES('youtube', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'VIDEO', unixepoch())
+                                                 ON CONFLICT(provider, post_id) DO UPDATE SET
+                                                   title=excluded.title, caption=excluded.caption, thumbnail_url=excluded.thumbnail_url,
+                                                   published_at=excluded.published_at, views=excluded.views, likes=excluded.likes,
+                                                   comments=excluded.comments, synced_at=unixepoch()",
+                                                params![pid, title, desc, link, thumb, pub_at, views, likes, comments],
+                                            );
+                                            yt_synced += 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        record_analytics_snapshot(&app_clone, "youtube", subs, total_views, Some(sum_likes), Some(sum_comments));
+                    }
+                }
+                Ok(_) => yt_err = Some("YouTube API rejected analytics sync.".to_owned()),
+                Err(e) => yt_err = Some(e),
+            }
+        }
+
+        // 2. Sync Instagram @account stats + last 25 media posts/Reels
+        if let Some(tokens) = platform::vault_read(token_target("instagram").unwrap())
+            && let Some(tok) = tokens["access_token"].as_str().filter(|s| !s.is_empty())
+        {
+            let exp = tokens["expires_at"].as_i64();
+            match fetch_instagram_business_account(tok) {
+                Ok((ig_id, ig_name, ig_handle, followers, media_count)) => {
+                    let _ = save_account_row(&app_clone, "instagram", "connected", &ig_id, &ig_name, &ig_handle, "", followers, media_count, exp, "");
+                    let mpath = format!(
+                        "/v21.0/{}/media?fields=id,caption,media_type,permalink,thumbnail_url,media_url,timestamp,like_count,comments_count&limit=25&access_token={}",
+                        url_encode(&ig_id),
+                        url_encode(tok),
+                    );
+                    let mut sum_likes = 0i64;
+                    let mut sum_comments = 0i64;
+                    if let Ok(mr) = platform::https_request("graph.facebook.com", "GET", &mpath, &[], &[], 15_000)
+                        && mr.status == 200
+                        && let Ok(mv) = serde_json::from_slice::<Value>(&mr.body)
+                        && let Some(items) = mv["data"].as_array()
+                        && let Ok(db) = app_clone.db.lock()
+                    {
+                        for item in items {
+                            let pid = item["id"].as_str().unwrap_or("");
+                            if pid.is_empty() { continue; }
+                            let cap = item["caption"].as_str().unwrap_or("");
+                            let title: String = cap.lines().next().unwrap_or("Instagram Post").chars().take(90).collect();
+                            let link = item["permalink"].as_str().unwrap_or("");
+                            let thumb = item["thumbnail_url"]
+                                .as_str()
+                                .or_else(|| item["media_url"].as_str())
+                                .unwrap_or("");
+                            let ts = item["timestamp"].as_str().unwrap_or("");
+                            let likes = item["like_count"].as_i64().unwrap_or(0);
+                            let comments = item["comments_count"].as_i64().unwrap_or(0);
+                            let mtype = item["media_type"].as_str().unwrap_or("VIDEO");
+                            sum_likes += likes;
+                            sum_comments += comments;
+                            let _ = db.execute(
+                                "INSERT INTO workspace_channel_posts(provider, post_id, title, caption, permalink, thumbnail_url, published_at, views, likes, comments, media_type, synced_at)
+                                 VALUES('instagram', ?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9, unixepoch())
+                                 ON CONFLICT(provider, post_id) DO UPDATE SET
+                                   title=excluded.title, caption=excluded.caption, permalink=excluded.permalink,
+                                   thumbnail_url=excluded.thumbnail_url, published_at=excluded.published_at,
+                                   likes=excluded.likes, comments=excluded.comments, media_type=excluded.media_type, synced_at=unixepoch()",
+                                params![pid, title, cap, link, thumb, ts, likes, comments, mtype],
+                            );
+                            ig_synced += 1;
+                        }
+                    }
+                    record_analytics_snapshot(&app_clone, "instagram", followers, None, Some(sum_likes), Some(sum_comments));
+                }
+                Err(e) => ig_err = Some(e),
+            }
+        }
+
+        json!({
+            "youtube_synced": yt_synced,
+            "youtube_error": yt_err,
+            "instagram_synced": ig_synced,
+            "instagram_error": ig_err,
+            "synced_at": now_unix()
+        })
+    })
+    .await
+    .map_err(internal)?;
+    Ok(Json(report))
+}
+
+pub(crate) async fn get_analytics(State(app): State<App>) -> ApiResult<Json<Value>> {
+    let db = app.db.lock().map_err(internal)?;
+    let mut accounts = json!({});
+    {
+        let mut stmt = db
+            .prepare(
+                "SELECT provider, status, account_name, handle, subscribers, media_count, expires_at, last_checked_at
+                 FROM workspace_oauth_accounts",
+            )
+            .map_err(internal)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    json!({
+                        "status": r.get::<_, String>(1)?,
+                        "account_name": r.get::<_, String>(2)?,
+                        "handle": r.get::<_, String>(3)?,
+                        "subscribers": r.get::<_, Option<i64>>(4)?,
+                        "media_count": r.get::<_, Option<i64>>(5)?,
+                        "expires_at": r.get::<_, Option<i64>>(6)?,
+                        "last_checked_at": r.get::<_, Option<i64>>(7)?,
+                    }),
+                ))
+            })
+            .map_err(internal)?;
+        for (k, v) in rows.flatten() {
+            accounts[k] = v;
+        }
+    }
+    let posts: Vec<Value> = {
+        let mut stmt = db
+            .prepare(
+                "SELECT provider, post_id, title, caption, permalink, thumbnail_url,
+                        published_at, views, likes, comments, media_type, synced_at
+                 FROM workspace_channel_posts
+                 ORDER BY published_at DESC, synced_at DESC
+                 LIMIT 100",
+            )
+            .map_err(internal)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(json!({
+                    "provider": r.get::<_, String>(0)?,
+                    "post_id": r.get::<_, String>(1)?,
+                    "title": r.get::<_, String>(2)?,
+                    "caption": r.get::<_, String>(3)?,
+                    "permalink": r.get::<_, String>(4)?,
+                    "thumbnail_url": r.get::<_, String>(5)?,
+                    "published_at": r.get::<_, String>(6)?,
+                    "views": r.get::<_, i64>(7)?,
+                    "likes": r.get::<_, i64>(8)?,
+                    "comments": r.get::<_, i64>(9)?,
+                    "media_type": r.get::<_, String>(10)?,
+                    "synced_at": r.get::<_, i64>(11)?,
+                }))
+            })
+            .map_err(internal)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(internal)?
+    };
+    Ok(Json(json!({ "accounts": accounts, "posts": posts })))
 }
 
 pub(crate) async fn connect_instagram_token(
