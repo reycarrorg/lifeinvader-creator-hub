@@ -1282,7 +1282,7 @@ fn run_ffmpeg_once(
     Ok(())
 }
 
-fn probed_duration_ms(app: &App, clip_id: &str) -> Option<u64> {
+pub(crate) fn probed_duration_ms(app: &App, clip_id: &str) -> Option<u64> {
     let db = app.db.lock().ok()?;
     let raw: String = db
         .query_row(
@@ -1442,10 +1442,9 @@ async fn render_clip_internal(
         input.outro_cta.as_deref(),
         out_dur_s,
     ));
-    video_filters.extend(crate::workspace_studio::build_studio_video_filters(
-        &input.studio,
-        out_dur_s,
-    ));
+    let (studio_vf, temp_ass_path) =
+        crate::workspace_studio::build_studio_video_filters(&input.studio, &out_dir);
+    video_filters.extend(studio_vf);
 
     let temp_srt_path = if let Some(raw_srt) = input.srt_text.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         let srt_file = out_dir.join(format!("sub-{short_id}-{}.srt", chrono::Utc::now().timestamp_millis()));
@@ -1481,10 +1480,10 @@ async fn render_clip_internal(
         if let Some(gain) = input.audio_gain_db.filter(|g| g.is_finite() && g.abs() >= 0.25) {
             audio_filters.push(format!("volume={:.1}dB", gain.clamp(-12.0, 12.0)));
         }
-        if input.studio.voiceover_path.as_deref().map(str::trim).unwrap_or("").is_empty()
-            && let Some(vfx) = crate::workspace_studio::voice_fx_filter(input.studio.voice_fx.as_deref())
+        if input.studio.studio_voice_enhance
+            && input.studio.voiceover_path.as_deref().map(str::trim).unwrap_or("").is_empty()
         {
-            audio_filters.push(vfx.to_owned());
+            audio_filters.push(crate::workspace_studio::studio_voice_enhance_filter().to_owned());
         }
         if normalize_audio {
             audio_filters.push("loudnorm=I=-14:TP=-1.5:LRA=11".to_owned());
@@ -1513,7 +1512,7 @@ async fn render_clip_internal(
     let tmp_clone = tmp_path.clone();
     let final_clone = final_path.clone();
     let srt_cleanup = temp_srt_path.clone();
-    let app_for_studio = app.clone();
+    let ass_cleanup = temp_ass_path.clone();
     let studio_opts = input.studio.clone();
 
     let render = tokio::task::spawn_blocking(move || -> Result<(u64, String), String> {
@@ -1586,14 +1585,16 @@ async fn render_clip_internal(
         if let Some(p) = srt_cleanup {
             let _ = std::fs::remove_file(p);
         }
+        if let Some(p) = ass_cleanup {
+            let _ = std::fs::remove_file(p);
+        }
         res?;
         if crate::workspace_studio::needs_studio_post_passes(&studio_opts) {
             if let Ok(mut st) = export_state().lock() {
-                st.message = "Compositing Original Studio FX (voiceover, reaction cam, SFX, replay/cards)…".to_owned();
+                st.message = "Running Pro Studio pass (jump-cut silences / voiceover auto-duck)…".to_owned();
                 st.percent = 92;
             }
             crate::workspace_studio::apply_studio_post_passes(
-                &app_for_studio,
                 &ffmpeg,
                 &tmp_clone,
                 &studio_opts,

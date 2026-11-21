@@ -3,59 +3,147 @@
 const $ = id => document.getElementById(id);
 const app = () => window.snapmaticApp;
 
+const TPL_KEY = 'snapmatic-autocap-templates-v1';
 const GRADE_CSS = {
  none: '',
- vice_sunset: 'contrast(1.1) saturate(1.28) hue-rotate(-6deg)',
- miami_gold: 'contrast(1.06) saturate(1.22) sepia(0.14) brightness(1.03)',
- night_heist: 'contrast(1.16) saturate(0.88) brightness(0.95) hue-rotate(12deg)',
- vhs_1986: 'contrast(1.1) saturate(1.18) sepia(0.08)',
- ultra_crisp: 'contrast(1.08) saturate(1.14)',
-};
-
-const SCRIPT_TEMPLATES = {
- breakdown: 'Stop scrolling — 99% of GTA 6 players completely missed this detail. Look closely at what happens right here in the background. Rockstar literally programmed realistic reactions into every NPC in Vice City. Would you try this on Day 1? Drop your take in the comments!',
- hottake: 'Unpopular opinion about GTA 6 — this single feature is going to change open-world gaming forever. Watch how smooth the physics react right here. Let me know if you think this is a W or an L!',
- didyouknow: 'Did you know you can actually pull this off in GTA 6? Most people speed right past this spot without ever noticing what triggers when you wait two seconds. Follow for daily Vice City secrets!',
- top3: 'Here are the 3 wildest GTA 6 details fans just uncovered. Number 1 is already insane, wait until you see number 3 at the end. Which one surprised you the most?',
+ crisp_rec709: 'contrast(1.06) saturate(1.10) brightness(1.01)',
+ warm_cinema: 'contrast(1.08) saturate(1.12) sepia(0.10) brightness(1.01)',
+ vice_night: 'contrast(1.10) saturate(1.20) hue-rotate(-5deg)',
+ hdr_gaming: 'contrast(1.12) saturate(1.18)',
 };
 
 const state = {
- voiceover_path: null,
- voiceover_blob_url: null,
- reaction_cam_path: null,
- freeze_at_ms: null,
- zoom_punch_at_ms: null,
- replay_start_ms: null,
- replay_end_ms: null,
- countdown_at_ms: null,
- color_grade: 'none',
- commentary_cards: [],
- sfx_cues: [],
- montage_clips: [],
+ whisperReady: false,
+ words: [], // [{ text, start_ms, end_ms, emoji, color }]
+ selectedWordIdx: -1,
+ preset: 'hormozi',
+ activeColor: '#FFE600',
+ colorGrade: 'none',
+ lutPath: '',
+ voiceoverPath: null,
+ voiceoverBlobUrl: null,
 };
 
+let whisperPollTimer = null;
 let voRecorder = null, voChunks = [], voStream = null, voMeterRaf = null, voAudioCtx = null;
-let camRecorder = null, camChunks = [], camStream = null;
-let tpRunning = false, tpRaf = null, tpLastTs = 0;
+
+function getCaptionStyle() {
+ return {
+  preset: state.preset,
+  words_per_line: Number($('ac-wpl')?.value) || 3,
+  font_size: Number($('ac-size')?.value) || 68,
+  pos_y_pct: Number($('ac-posy')?.value) || 74,
+  active_color: state.activeColor,
+  uppercase: Boolean($('ac-uppercase')?.checked),
+  pop_animation: Boolean($('ac-pop')?.checked),
+  show_emojis: Boolean($('ac-emojis')?.checked),
+ };
+}
+
+function buildPhrases(words, wpl) {
+ const phrases = [];
+ let cur = [];
+ for (let i = 0; i < words.length; i++) {
+  const w = words[i];
+  if (!w?.text?.trim()) continue;
+  const prev = cur.length ? cur[cur.length - 1].word : null;
+  const pauseGap = prev && (w.start_ms - prev.end_ms) > 480;
+  const endSent = prev && /[.!?]$/.test(prev.text.trim());
+  if (cur.length && (cur.length >= wpl || pauseGap || endSent)) {
+   phrases.push(cur);
+   cur = [];
+  }
+  cur.push({ idx: i, word: w });
+ }
+ if (cur.length) phrases.push(cur);
+ return phrases;
+}
+
+// ==========================================================================
+// LIVE WYSIWYG VIEWFINDER AUTOCAPTION PREVIEW
+// ==========================================================================
+function renderLiveCaptions() {
+ const layer = $('vf-autocap-layer');
+ if (!layer) return;
+ if (!state.words.length) {
+  layer.hidden = true;
+  layer.replaceChildren();
+  return;
+ }
+ const cfg = getCaptionStyle();
+ const v = app()?.getVideo();
+ const es = app()?.getEditState();
+ const trimInMs = es?.in_ms || 0;
+ const curMs = v && Number.isFinite(v.currentTime) ? Math.max(0, Math.round(v.currentTime * 1000) - trimInMs) : 0;
+
+ const phrases = buildPhrases(state.words, cfg.words_per_line);
+ // Find active phrase (or preview first phrase when paused at 0s so styling changes are immediately visible!)
+ let activePhrase = phrases.find(ph => curMs >= ph[0].word.start_ms && curMs <= ph[ph.length - 1].word.end_ms + 250);
+ let previewMode = false;
+ if (!activePhrase && (!v || v.paused)) {
+  // Show closest phrase or first phrase for live WYSIWYG styling
+  activePhrase = phrases.find(ph => ph[ph.length - 1].word.end_ms >= curMs) || phrases[0];
+  previewMode = true;
+ }
+ if (!activePhrase) {
+  layer.hidden = true;
+  return;
+ }
+
+ layer.hidden = false;
+ layer.dataset.preset = cfg.preset;
+ layer.style.top = cfg.pos_y_pct + '%';
+ // Scale 1080p font size down proportionally to the viewfinder width (~275px)
+ const vfW = $('viewfinder')?.clientWidth || 275;
+ const scaledPx = Math.max(11, Math.round((cfg.font_size / 1080) * vfW * 1.12));
+
+ let activeWordIdx = activePhrase[0].idx;
+ if (!previewMode) {
+  for (const item of activePhrase) {
+   if (curMs >= item.word.start_ms) activeWordIdx = item.idx;
+  }
+ }
+
+ layer.replaceChildren(...activePhrase.map(item => {
+  const isAct = item.idx === activeWordIdx;
+  let txt = item.word.text.trim();
+  if (cfg.uppercase) txt = txt.toUpperCase();
+  if (isAct && cfg.show_emojis && item.word.emoji) txt += ' ' + item.word.emoji;
+  const sp = app().node('span', txt, 'vf-autocap-word' + (isAct && cfg.pop_animation ? ' active' : ''));
+  sp.style.fontSize = scaledPx + 'px';
+  const col = item.word.color || cfg.active_color;
+  if (isAct) {
+   if (cfg.preset === 'submagic_pill') {
+    sp.style.backgroundColor = col;
+    sp.style.color = '#090812';
+   } else {
+    sp.style.color = col;
+   }
+  }
+  return sp;
+ }));
+
+ // Highlight active speaking chip in word editor
+ document.querySelectorAll('#ac-word-chips .ac-word-chip.speaking').forEach(el => el.classList.remove('speaking'));
+ const speakingChip = document.querySelector('#ac-word-chips .ac-word-chip[data-widx="' + activeWordIdx + '"]');
+ if (speakingChip) speakingChip.classList.add('speaking');
+}
+
+function updateColorPreview() {
+ const v = app()?.getVideo();
+ if (!v) return;
+ if (state.colorGrade !== 'none') v.style.filter = GRADE_CSS[state.colorGrade] || '';
+ else if (!$('edit-vivid')?.checked) v.style.filter = '';
+}
 
 function activeFxList() {
  const list = [];
- if (state.voiceover_path) list.push('Voiceover');
- if (state.reaction_cam_path) list.push('Reaction Cam');
- if (($('studio-voice-fx')?.value || 'none') !== 'none') list.push('Mic FX');
- if (state.freeze_at_ms != null) list.push('Freeze-Zoom');
- if (state.zoom_punch_at_ms != null) list.push('Action Punch');
- if (state.replay_start_ms != null && state.replay_end_ms != null) list.push('0.5× Replay');
- if (state.color_grade !== 'none') list.push('Grade:' + state.color_grade);
- if (($('studio-weazel-head')?.value || '').trim()) list.push('Weazel News');
- if (($('studio-credit-handle')?.value || '').trim()) list.push('Credit');
- if (state.commentary_cards.length) list.push(state.commentary_cards.length + ' Card' + (state.commentary_cards.length === 1 ? '' : 's'));
- if (($('studio-poll-prompt')?.value || '').trim()) list.push('Poll');
- if ($('studio-progress-bar')?.checked) list.push('Progress Bar');
- if (state.countdown_at_ms != null) list.push('3-2-1');
- if (($('studio-intro-sting')?.value || '').trim()) list.push('Intro');
- if (($('studio-outro-card')?.value || '').trim()) list.push('Outro');
- if (state.sfx_cues.length) list.push(state.sfx_cues.length + ' SFX');
+ if (state.words.length) list.push('AutoCaptions (' + state.words.length + 'w)');
+ if ($('ac-jumpcut-on')?.checked) list.push('Jump-Cut');
+ if ($('ac-voice-polish')?.checked) list.push('Voice Polish');
+ if (state.voiceoverPath) list.push('Voiceover');
+ if (state.lutPath) list.push('3D LUT');
+ else if (state.colorGrade !== 'none') list.push('Grade');
  return list;
 }
 
@@ -68,65 +156,235 @@ function syncStudioSummary() {
  }
  const sum = $('studio-active-summary');
  if (sum) {
-  sum.textContent = list.length ? 'Active Studio FX (' + list.length + '): ' + list.join(' · ') : 'No Studio FX active yet.';
+  sum.textContent = list.length ? 'Active Pro Studio (' + list.length + '): ' + list.join(' · ') : 'No Pro Studio effects active yet.';
  }
- const fxOut = $('studio-fx-summary');
- if (fxOut) {
-  const parts = [];
-  if (state.freeze_at_ms != null) parts.push('Freeze @ ' + app().time(state.freeze_at_ms / 1000).slice(0, 5));
-  if (state.zoom_punch_at_ms != null) parts.push('Punch-In @ ' + app().time(state.zoom_punch_at_ms / 1000).slice(0, 5));
-  if (state.replay_start_ms != null && state.replay_end_ms != null) {
-   parts.push('0.5× Replay ' + app().time(state.replay_start_ms / 1000).slice(0, 5) + '→' + app().time(state.replay_end_ms / 1000).slice(0, 5));
-  } else if (state.replay_start_ms != null) {
-   parts.push('Replay Start @ ' + app().time(state.replay_start_ms / 1000).slice(0, 5) + ' (set End)');
-  }
-  fxOut.textContent = parts.length ? parts.join(' · ') : 'Seek the video to any moment and click a button to pin FX.';
- }
- updateLiveStudioPreviews();
+ renderLiveCaptions();
+ updateColorPreview();
 }
 
-function updateLiveStudioPreviews() {
- const v = app()?.getVideo();
- if (v && state.color_grade !== 'none') {
-  v.style.filter = GRADE_CSS[state.color_grade] || '';
- } else if (v && !$('edit-vivid')?.checked) {
-  v.style.filter = '';
- }
- const wz = $('vf-weazel-preview');
- const head = ($('studio-weazel-head')?.value || '').trim();
- const tick = ($('studio-weazel-tick')?.value || '').trim();
- if (wz) {
-  wz.hidden = !head;
-  if ($('vf-weazel-head-text')) $('vf-weazel-head-text').textContent = head;
-  if ($('vf-weazel-tick-text')) $('vf-weazel-tick-text').textContent = tick || 'WEAZEL NEWS VICE CITY LIVE · GTA 6 BREAKING COVERAGE';
- }
- const bar = $('vf-progress-preview');
- if (bar) {
-  const show = Boolean($('studio-progress-bar')?.checked);
-  bar.hidden = !show;
-  if (show && v && Number.isFinite(v.duration) && v.duration > 0) {
-   bar.style.width = Math.max(0, Math.min(100, (v.currentTime / v.duration) * 100)) + '%';
+// ==========================================================================
+// TOOL 1: WHISPER AI STATUS, 1-CLICK INSTALLER & WORD-BY-WORD TRANSCRIBER
+// ==========================================================================
+async function refreshWhisperStatus() {
+ try {
+  const s = await app().get('/api/workspace/studio/whisper/status');
+  state.whisperReady = Boolean(s.ready);
+  const badge = $('ac-whisper-badge'), instBtn = $('ac-whisper-install');
+  const pWrap = $('ac-install-progress-wrap'), pBar = $('ac-install-progress'), pTxt = $('ac-install-progress-text');
+
+  if (s.ready) {
+   if (badge) { badge.textContent = 'WHISPER AI READY (' + (s.model_name || 'base.en') + ')'; badge.className = 'flag ready'; }
+   if (instBtn) instBtn.hidden = true;
+   if (pWrap) pWrap.hidden = true;
+   if (whisperPollTimer) { clearInterval(whisperPollTimer); whisperPollTimer = null; }
+  } else if (s.installing) {
+   if (badge) { badge.textContent = 'INSTALLING WHISPER AI…'; badge.className = 'flag warn'; }
+   if (instBtn) instBtn.hidden = true;
+   if (pWrap) pWrap.hidden = false;
+   if (pBar) pBar.value = Number(s.progress_pct) || 5;
+   if (pTxt) pTxt.textContent = s.stage || 'Downloading…';
+   if (!whisperPollTimer) whisperPollTimer = setInterval(refreshWhisperStatus, 900);
+  } else {
+   if (badge) { badge.textContent = s.error ? 'WHISPER INSTALL ERROR' : 'WHISPER AI NOT INSTALLED'; badge.className = 'flag warn'; }
+   if (instBtn) { instBtn.hidden = false; instBtn.disabled = false; }
+   if (pWrap) pWrap.hidden = true;
+   if (s.error && $('ac-transcribe-status')) $('ac-transcribe-status').textContent = 'Install error: ' + s.error;
+   if (whisperPollTimer) { clearInterval(whisperPollTimer); whisperPollTimer = null; }
   }
- }
- const camEl = $('vf-cam-preview');
- if (camEl) {
-  camEl.dataset.layout = $('studio-cam-layout')?.value || 'corner_tr';
- }
+  syncClipSelectionUI(app()?.getSelected?.());
+ } catch {}
 }
 
-async function uploadStudioBlob(blob, kind, fileName) {
+if ($('ac-whisper-install')) $('ac-whisper-install').onclick = async () => {
+ const btn = $('ac-whisper-install');
+ btn.disabled = true;
+ try {
+  await app().get('/api/workspace/studio/whisper/install', { method: 'POST' });
+  app().note('Downloading Local Whisper AI (whisper-cli + base.en model)…');
+  refreshWhisperStatus();
+ } catch (e) {
+  app().note('Whisper install failed: ' + e.message);
+  btn.disabled = false;
+ }
+};
+
+function renderWordEditor() {
+ const wrap = $('ac-editor-wrap'), chips = $('ac-word-chips'), cnt = $('ac-word-count'), clr = $('ac-clear-words');
+ if (!wrap || !chips) return;
+ if (!state.words.length) {
+  wrap.hidden = true;
+  if (clr) clr.hidden = true;
+  if ($('ac-word-edit-bar')) $('ac-word-edit-bar').hidden = true;
+  return;
+ }
+ wrap.hidden = false;
+ if (clr) clr.hidden = false;
+ if (cnt) cnt.textContent = state.words.length + ' spoken word' + (state.words.length === 1 ? '' : 's');
+ chips.replaceChildren(...state.words.map((w, idx) => {
+  const b = app().node('button', w.text + (w.emoji ? ' ' + w.emoji : ''), 'ac-word-chip' + (idx === state.selectedWordIdx ? ' selected' : ''));
+  b.type = 'button';
+  b.dataset.widx = String(idx);
+  b.title = app().time(w.start_ms / 1000).slice(0, 8) + ' — click to seek & edit';
+  b.onclick = () => {
+   state.selectedWordIdx = idx;
+   const es = app()?.getEditState();
+   const v = app()?.getVideo();
+   if (v && Number.isFinite(v.duration)) {
+    v.currentTime = Math.min(v.duration, ((es?.in_ms || 0) + w.start_ms) / 1000);
+   }
+   if ($('ac-word-edit-bar')) $('ac-word-edit-bar').hidden = false;
+   if ($('ac-word-input')) { $('ac-word-input').value = w.text; $('ac-word-input').focus(); }
+   if ($('ac-word-emoji')) $('ac-word-emoji').value = w.emoji || '';
+   renderWordEditor();
+   renderLiveCaptions();
+  };
+  return b;
+ }));
+}
+
+if ($('ac-word-save')) $('ac-word-save').onclick = () => {
+ const w = state.words[state.selectedWordIdx];
+ if (!w) return;
+ const nextTxt = ($('ac-word-input')?.value || '').trim();
+ if (!nextTxt) { state.words.splice(state.selectedWordIdx, 1); state.selectedWordIdx = -1; }
+ else { w.text = nextTxt; w.emoji = ($('ac-word-emoji')?.value || '').trim() || null; }
+ renderWordEditor();
+ syncStudioSummary();
+};
+if ($('ac-word-input')) $('ac-word-input').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('ac-word-save')?.click(); } });
+if ($('ac-word-del')) $('ac-word-del').onclick = () => {
+ if (state.selectedWordIdx < 0 || !state.words[state.selectedWordIdx]) return;
+ state.words.splice(state.selectedWordIdx, 1);
+ state.selectedWordIdx = -1;
+ if ($('ac-word-edit-bar')) $('ac-word-edit-bar').hidden = true;
+ renderWordEditor();
+ syncStudioSummary();
+};
+if ($('ac-clear-words')) $('ac-clear-words').onclick = () => {
+ state.words = [];
+ state.selectedWordIdx = -1;
+ renderWordEditor();
+ syncStudioSummary();
+ if ($('ac-transcribe-status')) $('ac-transcribe-status').textContent = 'Cleared word captions.';
+};
+
+if ($('ac-transcribe-go')) $('ac-transcribe-go').onclick = async () => {
+ const row = app()?.getSelected?.(), btn = $('ac-transcribe-go'), out = $('ac-transcribe-status');
+ if (!row?.from_sources || btn.disabled) return;
+ if (!state.whisperReady) {
+  app().note('Click "Install Local Whisper AI (142 MB)" first — takes ~20 seconds once.');
+  return;
+ }
+ btn.disabled = true;
+ if (out) out.textContent = 'Transcribing exact word timestamps with Local Whisper AI…';
+ try {
+  const es = app().getEditState();
+  const r = await app().get('/api/workspace/studio/transcribe/' + encodeURIComponent(row.clip_id), {
+   method: 'POST', headers: { 'Content-Type': 'application/json' },
+   body: JSON.stringify({ in_ms: es?.in_ms || 0, out_ms: es?.out_ms || null, language: 'en' })
+  });
+  state.words = Array.isArray(r.words) ? r.words : [];
+  state.selectedWordIdx = -1;
+  renderWordEditor();
+  syncStudioSummary();
+  if (state.words.length) {
+   if (out) out.textContent = '✓ Transcribed ' + state.words.length + ' spoken words with exact karaoke timing! Press Play to preview live.';
+   app().note('✨ Auto-generated ' + state.words.length + ' animated karaoke caption words!');
+  } else {
+   if (out) out.textContent = 'No speech detected in this clip segment.';
+   app().note('No speech detected in this clip.');
+  }
+ } catch (e) {
+  if (out) out.textContent = 'Transcription failed: ' + e.message;
+  app().note('Transcription failed: ' + e.message);
+ } finally {
+  syncClipSelectionUI(app()?.getSelected?.());
+ }
+};
+
+// Style preset cards, colors, sliders & checkboxes
+document.querySelectorAll('#ac-style-grid button[data-ac-preset]').forEach(btn => {
+ btn.onclick = () => {
+  state.preset = btn.dataset.acPreset || 'hormozi';
+  document.querySelectorAll('#ac-style-grid button[data-ac-preset]').forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
+  syncStudioSummary();
+ };
+});
+document.querySelectorAll('#ac-color-row button[data-ac-color]').forEach(btn => {
+ btn.onclick = () => {
+  state.activeColor = btn.dataset.acColor || '#FFE600';
+  document.querySelectorAll('#ac-color-row button[data-ac-color]').forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
+  syncStudioSummary();
+ };
+});
+for (const id of ['ac-wpl', 'ac-size', 'ac-posy', 'ac-uppercase', 'ac-pop', 'ac-emojis', 'ac-jumpcut-on', 'ac-voice-polish']) {
+ const el = $(id);
+ if (!el) continue;
+ const onChg = () => {
+  if ($('ac-size-val') && $('ac-size')) $('ac-size-val').textContent = $('ac-size').value + 'px';
+  if ($('ac-posy-val') && $('ac-posy')) $('ac-posy-val').textContent = $('ac-posy').value + '%';
+  syncStudioSummary();
+ };
+ el.addEventListener('input', onChg);
+ el.addEventListener('change', onChg);
+}
+
+// ==========================================================================
+// TOOL 3: OPUSCLIP-STYLE MULTI-HIGHLIGHT FINDER
+// ==========================================================================
+if ($('ac-highlights-go')) $('ac-highlights-go').onclick = async () => {
+ const row = app()?.getSelected?.(), btn = $('ac-highlights-go'), out = $('ac-highlights-status'), box = $('ac-highlights-list');
+ if (!row?.from_sources || btn.disabled) return;
+ btn.disabled = true;
+ if (out) out.textContent = 'Scanning audio dynamics & speech activity for top viral moments…';
+ try {
+  const r = await app().get('/api/workspace/studio/highlights/' + encodeURIComponent(row.clip_id), { method: 'POST' });
+  const list = Array.isArray(r.highlights) ? r.highlights : [];
+  if (out) out.textContent = list.length ? 'Found ' + list.length + ' ranked viral highlight moment' + (list.length === 1 ? '' : 's') + ':' : 'No highlights found.';
+  if (box) {
+   box.replaceChildren(...list.map(h => {
+    const card = app().node('div', undefined, 'ac-hl-card');
+    const meta = app().node('div', undefined, 'ac-hl-meta');
+    meta.append(
+     app().node('strong', h.label + ' · ' + h.score + '/99'),
+     app().node('small', app().time(h.start_ms / 1000).slice(0, 5) + ' → ' + app().time(h.end_ms / 1000).slice(0, 5) + ' (' + h.duration_s + 's)')
+    );
+    const loadBtn = app().node('button', 'Load & Trim', 'mini-btn');
+    loadBtn.type = 'button';
+    loadBtn.onclick = () => {
+     const es = app().getEditState();
+     if (es) {
+      app().setTrim('in', Math.min(es.duration_ms - 500, h.start_ms));
+      app().setTrim('out', Math.min(es.duration_ms, h.end_ms));
+      app().workflowDirty();
+     }
+     const v = app().getVideo();
+     if (v && Number.isFinite(v.duration)) v.currentTime = Math.min(v.duration, h.start_ms / 1000);
+     app().note('Loaded ' + h.label + ' (' + app().time(h.start_ms / 1000).slice(0, 5) + ' → ' + app().time(h.end_ms / 1000).slice(0, 5) + ').');
+    };
+    card.append(meta, loadBtn);
+    return card;
+   }));
+  }
+ } catch (e) {
+  if (out) out.textContent = 'Highlight scan failed: ' + e.message;
+ } finally {
+  syncClipSelectionUI(app()?.getSelected?.());
+ }
+};
+
+// ==========================================================================
+// TOOL 4: CLEAN MIC VOICEOVER RECORDER + AUTO-DUCKING
+// ==========================================================================
+async function uploadStudioMedia(blob, kind, fileName) {
  const fd = new FormData();
  fd.append('kind', kind);
  fd.append('file', blob, fileName);
  const r = await fetch('/api/workspace/studio/upload-media', { method: 'POST', credentials: 'same-origin', body: fd });
- if (!r.ok) {
-  const txt = (await r.text()).trim();
-  throw Error(txt || 'Studio media upload failed.');
- }
+ if (!r.ok) throw Error((await r.text()).trim() || 'Upload failed.');
  return r.json();
 }
 
-// #1 & #16: Mic Voiceover Recorder + RMS Meter + Auto-Ducking
 function stopVoMeter() {
  if (voMeterRaf) { cancelAnimationFrame(voMeterRaf); voMeterRaf = null; }
  if (voAudioCtx) { voAudioCtx.close().catch(() => {}); voAudioCtx = null; }
@@ -135,7 +393,7 @@ function stopVoMeter() {
 
 if ($('studio-vo-rec')) $('studio-vo-rec').onclick = async () => {
  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
-  app().note('Microphone recording is not supported in this browser context.');
+  app().note('Microphone recording is unavailable in this browser context.');
   return;
  }
  try {
@@ -148,634 +406,249 @@ if ($('studio-vo-rec')) $('studio-vo-rec').onclick = async () => {
    voStream?.getTracks().forEach(t => t.stop());
    voStream = null;
    const blob = new Blob(voChunks, { type: voRecorder.mimeType || 'audio/webm' });
-   if ($('studio-vo-status')) $('studio-vo-status').textContent = 'Saving voiceover track locally…';
+   if ($('studio-vo-status')) $('studio-vo-status').textContent = 'Saving voiceover locally…';
    try {
-    const res = await uploadStudioBlob(blob, 'voiceover', 'voiceover.webm');
-    state.voiceover_path = res.path;
-    if (state.voiceover_blob_url) URL.revokeObjectURL(state.voiceover_blob_url);
-    state.voiceover_blob_url = URL.createObjectURL(blob);
-    if ($('studio-vo-audio')) { $('studio-vo-audio').src = state.voiceover_blob_url; $('studio-vo-audio').hidden = false; }
+    const res = await uploadStudioMedia(blob, 'voiceover', 'voiceover.webm');
+    state.voiceoverPath = res.path;
+    if (state.voiceoverBlobUrl) URL.revokeObjectURL(state.voiceoverBlobUrl);
+    state.voiceoverBlobUrl = URL.createObjectURL(blob);
+    if ($('studio-vo-audio')) { $('studio-vo-audio').src = state.voiceoverBlobUrl; $('studio-vo-audio').hidden = false; }
     if ($('studio-vo-clear')) $('studio-vo-clear').hidden = false;
-    if ($('studio-vo-status')) $('studio-vo-status').textContent = '✓ Mic voiceover ready (' + (res.bytes / 1024).toFixed(0) + ' KiB) — auto-ducks clip on export!';
+    if ($('studio-vo-status')) $('studio-vo-status').textContent = '✓ Voiceover ready (' + (res.bytes / 1024).toFixed(0) + ' KiB) — auto-ducks clip on export.';
     syncStudioSummary();
-    app().note('Recorded mic voiceover — ready to mix with auto-ducking on export!');
    } catch (err) {
     if ($('studio-vo-status')) $('studio-vo-status').textContent = 'Save failed: ' + err.message;
    }
   };
-
-  // Start RMS meter
   try {
    voAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
    const src = voAudioCtx.createMediaStreamSource(voStream);
-   const analyser = voAudioCtx.createAnalyser();
-   analyser.fftSize = 256;
-   src.connect(analyser);
-   const data = new Uint8Array(analyser.frequencyBinCount);
+   const an = voAudioCtx.createAnalyser(); an.fftSize = 256; src.connect(an);
+   const buf = new Uint8Array(an.frequencyBinCount);
    if ($('studio-vo-meter-wrap')) $('studio-vo-meter-wrap').hidden = false;
    const tick = () => {
-    analyser.getByteTimeDomainData(data);
-    let sum = 0;
-    for (let i = 0; i < data.length; i++) { const v = (data[i] - 128) / 128; sum += v * v; }
-    const rms = Math.min(1, Math.sqrt(sum / data.length) * 3.5);
-    if ($('studio-vo-meter')) $('studio-vo-meter').style.width = Math.round(rms * 100) + '%';
+    an.getByteTimeDomainData(buf);
+    let s = 0; for (let i = 0; i < buf.length; i++) { const d = (buf[i] - 128) / 128; s += d * d; }
+    if ($('studio-vo-meter')) $('studio-vo-meter').style.width = Math.min(100, Math.round(Math.sqrt(s / buf.length) * 350)) + '%';
     voMeterRaf = requestAnimationFrame(tick);
    };
    tick();
   } catch {}
-
   voRecorder.start();
   $('studio-vo-rec').hidden = true;
   if ($('studio-vo-stop')) $('studio-vo-stop').hidden = false;
-  if ($('studio-vo-status')) $('studio-vo-status').textContent = '● Recording mic voiceover… speak now!';
+  if ($('studio-vo-status')) $('studio-vo-status').textContent = '● Recording voiceover…';
   const v = app().getVideo();
   if (v && v.readyState >= 2) { v.currentTime = (app().getEditState()?.in_ms || 0) / 1000; v.play().catch(() => {}); }
-  if (!$('vf-teleprompter')?.hidden) startTeleprompterScroll();
- } catch (e) {
-  app().note('Could not access microphone: ' + e.message);
- }
+ } catch (e) { app().note('Mic error: ' + e.message); }
 };
-
 if ($('studio-vo-stop')) $('studio-vo-stop').onclick = () => {
  if (voRecorder && voRecorder.state !== 'inactive') voRecorder.stop();
  $('studio-vo-stop').hidden = true;
  if ($('studio-vo-rec')) $('studio-vo-rec').hidden = false;
  app().getVideo()?.pause();
- stopTeleprompterScroll();
 };
-
 if ($('studio-vo-clear')) $('studio-vo-clear').onclick = () => {
- state.voiceover_path = null;
+ state.voiceoverPath = null;
  if ($('studio-vo-audio')) { $('studio-vo-audio').hidden = true; $('studio-vo-audio').removeAttribute('src'); }
  $('studio-vo-clear').hidden = true;
  if ($('studio-vo-status')) $('studio-vo-status').textContent = 'Voiceover cleared.';
  syncStudioSummary();
 };
+if ($('studio-vo-duck')) $('studio-vo-duck').oninput = () => { if ($('studio-vo-duck-val')) $('studio-vo-duck-val').textContent = $('studio-vo-duck').value + ' dB'; };
+if ($('studio-vo-gain')) $('studio-vo-gain').oninput = () => { const g = Number($('studio-vo-gain').value) || 0; if ($('studio-vo-gain-val')) $('studio-vo-gain-val').textContent = (g >= 0 ? '+' : '') + g + ' dB'; };
 
-if ($('studio-vo-duck')) $('studio-vo-duck').oninput = () => {
- if ($('studio-vo-duck-val')) $('studio-vo-duck-val').textContent = $('studio-vo-duck').value + ' dB';
-};
-if ($('studio-vo-gain')) $('studio-vo-gain').oninput = () => {
- const g = Number($('studio-vo-gain').value) || 0;
- if ($('studio-vo-gain-val')) $('studio-vo-gain-val').textContent = (g >= 0 ? '+' : '') + g + ' dB';
-};
-if ($('studio-voice-fx')) $('studio-voice-fx').onchange = syncStudioSummary;
-
-// #8 & #18: Local TTS Narration + Viewfinder Teleprompter
-document.querySelectorAll('#studio-script-presets button[data-spreset]').forEach(btn => {
- btn.onclick = () => {
-  const txt = SCRIPT_TEMPLATES[btn.dataset.spreset];
-  if (!txt) return;
-  if ($('studio-tts-script')) $('studio-tts-script').value = txt;
-  if ($('vf-tp-scroll')) $('vf-tp-scroll').textContent = txt;
-  app().note('Loaded "' + btn.textContent + '" commentary script template.');
- };
-});
-
-if ($('studio-tts-script')) $('studio-tts-script').addEventListener('input', () => {
- if ($('vf-tp-scroll')) $('vf-tp-scroll').textContent = $('studio-tts-script').value || 'Type your script in the Create ✨ tab…';
-});
-if ($('studio-tp-wpm')) $('studio-tp-wpm').oninput = () => {
- if ($('studio-tp-wpm-val')) $('studio-tp-wpm-val').textContent = $('studio-tp-wpm').value;
-};
-
-function startTeleprompterScroll() {
- const el = $('vf-tp-scroll');
- if (!el) return;
- tpRunning = true;
- tpLastTs = performance.now();
- if ($('studio-tp-play')) $('studio-tp-play').textContent = 'Ⅱ Pause Scroll';
- const step = now => {
-  if (!tpRunning) return;
-  const dt = Math.min(0.1, (now - tpLastTs) / 1000);
-  tpLastTs = now;
-  const wpm = Number($('studio-tp-wpm')?.value) || 140;
-  el.scrollTop += (wpm / 140) * 28 * dt;
-  tpRaf = requestAnimationFrame(step);
- };
- tpRaf = requestAnimationFrame(step);
-}
-function stopTeleprompterScroll() {
- tpRunning = false;
- if (tpRaf) { cancelAnimationFrame(tpRaf); tpRaf = null; }
- if ($('studio-tp-play')) $('studio-tp-play').textContent = '▶ Scroll Script';
-}
-
-if ($('studio-tp-toggle')) $('studio-tp-toggle').onclick = () => {
- const tp = $('vf-teleprompter'), playBtn = $('studio-tp-play');
- if (!tp) return;
- const show = tp.hidden;
- tp.hidden = !show;
- if (playBtn) playBtn.hidden = !show;
- $('studio-tp-toggle').textContent = show ? 'Hide Teleprompter' : '📜 Show Teleprompter';
- if (show) {
-  if ($('vf-tp-scroll')) {
-   $('vf-tp-scroll').textContent = ($('studio-tts-script')?.value || '').trim() || SCRIPT_TEMPLATES.breakdown;
-   $('vf-tp-scroll').scrollTop = 0;
-  }
- } else {
-  stopTeleprompterScroll();
- }
-};
-if ($('studio-tp-play')) $('studio-tp-play').onclick = () => {
- if (tpRunning) stopTeleprompterScroll(); else startTeleprompterScroll();
-};
-
-function buildTimedSrtFromScript(script, durMs) {
- const words = script.trim().split(/\s+/).filter(Boolean);
- if (!words.length) return '';
- const chunks = [];
- for (let i = 0; i < words.length; i += 3) chunks.push(words.slice(i, i + 3).join(' ').toUpperCase());
- const span = Math.max(2000, Number(durMs) || chunks.length * 1400);
- const step = Math.max(550, Math.floor(span / chunks.length));
- const fmt = ms => {
-  const h = String(Math.floor(ms / 3600000)).padStart(2, '0');
-  const m = String(Math.floor((ms % 3600000) / 60000)).padStart(2, '0');
-  const s = String(Math.floor((ms % 60000) / 1000)).padStart(2, '0');
-  const r = String(ms % 1000).padStart(3, '0');
-  return h + ':' + m + ':' + s + ',' + r;
- };
- return chunks.map((line, idx) => (idx + 1) + '\n' + fmt(idx * step + 100) + ' --> ' + fmt((idx + 1) * step - 60) + '\n' + line).join('\n\n');
-}
-
-if ($('studio-tts-go')) $('studio-tts-go').onclick = async () => {
- const btn = $('studio-tts-go'), out = $('studio-tts-status');
- const text = ($('studio-tts-script')?.value || '').trim();
- if (!text) { app().note('Type or choose a narration script first.'); return; }
- btn.disabled = true;
- if (out) out.textContent = 'Generating local TTS narration WAV…';
- try {
-  const r = await app().get('/api/workspace/studio/tts', {
-   method: 'POST', headers: { 'Content-Type': 'application/json' },
-   body: JSON.stringify({ text, rate: Number($('studio-tts-rate')?.value) || 1 })
-  });
-  state.voiceover_path = r.path;
-  if ($('studio-vo-clear')) $('studio-vo-clear').hidden = false;
-  if ($('studio-vo-status')) $('studio-vo-status').textContent = '✓ Local TTS voiceover attached (' + r.engine + ' · ' + ((r.duration_ms || 0) / 1000).toFixed(1) + 's)';
-  if ($('studio-tts-sync-srt')?.checked && $('edit-srt-text')) {
-   $('edit-srt-text').value = buildTimedSrtFromScript(text, r.duration_ms);
-   if ($('edit-srt-style')) $('edit-srt-style').value = 'vice_neon';
-  }
-  if (out) out.textContent = '✓ Generated ' + ((r.duration_ms || 0) / 1000).toFixed(1) + 's narration via ' + r.engine + ($('studio-tts-sync-srt')?.checked ? ' (+ synced Vice Neon captions).' : '.');
-  syncStudioSummary();
-  app().note('Local TTS voiceover ready (' + r.engine + ')!');
- } catch (e) {
-  if (out) out.textContent = 'TTS failed: ' + e.message;
-  app().note('Local TTS failed: ' + e.message);
- } finally {
-  btn.disabled = false;
- }
-};
-
-// #2: Webcam Reaction Cam Recorder
-async function ensureCamPreview() {
- if (camStream) return camStream;
- if (!navigator.mediaDevices?.getUserMedia) throw Error('Webcam not available in this browser context.');
- camStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 640 }, audio: false });
- const preview = $('vf-cam-preview');
- if (preview) {
-  preview.srcObject = camStream;
-  preview.dataset.layout = $('studio-cam-layout')?.value || 'corner_tr';
-  preview.hidden = false;
- }
- return camStream;
-}
-
-if ($('studio-cam-layout')) $('studio-cam-layout').onchange = updateLiveStudioPreviews;
-if ($('studio-cam-start')) $('studio-cam-start').onclick = async () => {
- try {
-  if (camStream) {
-   camStream.getTracks().forEach(t => t.stop());
-   camStream = null;
-   if ($('vf-cam-preview')) { $('vf-cam-preview').hidden = true; $('vf-cam-preview').srcObject = null; }
-   $('studio-cam-start').textContent = 'Preview Cam';
-  } else {
-   await ensureCamPreview();
-   $('studio-cam-start').textContent = 'Hide Cam';
-  }
- } catch (e) { app().note('Camera error: ' + e.message); }
-};
-
-if ($('studio-cam-rec')) $('studio-cam-rec').onclick = async () => {
- try {
-  const stream = await ensureCamPreview();
-  camChunks = [];
-  camRecorder = new MediaRecorder(stream);
-  camRecorder.ondataavailable = e => { if (e.data && e.data.size > 0) camChunks.push(e.data); };
-  camRecorder.onstop = async () => {
-   const blob = new Blob(camChunks, { type: camRecorder.mimeType || 'video/webm' });
-   if ($('studio-cam-status')) $('studio-cam-status').textContent = 'Saving webcam reaction locally…';
-   try {
-    const res = await uploadStudioBlob(blob, 'reaction_cam', 'reaction.webm');
-    state.reaction_cam_path = res.path;
-    if ($('studio-cam-clear')) $('studio-cam-clear').hidden = false;
-    if ($('studio-cam-status')) $('studio-cam-status').textContent = '✓ Reaction cam ready (' + (res.bytes / 1048576).toFixed(1) + ' MiB · ' + ($('studio-cam-layout')?.value || 'corner_tr') + ')';
-    syncStudioSummary();
-    app().note('Saved reaction cam recording — will composite on export!');
-   } catch (err) {
-    if ($('studio-cam-status')) $('studio-cam-status').textContent = 'Save failed: ' + err.message;
-   }
-  };
-  camRecorder.start();
-  $('studio-cam-rec').hidden = true;
-  if ($('studio-cam-stop')) $('studio-cam-stop').hidden = false;
-  if ($('studio-cam-status')) $('studio-cam-status').textContent = '● Recording webcam reaction…';
-  const v = app().getVideo();
-  if (v && v.readyState >= 2) { v.currentTime = (app().getEditState()?.in_ms || 0) / 1000; v.play().catch(() => {}); }
- } catch (e) { app().note('Reaction cam error: ' + e.message); }
-};
-
-if ($('studio-cam-stop')) $('studio-cam-stop').onclick = () => {
- if (camRecorder && camRecorder.state !== 'inactive') camRecorder.stop();
- $('studio-cam-stop').hidden = true;
- if ($('studio-cam-rec')) $('studio-cam-rec').hidden = false;
- app().getVideo()?.pause();
-};
-if ($('studio-cam-clear')) $('studio-cam-clear').onclick = () => {
- state.reaction_cam_path = null;
- $('studio-cam-clear').hidden = true;
- if ($('studio-cam-status')) $('studio-cam-status').textContent = 'Reaction cam cleared.';
- syncStudioSummary();
-};
-
-// #4, #10, #11: Freeze-Frame Zoom, Keyframe Action Punch-In & Slow-Mo Replay
-function curPlayheadMs() {
- const v = app()?.getVideo();
- return v && Number.isFinite(v.currentTime) ? Math.round(v.currentTime * 1000) : 0;
-}
-
-if ($('studio-fz-set')) $('studio-fz-set').onclick = () => {
- state.freeze_at_ms = curPlayheadMs();
- if ($('studio-fz-clear')) $('studio-fz-clear').hidden = false;
- syncStudioSummary();
- app().note('Pinned 2s Freeze-Frame Zoom at ' + app().time(state.freeze_at_ms / 1000).slice(0, 5) + '!');
-};
-if ($('studio-fz-clear')) $('studio-fz-clear').onclick = () => {
- state.freeze_at_ms = null; $('studio-fz-clear').hidden = true; syncStudioSummary();
-};
-if ($('studio-zp-set')) $('studio-zp-set').onclick = () => {
- state.zoom_punch_at_ms = curPlayheadMs();
- if ($('studio-zp-clear')) $('studio-zp-clear').hidden = false;
- syncStudioSummary();
- app().note('Pinned Action Punch-In (' + ($('studio-zp-scale')?.value || '1.38') + '×) at ' + app().time(state.zoom_punch_at_ms / 1000).slice(0, 5) + '!');
-};
-if ($('studio-zp-clear')) $('studio-zp-clear').onclick = () => {
- state.zoom_punch_at_ms = null; $('studio-zp-clear').hidden = true; syncStudioSummary();
-};
-if ($('studio-rp-in')) $('studio-rp-in').onclick = () => {
- state.replay_start_ms = curPlayheadMs();
- if (state.replay_end_ms == null || state.replay_end_ms <= state.replay_start_ms + 300) {
-  state.replay_end_ms = state.replay_start_ms + 2500;
- }
- if ($('studio-rp-clear')) $('studio-rp-clear').hidden = false;
- syncStudioSummary();
- app().note('Set 0.5× Replay Start at ' + app().time(state.replay_start_ms / 1000).slice(0, 5) + '.');
-};
-if ($('studio-rp-out')) $('studio-rp-out').onclick = () => {
- const ms = curPlayheadMs();
- if (state.replay_start_ms == null) state.replay_start_ms = Math.max(0, ms - 2500);
- state.replay_end_ms = Math.max(state.replay_start_ms + 400, ms);
- if ($('studio-rp-clear')) $('studio-rp-clear').hidden = false;
- syncStudioSummary();
- app().note('Set 0.5× Replay End at ' + app().time(state.replay_end_ms / 1000).slice(0, 5) + '.');
-};
-if ($('studio-rp-clear')) $('studio-rp-clear').onclick = () => {
- state.replay_start_ms = null; state.replay_end_ms = null; $('studio-rp-clear').hidden = true; syncStudioSummary();
-};
-
-// #5, #7, #12, #14, #15, #17: Color Grades, Weazel News, Cards, Polls, Progress Bar, Countdown & Intro/Outro
+// ==========================================================================
+// TOOL 5: PRO COLOR GRADES & .CUBE 3D LUTS
+// ==========================================================================
 document.querySelectorAll('#studio-grade-pills button[data-grade]').forEach(btn => {
  btn.onclick = () => {
-  state.color_grade = btn.dataset.grade || 'none';
+  state.colorGrade = btn.dataset.grade || 'none';
   document.querySelectorAll('#studio-grade-pills button[data-grade]').forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
   syncStudioSummary();
  };
 });
 
-for (const id of ['studio-weazel-head', 'studio-weazel-tick', 'studio-credit-handle', 'studio-poll-prompt', 'studio-progress-bar', 'studio-intro-sting', 'studio-outro-card']) {
- if ($(id)) $(id).addEventListener('input', syncStudioSummary);
- if ($(id)) $(id).addEventListener('change', syncStudioSummary);
-}
-
-document.querySelectorAll('#studio-poll-presets button[data-poll]').forEach(btn => {
- btn.onclick = () => {
-  if ($('studio-poll-prompt')) $('studio-poll-prompt').value = btn.dataset.poll;
+async function loadLuts(selectPath) {
+ const sel = $('ac-lut-select');
+ if (!sel) return;
+ try {
+  const r = await app().get('/api/workspace/studio/luts');
+  const luts = Array.isArray(r.luts) ? r.luts : [];
+  const prev = selectPath ?? sel.value;
+  const opts = [app().node('option', 'None (use preset above)')]; opts[0].value = '';
+  for (const l of luts) { const o = app().node('option', l.name); o.value = l.path; opts.push(o); }
+  sel.replaceChildren(...opts);
+  if (prev && luts.some(l => l.path === prev)) sel.value = prev;
+  state.lutPath = sel.value || '';
   syncStudioSummary();
- };
-});
-
-function renderCommentaryCards() {
- const box = $('studio-card-list');
- if (!box) return;
- box.replaceChildren(...state.commentary_cards.map((c, idx) => {
-  const chip = app().node('button', app().time(c.start_s).slice(0, 5) + ' "' + c.text.slice(0, 22) + '" ×', 'marker-chip');
-  chip.type = 'button'; chip.title = 'Click to remove card';
-  chip.onclick = () => { state.commentary_cards.splice(idx, 1); renderCommentaryCards(); syncStudioSummary(); };
-  return chip;
- }));
+ } catch {}
 }
-
-if ($('studio-card-add')) $('studio-card-add').onclick = () => {
- const text = ($('studio-card-text')?.value || '').trim();
- if (!text) { app().note('Enter commentary card text first.'); return; }
- const start_s = curPlayheadMs() / 1000;
- state.commentary_cards.push({ start_s, end_s: start_s + 3.5, text });
- if ($('studio-card-text')) $('studio-card-text').value = '';
- renderCommentaryCards();
- syncStudioSummary();
- app().note('Added 3.5s commentary card at ' + app().time(start_s).slice(0, 5) + '.');
+if ($('ac-lut-select')) $('ac-lut-select').onchange = () => { state.lutPath = $('ac-lut-select').value || ''; syncStudioSummary(); };
+if ($('ac-lut-upload')) $('ac-lut-upload').onchange = async e => {
+ const f = e.currentTarget.files?.[0]; e.currentTarget.value = '';
+ if (!f) return;
+ try {
+  const res = await uploadStudioMedia(f, 'lut', f.name);
+  if ($('ac-lut-status')) $('ac-lut-status').textContent = '✓ Loaded 3D LUT: ' + res.name;
+  await loadLuts(res.path);
+  app().note('Loaded .cube LUT: ' + res.name);
+ } catch (err) {
+  if ($('ac-lut-status')) $('ac-lut-status').textContent = 'LUT upload failed: ' + err.message;
+ }
 };
 
-if ($('studio-cd-set')) $('studio-cd-set').onclick = () => {
- state.countdown_at_ms = Math.max(3000, curPlayheadMs());
- if ($('studio-cd-clear')) $('studio-cd-clear').hidden = false;
- syncStudioSummary();
- app().note('Pinned 3-2-1 payoff countdown finishing at ' + app().time(state.countdown_at_ms / 1000).slice(0, 5) + '.');
-};
-if ($('studio-cd-clear')) $('studio-cd-clear').onclick = () => {
- state.countdown_at_ms = null; $('studio-cd-clear').hidden = true; syncStudioSummary();
-};
-
-// #6: Timeline SFX Stinger Rack
-function renderSfxList() {
- const box = $('studio-sfx-list');
- if (!box) return;
- box.replaceChildren(...state.sfx_cues.map((c, idx) => {
-  const chip = app().node('button', '🔊 ' + c.kind + ' @ ' + app().time(c.at_s).slice(0, 5) + ' ×', 'marker-chip');
-  chip.type = 'button'; chip.title = 'Click to remove SFX cue';
-  chip.onclick = () => { state.sfx_cues.splice(idx, 1); renderSfxList(); syncStudioSummary(); };
-  return chip;
- }));
+// ==========================================================================
+// TOOL 6: REUSABLE 1-CLICK CREATOR STYLE TEMPLATES
+// ==========================================================================
+function readTemplates() { try { return JSON.parse(localStorage.getItem(TPL_KEY) || '[]') || []; } catch { return []; } }
+function writeTemplates(list) { try { localStorage.setItem(TPL_KEY, JSON.stringify(list)); } catch {} }
+function renderTemplates() {
+ const sel = $('ac-tpl-select'), ap = $('ac-tpl-apply'), dl = $('ac-tpl-del');
+ if (!sel) return;
+ const list = readTemplates();
+ if (!list.length) {
+  const o = app().node('option', 'No saved templates'); o.value = ''; sel.replaceChildren(o);
+  if (ap) ap.disabled = true; if (dl) dl.disabled = true;
+  return;
+ }
+ sel.replaceChildren(...list.map((t, i) => { const o = app().node('option', t.name); o.value = String(i); return o; }));
+ if (ap) ap.disabled = false; if (dl) dl.disabled = false;
 }
-
-document.querySelectorAll('#studio-sfx-rack button[data-sfx-play]').forEach(btn => {
- btn.onclick = () => {
-  const audio = new Audio('/api/workspace/studio/sfx/' + encodeURIComponent(btn.dataset.sfxPlay));
-  audio.play().catch(() => {});
- };
-});
-document.querySelectorAll('#studio-sfx-rack button[data-sfx-drop]').forEach(btn => {
- btn.onclick = () => {
-  const kind = btn.dataset.sfxDrop;
-  const at_s = curPlayheadMs() / 1000;
-  state.sfx_cues.push({ at_s, kind });
-  state.sfx_cues.sort((a, b) => a.at_s - b.at_s);
-  renderSfxList();
-  syncStudioSummary();
-  app().note('Dropped "' + kind + '" SFX at ' + app().time(at_s).slice(0, 5) + '.');
- };
-});
-
-// #3, #9, #13: Montage Builder (Beat-Sync) & "GTA V vs GTA VI" Comparison Studio
-function renderMontageList() {
- const list = $('studio-montage-list'), go = $('studio-montage-go'), clr = $('studio-montage-clear');
- if (!list) return;
- if (go) go.disabled = state.montage_clips.length < 2;
- if (clr) clr.hidden = state.montage_clips.length === 0;
- list.replaceChildren(...state.montage_clips.map((c, idx) => {
-  const li = app().node('li');
-  const rm = app().node('button', '✕', 'toast-close'); rm.type = 'button'; rm.style.float = 'right';
-  rm.onclick = () => { state.montage_clips.splice(idx, 1); renderMontageList(); };
-  li.append(rm, '#' + (idx + 1) + ' · ' + c.name.slice(0, 34));
-  return li;
- }));
-}
-
-function populateCompareDropdowns() {
- const selA = $('studio-cmp-a'), selB = $('studio-cmp-b');
- if (!selA || !selB) return;
- const clips = (app()?.getItems?.() || []).filter(r => r.from_sources);
- const prevA = selA.value, prevB = selB.value;
- const makeOpts = () => clips.map(r => {
-  const txt = r.name.length > 30 ? r.name.slice(0, 29) + '…' : r.name;
-  const o = app().node('option', txt);
-  o.value = r.clip_id;
-  o.title = r.name;
-  return o;
+if ($('ac-tpl-save')) $('ac-tpl-save').onclick = () => {
+ const name = ($('ac-tpl-name')?.value || '').trim();
+ if (!name) { app().note('Enter a template name first.'); return; }
+ const list = readTemplates().filter(t => t.name.toLowerCase() !== name.toLowerCase());
+ list.push({
+  name,
+  caption: getCaptionStyle(),
+  jumpcut: Boolean($('ac-jumpcut-on')?.checked),
+  voicePolish: Boolean($('ac-voice-polish')?.checked),
+  colorGrade: state.colorGrade,
+  lutPath: state.lutPath,
  });
- selA.replaceChildren(...makeOpts());
- selB.replaceChildren(...makeOpts());
- if (prevA && clips.some(c => c.clip_id === prevA)) selA.value = prevA;
- if (prevB && clips.some(c => c.clip_id === prevB)) selB.value = prevB;
- else if (clips.length >= 2) selB.value = clips[1].clip_id;
-}
-
-if ($('studio-montage-add')) $('studio-montage-add').onclick = () => {
- const row = app().getSelected();
- if (!row?.from_sources) { app().note('Select a Film Roll clip first.'); return; }
- if (state.montage_clips.length >= 8) { app().note('Maximum 8 clips per montage.'); return; }
- state.montage_clips.push({ clip_id: row.clip_id, name: row.name });
- renderMontageList();
- app().note('Added "' + row.name + '" to Montage (' + state.montage_clips.length + ' clips).');
+ writeTemplates(list);
+ if ($('ac-tpl-name')) $('ac-tpl-name').value = '';
+ renderTemplates();
+ app().note('Saved Style Template "' + name + '"!');
 };
-if ($('studio-montage-clear')) $('studio-montage-clear').onclick = () => { state.montage_clips = []; renderMontageList(); };
-
-if ($('studio-detect-beats')) $('studio-detect-beats').onclick = async () => {
- const btn = $('studio-detect-beats'), out = $('studio-beats-status');
- const row = app().getSelected();
- const music = window.snapmaticProMusicPath || null;
- if (!music && !row?.from_sources) { app().note('Select a clip or attach a background music track first.'); return; }
- btn.disabled = true;
- if (out) out.textContent = 'Detecting BPM & audio beat transients…';
- try {
-  const r = await app().get('/api/workspace/studio/detect-beats', {
-   method: 'POST', headers: { 'Content-Type': 'application/json' },
-   body: JSON.stringify({ audio_path: music, clip_id: music ? null : row?.clip_id })
-  });
-  const cnt = Array.isArray(r.beats_ms) ? r.beats_ms.length : 0;
-  if (out) out.textContent = '🥁 Detected ~' + r.bpm_est + ' BPM (' + cnt + ' beat markers ready for Beat-Sync cuts).';
-  app().note('Detected ~' + r.bpm_est + ' BPM (' + cnt + ' beats)!');
- } catch (e) {
-  if (out) out.textContent = 'Beat detect failed: ' + e.message;
- } finally {
-  btn.disabled = false;
+if ($('ac-tpl-apply')) $('ac-tpl-apply').onclick = () => {
+ const tpl = readTemplates()[Number($('ac-tpl-select')?.value)];
+ if (!tpl) return;
+ const c = tpl.caption || {};
+ if (c.preset) {
+  state.preset = c.preset;
+  document.querySelectorAll('#ac-style-grid button[data-ac-preset]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.acPreset === c.preset)));
  }
-};
-
-if ($('studio-montage-go')) $('studio-montage-go').onclick = async () => {
- const btn = $('studio-montage-go'), out = $('studio-builder-status');
- if (state.montage_clips.length < 2 || btn.disabled) return;
- btn.disabled = true;
- if (out) out.textContent = 'Rendering Multi-Clip Montage with FFmpeg…';
- try {
-  const r = await app().get('/api/workspace/studio/montage', {
-   method: 'POST', headers: { 'Content-Type': 'application/json' },
-   body: JSON.stringify({
-    clip_ids: state.montage_clips.map(c => c.clip_id),
-    labels: state.montage_clips.map((_, i) => '#' + (i + 1)),
-    title: ($('studio-montage-title')?.value || '').trim() || 'Top ' + state.montage_clips.length + ' GTA 6 Moments',
-    clip_sec: Number($('studio-montage-sec')?.value) || 5,
-    beat_sync: Boolean($('studio-montage-beatsync')?.checked),
-    music_path: window.snapmaticProMusicPath || null,
-    music_volume_db: Number($('edit-music-vol')?.value) || -14,
-    color_grade: state.color_grade,
-    progress_bar: Boolean($('studio-progress-bar')?.checked),
-    intro_sting_text: ($('studio-intro-sting')?.value || '').trim() || null,
-    outro_card_text: ($('studio-outro-card')?.value || '').trim() || null,
-    credit_handle: ($('studio-credit-handle')?.value || '').trim() || null,
-    weazel_headline: ($('studio-weazel-head')?.value || '').trim() || null,
-    quality: $('edit-quality')?.value || 'balanced',
-   })
-  });
-  if (out) out.textContent = '✓ Created Montage ' + r.file_name + ' (' + ((r.bytes || 0) / 1048576).toFixed(1) + ' MiB) & added to Film Roll!';
-  await app().reload();
-  app().loadExportHistory();
-  const hit = app().getItems().find(x => x.clip_id === r.clip_id);
-  if (hit) app().select(hit);
-  app().note('Rendered Montage "' + r.file_name + '" and opened it in Viewfinder Studio!');
- } catch (e) {
-  if (out) out.textContent = 'Montage failed: ' + e.message;
-  app().note('Montage failed: ' + e.message);
- } finally {
-  btn.disabled = state.montage_clips.length < 2;
+ if (c.active_color) {
+  state.activeColor = c.active_color;
+  document.querySelectorAll('#ac-color-row button[data-ac-color]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.acColor === c.active_color)));
  }
-};
-
-if ($('studio-cmp-go')) $('studio-cmp-go').onclick = async () => {
- const btn = $('studio-cmp-go'), out = $('studio-builder-status');
- const a = $('studio-cmp-a')?.value, b = $('studio-cmp-b')?.value;
- if (!a || !b) { app().note('Select two Film Roll clips to compare.'); return; }
- btn.disabled = true;
- if (out) out.textContent = 'Rendering Side-by-Side / Stacked Comparison with FFmpeg…';
- try {
-  const r = await app().get('/api/workspace/studio/compare', {
-   method: 'POST', headers: { 'Content-Type': 'application/json' },
-   body: JSON.stringify({
-    clip_a_id: a,
-    clip_b_id: b,
-    layout: $('studio-cmp-layout')?.value || 'vertical',
-    label_a: ($('studio-cmp-label-a')?.value || '').trim() || 'GTA V',
-    label_b: ($('studio-cmp-label-b')?.value || '').trim() || 'GTA VI',
-    title_banner: ($('studio-cmp-title')?.value || '').trim() || null,
-    max_seconds: Number($('studio-cmp-sec')?.value) || 18,
-    color_grade: state.color_grade,
-    quality: $('edit-quality')?.value || 'balanced',
-   })
-  });
-  if (out) out.textContent = '✓ Created Comparison ' + r.file_name + ' (' + ((r.bytes || 0) / 1048576).toFixed(1) + ' MiB) & added to Film Roll!';
-  await app().reload();
-  app().loadExportHistory();
-  const hit = app().getItems().find(x => x.clip_id === r.clip_id);
-  if (hit) app().select(hit);
-  app().note('Rendered Comparison "' + r.file_name + '" and opened it in Viewfinder Studio!');
- } catch (e) {
-  if (out) out.textContent = 'Comparison failed: ' + e.message;
-  app().note('Comparison failed: ' + e.message);
- } finally {
-  btn.disabled = false;
+ if ($('ac-wpl') && c.words_per_line) $('ac-wpl').value = String(c.words_per_line);
+ if ($('ac-size') && c.font_size) { $('ac-size').value = String(c.font_size); if ($('ac-size-val')) $('ac-size-val').textContent = c.font_size + 'px'; }
+ if ($('ac-posy') && c.pos_y_pct) { $('ac-posy').value = String(c.pos_y_pct); if ($('ac-posy-val')) $('ac-posy-val').textContent = c.pos_y_pct + '%'; }
+ if ($('ac-uppercase') && typeof c.uppercase === 'boolean') $('ac-uppercase').checked = c.uppercase;
+ if ($('ac-pop') && typeof c.pop_animation === 'boolean') $('ac-pop').checked = c.pop_animation;
+ if ($('ac-emojis') && typeof c.show_emojis === 'boolean') $('ac-emojis').checked = c.show_emojis;
+ if ($('ac-jumpcut-on') && typeof tpl.jumpcut === 'boolean') $('ac-jumpcut-on').checked = tpl.jumpcut;
+ if ($('ac-voice-polish') && typeof tpl.voicePolish === 'boolean') $('ac-voice-polish').checked = tpl.voicePolish;
+ if (tpl.colorGrade) {
+  state.colorGrade = tpl.colorGrade;
+  document.querySelectorAll('#studio-grade-pills button[data-grade]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.grade === tpl.colorGrade)));
  }
+ if ($('ac-lut-select') && tpl.lutPath != null) { $('ac-lut-select').value = tpl.lutPath; state.lutPath = $('ac-lut-select').value || ''; }
+ syncStudioSummary();
+ app().note('Applied Style Template "' + tpl.name + '"!');
+};
+if ($('ac-tpl-del')) $('ac-tpl-del').onclick = () => {
+ const idx = Number($('ac-tpl-select')?.value);
+ const list = readTemplates();
+ if (!Number.isInteger(idx) || !list[idx]) return;
+ list.splice(idx, 1); writeTemplates(list); renderTemplates();
 };
 
-// Export Now & Reset All Studio FX
+// ==========================================================================
+// SELECTION, EXPORT & RESET WIRING
+// ==========================================================================
 if ($('studio-pick-first')) $('studio-pick-first').onclick = () => {
  const list = app()?.getVisibleItems?.() || [];
  const first = list.find(r => r.from_sources) || list[0];
- if (first) {
-  app().select(first);
-  app().note('Selected "' + first.name + '" — Studio FX unlocked!');
- } else {
-  app().note('No playable clips in Film Roll yet. Drop an MP4 or sync Sources first.');
- }
+ if (first) { app().select(first); app().note('Selected "' + first.name + '" — ready for AutoCaption!'); }
+ else app().note('No playable clips in Film Roll yet.');
 };
 
 if ($('studio-export-now')) $('studio-export-now').onclick = () => {
  const row = app()?.getSelected?.();
- if (!row?.from_sources) {
-  app().note('Select a Film Roll clip first before exporting.');
-  return;
- }
+ if (!row?.from_sources) { app().note('Select a Film Roll clip first.'); return; }
  const tBtn = $('edit-transcode');
- if (!tBtn || tBtn.disabled) {
-  app().note('Waiting for video duration to finish loading — try again in a second.');
-  return;
- }
- if ($('studio-active-summary')) $('studio-active-summary').textContent = '⏳ Rendering MP4 with Studio FX…';
+ if (!tBtn || tBtn.disabled) { app().note('Waiting for video duration to load — try again in a second.'); return; }
+ if ($('studio-active-summary')) $('studio-active-summary').textContent = '⏳ Rendering MP4 with Pro Studio…';
  tBtn.click();
+};
+
+if ($('studio-reset-all')) $('studio-reset-all').onclick = () => {
+ state.words = [];
+ state.selectedWordIdx = -1;
+ state.colorGrade = 'none';
+ state.lutPath = '';
+ state.voiceoverPath = null;
+ if ($('ac-jumpcut-on')) $('ac-jumpcut-on').checked = false;
+ if ($('ac-voice-polish')) $('ac-voice-polish').checked = false;
+ if ($('ac-lut-select')) $('ac-lut-select').value = '';
+ if ($('studio-vo-audio')) { $('studio-vo-audio').hidden = true; $('studio-vo-audio').removeAttribute('src'); }
+ if ($('studio-vo-clear')) $('studio-vo-clear').hidden = true;
+ if ($('ac-highlights-list')) $('ac-highlights-list').replaceChildren();
+ document.querySelectorAll('#studio-grade-pills button[data-grade]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.grade === 'none')));
+ renderWordEditor();
+ syncStudioSummary();
+ app().note('Reset Pro Studio settings.');
 };
 
 function syncClipSelectionUI(row) {
  const ok = Boolean(row?.from_sources);
  if ($('studio-export-now')) $('studio-export-now').disabled = !ok;
  if ($('studio-no-clip-banner')) $('studio-no-clip-banner').hidden = ok;
- populateCompareDropdowns();
+ if ($('ac-transcribe-go')) $('ac-transcribe-go').disabled = !ok;
+ if ($('ac-highlights-go')) $('ac-highlights-go').disabled = !ok;
  syncStudioSummary();
 }
 
-window.addEventListener('snapmatic:exported', () => {
- if ($('studio-active-summary')) $('studio-active-summary').textContent = '✓ ' + ($('edit-state')?.textContent || 'Exported MP4 with Studio FX!');
-});
-
-if ($('studio-reset-all')) $('studio-reset-all').onclick = () => {
- state.voiceover_path = null;
- state.reaction_cam_path = null;
- state.freeze_at_ms = null;
- state.zoom_punch_at_ms = null;
- state.replay_start_ms = null;
- state.replay_end_ms = null;
- state.countdown_at_ms = null;
- state.color_grade = 'none';
- state.commentary_cards = [];
- state.sfx_cues = [];
- for (const id of ['studio-weazel-head', 'studio-weazel-tick', 'studio-credit-handle', 'studio-poll-prompt', 'studio-intro-sting', 'studio-outro-card', 'studio-fz-callout', 'studio-rp-label']) {
-  if ($(id)) $(id).value = '';
- }
- if ($('studio-progress-bar')) $('studio-progress-bar').checked = false;
- if ($('studio-voice-fx')) $('studio-voice-fx').value = 'none';
- for (const id of ['studio-vo-clear', 'studio-cam-clear', 'studio-fz-clear', 'studio-zp-clear', 'studio-rp-clear', 'studio-cd-clear', 'studio-vo-audio']) {
-  if ($(id)) $(id).hidden = true;
- }
- document.querySelectorAll('#studio-grade-pills button[data-grade]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.grade === 'none')));
- renderCommentaryCards();
- renderSfxList();
- syncStudioSummary();
- app().note('Reset all Original Studio FX.');
-};
-
-app()?.getVideo()?.addEventListener('timeupdate', () => {
- const bar = $('vf-progress-preview'), v = app().getVideo();
- if (bar && !bar.hidden && v && Number.isFinite(v.duration) && v.duration > 0) {
-  bar.style.width = Math.max(0, Math.min(100, (v.currentTime / v.duration) * 100)) + '%';
- }
-});
-
 window.addEventListener('snapmatic:clip-selected', e => {
+ state.words = [];
+ state.selectedWordIdx = -1;
+ if ($('ac-highlights-list')) $('ac-highlights-list').replaceChildren();
+ if ($('ac-highlights-status')) $('ac-highlights-status').textContent = '';
+ renderWordEditor();
  syncClipSelectionUI(e.detail?.row);
 });
 
-// Expose export payload merger for workspace.js
+window.addEventListener('snapmatic:exported', () => {
+ if ($('studio-active-summary')) $('studio-active-summary').textContent = '✓ ' + ($('edit-state')?.textContent || 'Exported MP4 with Pro Studio!');
+});
+
+for (const ev of ['timeupdate', 'seeked', 'play', 'pause']) {
+ app()?.getVideo()?.addEventListener(ev, renderLiveCaptions);
+}
+
 window.snapmaticStudio = {
  getExportExtras: () => ({
-  voiceover_path: state.voiceover_path,
+  caption_words: state.words,
+  caption_style: state.words.length ? getCaptionStyle() : null,
+  remove_mid_silences: Boolean($('ac-jumpcut-on')?.checked),
+  silence_threshold_db: Number($('ac-jumpcut-db')?.value) || -32,
+  min_silence_s: Number($('ac-jumpcut-min')?.value) || 0.42,
+  studio_voice_enhance: Boolean($('ac-voice-polish')?.checked),
+  voiceover_path: state.voiceoverPath,
   voiceover_duck_db: Number($('studio-vo-duck')?.value) || -14,
   voiceover_gain_db: Number($('studio-vo-gain')?.value) || 2,
-  voice_fx: ($('studio-voice-fx')?.value || 'none') !== 'none' ? $('studio-voice-fx').value : null,
-  reaction_cam_path: state.reaction_cam_path,
-  reaction_cam_layout: $('studio-cam-layout')?.value || 'corner_tr',
-  freeze_at_ms: state.freeze_at_ms,
-  freeze_dur_s: 2.0,
-  freeze_callout: ($('studio-fz-callout')?.value || '').trim() || null,
-  commentary_cards: state.commentary_cards,
-  credit_handle: ($('studio-credit-handle')?.value || '').trim() || null,
-  sfx_cues: state.sfx_cues,
-  intro_sting_text: ($('studio-intro-sting')?.value || '').trim() || null,
-  outro_card_text: ($('studio-outro-card')?.value || '').trim() || null,
-  zoom_punch_at_ms: state.zoom_punch_at_ms,
-  zoom_punch_dur_s: 2.2,
-  zoom_punch_scale: Number($('studio-zp-scale')?.value) || 1.38,
-  replay_start_ms: state.replay_start_ms,
-  replay_end_ms: state.replay_end_ms,
-  replay_label: ($('studio-rp-label')?.value || '').trim() || null,
-  poll_prompt: ($('studio-poll-prompt')?.value || '').trim() || null,
-  progress_bar: Boolean($('studio-progress-bar')?.checked),
-  countdown_at_ms: state.countdown_at_ms,
-  color_grade: state.color_grade !== 'none' ? state.color_grade : null,
-  weazel_headline: ($('studio-weazel-head')?.value || '').trim() || null,
-  weazel_ticker: ($('studio-weazel-tick')?.value || '').trim() || null,
+  color_grade: state.colorGrade !== 'none' ? state.colorGrade : null,
+  lut_path: state.lutPath || null,
  }),
- populateCompareDropdowns,
 };
 
-setTimeout(() => { populateCompareDropdowns(); syncClipSelectionUI(app()?.getSelected?.()); }, 1200);
-renderMontageList();
+renderTemplates();
+refreshWhisperStatus();
+loadLuts();
 syncClipSelectionUI(app()?.getSelected?.());
+setTimeout(() => syncClipSelectionUI(app()?.getSelected?.()), 1000);
 })();
