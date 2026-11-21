@@ -728,7 +728,7 @@ pub(crate) async fn start_oauth(
             url_encode(&challenge),
         ),
         "instagram" => format!(
-            "https://www.facebook.com/v21.0/dialog/oauth?client_id={}&redirect_uri={}&response_type=code&scope={}&state={}",
+            "https://www.facebook.com/v21.0/dialog/oauth?client_id={}&redirect_uri={}&response_type=code&auth_type=rerequest&scope={}&state={}",
             url_encode(client_id),
             url_encode(&redirect_uri),
             url_encode("instagram_basic,pages_show_list,pages_read_engagement,instagram_content_publish"),
@@ -759,8 +759,8 @@ fn callback_html(ok: bool, title: &str, detail: &str) -> Html<String> {
 .card{{max-width:460px;padding:28px;border-radius:12px;background:#13171D;border:1px solid #1E242D;text-align:center}}
 h1{{margin:0 0 10px;color:{color};font-size:22px}}p{{color:#9aa3b2;margin:0 0 18px}}
 a{{display:inline-block;padding:9px 16px;border-radius:7px;border:1px solid #29B6F6;color:#F3F5F8;text-decoration:none}}</style></head>
-<body><div class="card"><h1>{}</h1><p>{}</p><a href="/workspace?view=system">Return to Snapmatic</a></div>
-<script>try{{window.opener&&window.opener.postMessage({{type:'snapmatic:oauth-updated'}},location.origin);}}catch{{}}</script></body></html>"#,
+<body><div class="card"><h1>{}</h1><p>{}</p><a id="ret" href="/workspace?view=system">Return to Snapmatic</a></div>
+<script>try{{var r=document.getElementById('ret');if(location.hostname==='localhost')r.href='http://127.0.0.1:'+location.port+'/workspace?view=system';window.opener&&window.opener.postMessage({{type:'snapmatic:oauth-updated'}},'*');}}catch{{}}</script></body></html>"#,
         esc(title),
         esc(detail)
     ))
@@ -860,7 +860,7 @@ fn refresh_youtube_access_token() -> Result<(String, i64), String> {
 
 fn fetch_instagram_business_account(access_token: &str) -> Result<(String, String, String, Option<i64>, Option<i64>), String> {
     let path = format!(
-        "/v21.0/me/accounts?fields=id,name,instagram_business_account%7Bid,username,name,followers_count,media_count%7D&access_token={}",
+        "/v21.0/me/accounts?fields=id,name,instagram_business_account%7Bid,username,name,followers_count,media_count%7D,connected_instagram_account%7Bid,username,name,followers_count,media_count%7D&access_token={}",
         url_encode(access_token)
     );
     let resp = platform::https_request("graph.facebook.com", "GET", &path, &[], &[], 15_000)?;
@@ -873,8 +873,16 @@ fn fetch_instagram_business_account(access_token: &str) -> Result<(String, Strin
         return Err(msg.to_owned());
     }
     let pages = parsed["data"].as_array().cloned().unwrap_or_default();
-    for page in pages {
-        if let Some(ig) = page.get("instagram_business_account")
+    let mut page_names: Vec<String> = Vec::new();
+    for page in &pages {
+        if let Some(pname) = page["name"].as_str().filter(|s| !s.is_empty()) {
+            page_names.push(pname.to_owned());
+        }
+        let ig_opt = page
+            .get("instagram_business_account")
+            .filter(|v| v["id"].is_string())
+            .or_else(|| page.get("connected_instagram_account").filter(|v| v["id"].is_string()));
+        if let Some(ig) = ig_opt
             && let Some(id) = ig["id"].as_str()
         {
             let username = ig["username"].as_str().unwrap_or("").to_owned();
@@ -893,7 +901,14 @@ fn fetch_instagram_business_account(access_token: &str) -> Result<(String, Strin
             return Ok((id.to_owned(), name, handle, followers, media));
         }
     }
-    Err("No Instagram Business or Creator account linked to your Facebook Pages was found.".to_owned())
+    if page_names.is_empty() {
+        Err("Facebook login succeeded, but Meta returned 0 Facebook Pages. Make sure you have a Facebook Page linked to your Instagram Professional (Creator/Business) account and check that Page on the Facebook login permission screen.".to_owned())
+    } else {
+        Err(format!(
+            "Facebook login succeeded and found Page(s): {}, but none have an Instagram Professional (Creator/Business) account linked. In the Instagram app go to Settings → Account type and tools → Switch to professional account, then link it to one of those Facebook Pages and reconnect.",
+            page_names.join(", ")
+        ))
+    }
 }
 
 pub(crate) async fn callback(
