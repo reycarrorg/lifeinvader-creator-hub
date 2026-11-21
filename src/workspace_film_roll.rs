@@ -287,6 +287,8 @@ pub(crate) struct ExportRequest {
     max_duration_s: Option<f64>,
     #[serde(default)]
     force_30fps: bool,
+    #[serde(flatten)]
+    studio: crate::workspace_studio::StudioExportOptions,
 }
 
 #[derive(Deserialize)]
@@ -439,7 +441,7 @@ fn cached_hw_encoder() -> Option<String> {
     .clone()
 }
 
-fn find_overlay_font() -> Option<String> {
+pub(crate) fn find_overlay_font() -> Option<String> {
     #[cfg(windows)]
     {
         for p in [
@@ -456,7 +458,7 @@ fn find_overlay_font() -> Option<String> {
     None
 }
 
-fn escape_drawtext(raw: &str) -> String {
+pub(crate) fn escape_drawtext(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len() + 8);
     for ch in raw.chars() {
         match ch {
@@ -848,7 +850,7 @@ pub(crate) async fn remove(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn sanitize_stem(raw: &str) -> String {
+pub(crate) fn sanitize_stem(raw: &str) -> String {
     let cleaned: String = raw
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
@@ -1440,6 +1442,10 @@ async fn render_clip_internal(
         input.outro_cta.as_deref(),
         out_dur_s,
     ));
+    video_filters.extend(crate::workspace_studio::build_studio_video_filters(
+        &input.studio,
+        out_dur_s,
+    ));
 
     let temp_srt_path = if let Some(raw_srt) = input.srt_text.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         let srt_file = out_dir.join(format!("sub-{short_id}-{}.srt", chrono::Utc::now().timestamp_millis()));
@@ -1475,6 +1481,11 @@ async fn render_clip_internal(
         if let Some(gain) = input.audio_gain_db.filter(|g| g.is_finite() && g.abs() >= 0.25) {
             audio_filters.push(format!("volume={:.1}dB", gain.clamp(-12.0, 12.0)));
         }
+        if input.studio.voiceover_path.as_deref().map(str::trim).unwrap_or("").is_empty()
+            && let Some(vfx) = crate::workspace_studio::voice_fx_filter(input.studio.voice_fx.as_deref())
+        {
+            audio_filters.push(vfx.to_owned());
+        }
         if normalize_audio {
             audio_filters.push("loudnorm=I=-14:TP=-1.5:LRA=11".to_owned());
         }
@@ -1502,6 +1513,8 @@ async fn render_clip_internal(
     let tmp_clone = tmp_path.clone();
     let final_clone = final_path.clone();
     let srt_cleanup = temp_srt_path.clone();
+    let app_for_studio = app.clone();
+    let studio_opts = input.studio.clone();
 
     let render = tokio::task::spawn_blocking(move || -> Result<(u64, String), String> {
         let mut chosen_encoder = "libx264".to_owned();
@@ -1574,6 +1587,18 @@ async fn render_clip_internal(
             let _ = std::fs::remove_file(p);
         }
         res?;
+        if crate::workspace_studio::needs_studio_post_passes(&studio_opts) {
+            if let Ok(mut st) = export_state().lock() {
+                st.message = "Compositing Original Studio FX (voiceover, reaction cam, SFX, replay/cards)…".to_owned();
+                st.percent = 92;
+            }
+            crate::workspace_studio::apply_studio_post_passes(
+                &app_for_studio,
+                &ffmpeg,
+                &tmp_clone,
+                &studio_opts,
+            )?;
+        }
         std::fs::rename(&tmp_clone, &final_clone)
             .map_err(|e| format!("Could not finalize exported MP4: {e}"))?;
         let len = std::fs::metadata(&final_clone)
@@ -1872,6 +1897,7 @@ pub(crate) async fn export_batch(
                 music_volume_db: None,
                 max_duration_s: None,
                 force_30fps: false,
+                studio: Default::default(),
             };
             match render_clip_internal(&app_clone, &clip_id, &req, false).await {
                 Ok(_) => completed += 1,

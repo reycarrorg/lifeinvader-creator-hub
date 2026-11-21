@@ -14,6 +14,7 @@
 #[cfg(feature="snapmatic-hud")] #[allow(dead_code)] mod workspace_phase4;
 #[cfg(feature="snapmatic-hud")] mod workspace_triage;
 #[cfg(feature="snapmatic-hud")] mod workspace_film_roll;
+#[cfg(feature="snapmatic-hud")] mod workspace_studio;
 #[cfg(feature="snapmatic-hud")] mod workspace_oauth;
 #[cfg(feature="snapmatic-hud")] mod workspace_tiktok_export;
 #[cfg(feature="snapmatic-hud")] mod controller_tiktok_inbox;
@@ -798,6 +799,7 @@ async fn owner_review_policy(request: axum::extract::Request,next:axum::middlewa
         ||target.starts_with("/api/bridge/");
     let workspace_local=lifeinvader_local||target=="/api/workspace/publish"
         ||target=="/api/workspace/film-roll"||target.starts_with("/api/workspace/film-roll/")
+        ||target.starts_with("/api/workspace/studio/")
         ||target=="/api/workspace/thumbnail-cache/clear"
         ||target=="/api/workspace/caption-presets"||target.starts_with("/api/workspace/caption-presets/")
         ||target.starts_with("/api/oauth/")

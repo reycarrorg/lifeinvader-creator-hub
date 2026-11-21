@@ -161,7 +161,7 @@ function accountAvatar(prov,url){
  return img;
 }
 function setInspectorTab(tab){
- if(!['captions','export','upload','checks'].includes(tab))tab='captions';
+ if(!['captions','create','export','upload','checks'].includes(tab))tab='captions';
  document.querySelectorAll('#inspector-tabs button[data-itab]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.itab===tab)));
  document.querySelectorAll('.itab-pane[data-itab-pane]').forEach(p=>{p.hidden=p.dataset.itabPane!==tab;});
  try{localStorage.setItem('snapmatic-itab-v1',tab);}catch{}
@@ -1259,6 +1259,7 @@ $('edit-transcode').onclick=async()=>{
     music_volume_db:Number($('edit-music-vol')?.value)||-18,
     srt_text:($('edit-srt-text')?.value||'').trim()||null,
     subtitle_style:$('edit-srt-style')?.value||'bold_yellow',
+    ...(window.snapmaticStudio?.getExportExtras?.()||{}),
    };
    const res=await get('/api/workspace/film-roll/'+encodeURIComponent(row.clip_id)+'/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
    row.exported=true;row.exported_file=res.file_name;row.export_url=res.export_url;row.state='exported';
@@ -2642,6 +2643,7 @@ const p5Commands=[
  ['Exports & Receipts',()=>showView('ledger',true)],['Connections & System',()=>showView('system',true)],
  ['Profiles',()=>showView('profiles',true)],['Sources',()=>showView('sources',true)],
  ['Inspector: Captions',()=>{showView('studio',true);setInspectorTab('captions');}],
+ ['Inspector: Create ✨ (Original Studio)',()=>{showView('studio',true);setInspectorTab('create');}],
  ['Inspector: Edit & Export',()=>{showView('studio',true);setInspectorTab('export');}],
  ['Inspector: Upload',()=>{showView('studio',true);setInspectorTab('upload');}],
  ['Inspector: Checks',()=>{showView('studio',true);setInspectorTab('checks');}],

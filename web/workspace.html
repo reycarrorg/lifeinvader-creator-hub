@@ -50,6 +50,7 @@
   <script src="/workspace-phase5.js" defer></script>
   <script src="/workspace.js" defer></script>
   <script src="/workspace-pro.js" defer></script>
+  <script src="/workspace-studio.js" defer></script>
   <link rel="icon" href="/favicon.ico?v=aperture-1" sizes="any">
   <link rel="icon" type="image/png" href="/icon-192.png?v=aperture-1" sizes="192x192">
   <link rel="apple-touch-icon" href="/icon-192.png?v=aperture-1">
@@ -215,6 +216,17 @@
           <video id="video" playsinline preload="metadata" aria-label="Selected clip"></video>
           <div id="vf-hook-overlay" class="vf-hook" hidden></div>
           <div id="vf-wm-overlay" class="vf-wm" hidden></div>
+          <video id="vf-cam-preview" class="vf-cam-preview" autoplay muted playsinline hidden aria-label="Live reaction webcam preview"></video>
+          <div id="vf-teleprompter" class="vf-teleprompter" hidden aria-label="Teleprompter overlay (not exported)">
+            <div class="vf-tp-badge">TELEPROMPTER · NOT EXPORTED</div>
+            <div id="vf-tp-scroll" class="vf-tp-scroll"></div>
+          </div>
+          <div id="vf-weazel-preview" class="vf-weazel" hidden aria-hidden="true">
+            <div class="vf-weazel-bar">WEAZEL NEWS · VICE BREAKING</div>
+            <div id="vf-weazel-head-text" class="vf-weazel-head"></div>
+            <div id="vf-weazel-tick-text" class="vf-weazel-tick"></div>
+          </div>
+          <div id="vf-progress-preview" class="vf-progress-bar" hidden aria-hidden="true"></div>
           <div id="vf-mock-ui" class="vf-mock-ui" data-platform="tiktok" hidden aria-hidden="true">
             <div class="vf-mock-top" id="vf-mock-top">Following · <strong>For You</strong></div>
             <div class="vf-mock-rail">
@@ -400,7 +412,8 @@
 
       <div class="inspector-tabs" id="inspector-tabs" role="tablist" aria-label="Inspector sections">
         <button type="button" role="tab" data-itab="captions" aria-selected="true">Captions</button>
-        <button type="button" role="tab" data-itab="export" aria-selected="false">Edit &amp; Export</button>
+        <button type="button" role="tab" data-itab="create" aria-selected="false">Create ✨ <span id="itab-create-badge" class="itab-badge" hidden></span></button>
+        <button type="button" role="tab" data-itab="export" aria-selected="false">Export</button>
         <button type="button" role="tab" data-itab="upload" aria-selected="false">Upload <span id="itab-upload-badge" class="itab-badge" hidden></span></button>
         <button type="button" role="tab" data-itab="checks" aria-selected="false">Checks</button>
       </div>
@@ -483,6 +496,251 @@
               </div>
               <p id="platform-draft-result" class="muted" role="status">Select a verified preview.</p>
             </div>
+          </section>
+        </div>
+
+        <!-- TAB 1B: CREATE ✨ (ORIGINAL CONTENT STUDIO - ALL 18 TOOLS) -->
+        <div class="itab-pane" data-itab-pane="create" hidden>
+          <section aria-label="Original Content Studio" class="space-y-3">
+            <div class="queue-handoff multi-ship-card">
+              <h4>✨ Original Content Studio (18 Creator Tools)</h4>
+              <p class="muted">Turn clips into genuinely original commentary, reaction, breakdown &amp; comparison videos locally with FFmpeg.</p>
+              <div class="export-btn-row">
+                <button type="button" id="studio-export-now" class="vice-btn-primary" disabled>🚀 Export MP4 with Studio FX</button>
+                <button type="button" id="studio-reset-all" class="cancel-btn">Reset Studio FX</button>
+              </div>
+              <output id="studio-active-summary" class="muted" role="status">No Studio FX active yet.</output>
+            </div>
+
+            <!-- #1 & #16: MIC VOICEOVER + AUTO-DUCKING + BROADCAST MIC FX -->
+            <details class="overlay-box" open>
+              <summary>🎙️ Voiceover Recorder, Auto-Ducking &amp; Mic FX</summary>
+              <div class="export-btn-row">
+                <button type="button" id="studio-vo-rec" class="vice-btn-primary">● Record Mic Voiceover</button>
+                <button type="button" id="studio-vo-stop" class="cancel-btn" hidden>■ Stop Recording</button>
+                <button type="button" id="studio-vo-clear" hidden>Clear Voiceover</button>
+              </div>
+              <div class="studio-meter-wrap" id="studio-vo-meter-wrap" hidden>
+                <div id="studio-vo-meter" class="studio-meter-bar"></div>
+              </div>
+              <audio id="studio-vo-audio" controls hidden style="width:100%;height:32px;margin:6px 0;"></audio>
+              <div class="export-grid">
+                <label>Broadcast Mic FX
+                  <select id="studio-voice-fx">
+                    <option value="none">Clean Mic (None)</option>
+                    <option value="podcast">Studio Podcast (EQ + Comp)</option>
+                    <option value="hype_radio">Hype Radio DJ</option>
+                    <option value="police_scanner">LSPD Police Scanner</option>
+                    <option value="trailer_deep">Deep Trailer Narrator</option>
+                  </select>
+                </label>
+                <label>Auto-Duck Clip (<output id="studio-vo-duck-val">-14 dB</output>)
+                  <input id="studio-vo-duck" type="range" min="-26" max="0" step="2" value="-14">
+                </label>
+              </div>
+              <label>Voiceover Volume (<output id="studio-vo-gain-val">+2 dB</output>)
+                <input id="studio-vo-gain" type="range" min="-6" max="12" step="1" value="2">
+              </label>
+              <output id="studio-vo-status" class="muted" role="status">Click Record while clip plays — clip audio auto-ducks when you speak.</output>
+            </details>
+
+            <!-- #8 & #18: LOCAL TTS NARRATION & VIEWFINDER TELEPROMPTER -->
+            <details class="overlay-box">
+              <summary>🗣️ Local TTS Narration &amp; Viewfinder Teleprompter</summary>
+              <div class="preset-chips" id="studio-script-presets">
+                <button type="button" data-spreset="breakdown">Breakdown</button>
+                <button type="button" data-spreset="hottake">Hot Take</button>
+                <button type="button" data-spreset="didyouknow">Did You Know</button>
+                <button type="button" data-spreset="top3">Top 3 Hook</button>
+              </div>
+              <label>Commentary / Narration Script
+                <textarea id="studio-tts-script" rows="3" placeholder="Type your GTA 6 commentary script here for Teleprompter or Local TTS…"></textarea>
+              </label>
+              <div class="export-grid">
+                <label>Voice Speed
+                  <select id="studio-tts-rate">
+                    <option value="-1">Calm (-1)</option>
+                    <option value="0">Normal (0)</option>
+                    <option value="1" selected>Punchy (+1)</option>
+                    <option value="2">Fast Shorts (+2)</option>
+                  </select>
+                </label>
+                <label>Teleprompter WPM (<output id="studio-tp-wpm-val">140</output>)
+                  <input id="studio-tp-wpm" type="range" min="80" max="240" step="10" value="140">
+                </label>
+              </div>
+              <div class="export-btn-row">
+                <button type="button" id="studio-tts-go">🗣️ Generate Local TTS Voiceover</button>
+                <button type="button" id="studio-tp-toggle">📜 Show Teleprompter</button>
+                <button type="button" id="studio-tp-play" hidden>▶ Scroll Script</button>
+              </div>
+              <label class="inline-check"><input type="checkbox" id="studio-tts-sync-srt" checked> Also sync script into Burn-in Auto-Captions (.srt)</label>
+              <output id="studio-tts-status" class="muted" role="status">Uses local Windows SAPI (or Piper in tools/) — zero cloud APIs.</output>
+            </details>
+
+            <!-- #2: WEBCAM REACTION CAM (PiP / SPLIT) -->
+            <details class="overlay-box">
+              <summary>📹 Live Webcam Reaction Cam (PiP / Split)</summary>
+              <div class="export-grid">
+                <label>Reaction Layout
+                  <select id="studio-cam-layout">
+                    <option value="corner_tr">Corner PiP (Top-Right)</option>
+                    <option value="corner_tl">Corner PiP (Top-Left)</option>
+                    <option value="corner_br">Corner PiP (Bottom-Right)</option>
+                    <option value="corner_bl">Corner PiP (Bottom-Left)</option>
+                    <option value="split_top">9:16 Split-Screen (Cam Top)</option>
+                  </select>
+                </label>
+                <div class="export-btn-row" style="align-self:end;margin:0;">
+                  <button type="button" id="studio-cam-start">Preview Cam</button>
+                </div>
+              </div>
+              <div class="export-btn-row">
+                <button type="button" id="studio-cam-rec" class="vice-btn-primary">● Record Reaction Cam</button>
+                <button type="button" id="studio-cam-stop" class="cancel-btn" hidden>■ Stop Cam</button>
+                <button type="button" id="studio-cam-clear" hidden>Clear Reaction Cam</button>
+              </div>
+              <output id="studio-cam-status" class="muted" role="status">Records your live reaction webcam in sync with playback.</output>
+            </details>
+
+            <!-- #4, #10 & #11: BREAKDOWN FX (FREEZE-FRAME ZOOM, ACTION PUNCH-IN, SLOW-MO REPLAY) -->
+            <details class="overlay-box">
+              <summary>⚡ Breakdown FX: Freeze Zoom, Punch-In &amp; Slow-Mo</summary>
+              <label>Freeze-Frame Callout Text <input id="studio-fz-callout" type="text" maxlength="48" placeholder="WAIT — LOOK RIGHT HERE 👀"></label>
+              <div class="export-btn-row">
+                <button type="button" id="studio-fz-set">❄ Freeze-Zoom at Playhead (2s)</button>
+                <button type="button" id="studio-fz-clear" hidden>Clear Freeze</button>
+              </div>
+              <div class="export-grid">
+                <label>Punch-In Scale
+                  <select id="studio-zp-scale">
+                    <option value="1.25">1.25× Subtle</option>
+                    <option value="1.38" selected>1.38× Action Punch</option>
+                    <option value="1.55">1.55× Dramatic</option>
+                  </select>
+                </label>
+                <div class="export-btn-row" style="align-self:end;margin:0;">
+                  <button type="button" id="studio-zp-set">🔍 Punch-In Here</button>
+                  <button type="button" id="studio-zp-clear" hidden>✕</button>
+                </div>
+              </div>
+              <label>Instant 0.5× Replay Stamp <input id="studio-rp-label" type="text" maxlength="42" placeholder="INSTANT REPLAY 0.5×"></label>
+              <div class="export-btn-row">
+                <button type="button" id="studio-rp-in">Replay Start Here</button>
+                <button type="button" id="studio-rp-out">Replay End Here</button>
+                <button type="button" id="studio-rp-clear" hidden>Clear Replay</button>
+              </div>
+              <output id="studio-fx-summary" class="muted" role="status">Seek the video to any moment and click a button to pin FX.</output>
+            </details>
+
+            <!-- #5, #7, #12, #14, #15 & #17: COLOR GRADES, WEAZEL NEWS, COMMENTARY CARDS, POLLS, PROGRESS BAR & CARDS -->
+            <details class="overlay-box">
+              <summary>🎨 Color Grades, Weazel News, Cards &amp; Polls</summary>
+              <label>GTA 6 Cinematic Color Grade</label>
+              <div class="preset-chips" id="studio-grade-pills">
+                <button type="button" data-grade="none" aria-pressed="true">Original</button>
+                <button type="button" data-grade="vice_sunset">Vice Sunset</button>
+                <button type="button" data-grade="miami_gold">Miami Gold</button>
+                <button type="button" data-grade="night_heist">Night Heist</button>
+                <button type="button" data-grade="vhs_1986">VHS 1986</button>
+                <button type="button" data-grade="ultra_crisp">Ultra-Crisp</button>
+              </div>
+
+              <label>Weazel News Breaking Headline <input id="studio-weazel-head" type="text" maxlength="56" placeholder="e.g. NEW GTA 6 MAP DETAIL SPOTTED"></label>
+              <label>Weazel News Scrolling Ticker <input id="studio-weazel-tick" type="text" maxlength="160" placeholder="WEAZEL NEWS VICE CITY LIVE • FOLLOW @CJ_4_PREZ"></label>
+              <label>Creator Attribution Pill <input id="studio-credit-handle" type="text" maxlength="36" placeholder="e.g. @rockstargames (renders 'Clip via …')"></label>
+
+              <div class="export-grid">
+                <label>Timed Pop-Up Card (3.5s at playhead)
+                  <input id="studio-card-text" type="text" maxlength="72" placeholder="Fact or commentary note…">
+                </label>
+                <div class="export-btn-row" style="align-self:end;margin:0;">
+                  <button type="button" id="studio-card-add">+ Add Card</button>
+                </div>
+              </div>
+              <div id="studio-card-list" class="marker-list"></div>
+
+              <label>Comment-Bait Poll Banner (last 5s) <input id="studio-poll-prompt" type="text" maxlength="54" placeholder="W OR L? DROP IT BELOW 👇"></label>
+              <div class="preset-chips" id="studio-poll-presets">
+                <button type="button" data-poll="W OR L? 👇">W or L?</button>
+                <button type="button" data-poll="RATE THIS 1-10 🔥">Rate 1-10</button>
+                <button type="button" data-poll="REAL OR FAKE? 👀">Real or Fake?</button>
+                <button type="button" data-poll="TEAM JASON OR LUCIA? 🌴">Jason vs Lucia</button>
+              </div>
+
+              <div class="export-checks">
+                <label class="inline-check"><input type="checkbox" id="studio-progress-bar"> Vice Sunset Retention Progress Bar</label>
+              </div>
+              <div class="export-btn-row">
+                <button type="button" id="studio-cd-set">⏱ Set 3-2-1 Payoff Countdown Here</button>
+                <button type="button" id="studio-cd-clear" hidden>Clear Countdown</button>
+              </div>
+              <div class="export-grid">
+                <label>Branded Intro Sting (1.5s) <input id="studio-intro-sting" type="text" maxlength="48" placeholder="e.g. GTA 6 SECRET"></label>
+                <label>Outro End-Card (2.4s) <input id="studio-outro-card" type="text" maxlength="48" placeholder="e.g. FOLLOW @CJ_4_PREZ"></label>
+              </div>
+            </details>
+
+            <!-- #6: TIMELINE SFX STINGER RACK -->
+            <details class="overlay-box">
+              <summary>🔊 Timeline SFX Stinger Rack</summary>
+              <p class="muted">Audition built-in local SFX or drop them directly at the current playhead.</p>
+              <div class="studio-sfx-grid" id="studio-sfx-rack">
+                <div class="sfx-item"><span>💨 Whoosh</span><button type="button" data-sfx-play="whoosh">▶</button><button type="button" data-sfx-drop="whoosh">+ Drop</button></div>
+                <div class="sfx-item"><span>💥 Vine Boom</span><button type="button" data-sfx-play="boom">▶</button><button type="button" data-sfx-drop="boom">+ Drop</button></div>
+                <div class="sfx-item"><span>🔔 Ding</span><button type="button" data-sfx-play="ding">▶</button><button type="button" data-sfx-drop="ding">+ Drop</button></div>
+                <div class="sfx-item"><span>📈 Riser</span><button type="button" data-sfx-play="riser">▶</button><button type="button" data-sfx-drop="riser">+ Drop</button></div>
+                <div class="sfx-item"><span>💿 Scratch</span><button type="button" data-sfx-play="scratch">▶</button><button type="button" data-sfx-drop="scratch">+ Drop</button></div>
+              </div>
+              <div id="studio-sfx-list" class="marker-list" style="margin-top:8px;"></div>
+            </details>
+
+            <!-- #3, #9 & #13: MULTI-CLIP MONTAGE (BEAT-SYNC) & VS COMPARISON STUDIO -->
+            <details class="overlay-box">
+              <summary>🎬 Montage Builder (Beat-Sync) &amp; VS Comparison</summary>
+              <div class="queue-handoff" style="margin-top:6px;">
+                <h4>Top-N Multi-Clip Montage (#3 &amp; #13)</h4>
+                <div class="export-btn-row">
+                  <button type="button" id="studio-montage-add">+ Add Current Clip</button>
+                  <button type="button" id="studio-montage-clear" hidden>Clear List</button>
+                </div>
+                <ul id="studio-montage-list" class="multi-ship-log"></ul>
+                <div class="export-grid">
+                  <label>Montage Title <input id="studio-montage-title" type="text" maxlength="60" placeholder="Top 3 GTA 6 Moments"></label>
+                  <label>Seconds / Clip <input id="studio-montage-sec" type="number" min="2" max="20" value="5"></label>
+                </div>
+                <label class="inline-check"><input type="checkbox" id="studio-montage-beatsync"> Snap cuts to Music Beat-Sync (uses Edit tab music bed)</label>
+                <div class="export-btn-row">
+                  <button type="button" id="studio-detect-beats">🥁 Detect BPM &amp; Beats</button>
+                  <button type="button" id="studio-montage-go" class="vice-btn-primary" disabled>Render Montage MP4</button>
+                </div>
+                <output id="studio-beats-status" class="muted" role="status"></output>
+              </div>
+
+              <div class="queue-handoff" style="margin-top:8px;">
+                <h4>"GTA V vs GTA VI" Comparison Builder (#9)</h4>
+                <label>Clip A (Top / Left) <select id="studio-cmp-a"></select></label>
+                <label>Clip B (Bottom / Right) <select id="studio-cmp-b"></select></label>
+                <div class="export-grid">
+                  <label>Label A <input id="studio-cmp-label-a" type="text" maxlength="28" value="GTA V"></label>
+                  <label>Label B <input id="studio-cmp-label-b" type="text" maxlength="28" value="GTA VI"></label>
+                </div>
+                <div class="export-grid">
+                  <label>Layout
+                    <select id="studio-cmp-layout">
+                      <option value="vertical">Stacked 9:16</option>
+                      <option value="horizontal">Side-by-Side</option>
+                    </select>
+                  </label>
+                  <label>Max Seconds <input id="studio-cmp-sec" type="number" min="3" max="58" value="18"></label>
+                </div>
+                <label>Center VS Title <input id="studio-cmp-title" type="text" maxlength="48" placeholder="GTA V vs GTA VI"></label>
+                <div class="export-btn-row">
+                  <button type="button" id="studio-cmp-go" class="vice-btn-primary">Render Comparison MP4</button>
+                </div>
+              </div>
+              <output id="studio-builder-status" class="muted" role="status"></output>
+            </details>
           </section>
         </div>
 
