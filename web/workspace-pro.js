@@ -18,7 +18,7 @@ let unexportedDirty = false;
 let uploadPollTimer = null;
 let batchUploadQueue = [];
 
-// 1. Live Upload Progress Bar Poller
+// 1. Live Upload Progress Bar Poller (with MB/s & ETA telemetry)
 function pollUploadProgress() {
  const wrap = $('upload-progress-wrap'), bar = $('upload-progress'), txt = $('upload-progress-text');
  if (!wrap) return;
@@ -26,7 +26,10 @@ function pollUploadProgress() {
   wrap.hidden = !p.active;
   if (p.active) {
    if (bar) bar.value = Number(p.percent) || 0;
-   if (txt) txt.textContent = (p.message || 'Uploading…') + ' (' + (Number(p.percent) || 0) + '%)';
+   const parts = [(p.message || 'Uploading…') + ' (' + (Number(p.percent) || 0) + '%)'];
+   if (Number(p.speed_mib_s) > 0.05) parts.push(Number(p.speed_mib_s).toFixed(1) + ' MiB/s');
+   if (Number.isFinite(Number(p.eta_secs)) && Number(p.eta_secs) > 0) parts.push('~' + Math.round(Number(p.eta_secs)) + 's left');
+   if (txt) txt.textContent = parts.join(' · ');
   }
  }).catch(() => {});
 }
@@ -89,7 +92,7 @@ function applyLiveViewfinderFx() {
  const on = Boolean($('live-fx-preview')?.checked) && !holdOriginal;
  const framing = $('edit-framing')?.value || 'original';
  const panRow = $('crop-pan-row');
- if (panRow) panRow.hidden = framing !== 'center_crop';
+ if (panRow) panRow.hidden = framing !== 'center_crop' && !framing.startsWith('split_');
  const panVal = Number($('edit-crop-pan')?.value) || 0;
  if ($('crop-pan-val')) $('crop-pan-val').textContent = panVal === 0 ? 'Center' : (panVal < 0 ? 'Left ' + Math.abs(panVal) + '%' : 'Right ' + panVal + '%');
  if (!on) {
@@ -894,4 +897,302 @@ renderHookHelper();
 renderBrandKits();
 renderBatchUploadQueue();
 updateStreakPill();
+
+// 17. Clickable 59s YT & 89s IG Sweet-Spot Lines on #trim-track
+function bindTrimLimitSnap(id, secs, label) {
+ const el = $(id);
+ if (!el) return;
+ el.addEventListener('click', e => {
+  e.stopPropagation();
+  const es = app()?.getEditState();
+  if (!es || !es.duration_ms) return;
+  const targetOut = Math.min(es.duration_ms, (es.in_ms || 0) + secs * 1000);
+  if (targetOut <= (es.in_ms || 0) + 500) return;
+  app().setTrim('out', targetOut);
+  app().workflowDirty();
+  unexportedDirty = true;
+  renderUploadReadiness();
+  app().note('Snapped Out handle to ' + label + ' (' + app().time(targetOut / 1000) + ').');
+ });
+}
+bindTrimLimitSnap('trim-limit-59', 59, '59s YouTube Short sweet-spot');
+bindTrimLimitSnap('trim-limit-89', 89, '89s Instagram Reels sweet-spot');
+
+// 18. Auto "Viral Moment" Audio Peak Finder (FFmpeg RMS Scan)
+if ($('trim-viral-moment')) $('trim-viral-moment').onclick = async () => {
+ const row = app().getSelected(), es = app().getEditState(), btn = $('trim-viral-moment'), out = $('silence-status');
+ if (!row?.from_sources || !es || btn.disabled) return;
+ btn.disabled = true;
+ if (out) out.textContent = 'Scanning audio energy for hype/reaction peaks…';
+ try {
+  const r = await app().get('/api/workspace/film-roll/' + encodeURIComponent(row.clip_id) + '/viral-moment', { method: 'POST' });
+  const nextIn = Math.max(0, Math.min(es.duration_ms - 500, Number(r.suggested_in_ms) || 0));
+  const nextOut = Math.max(nextIn + 500, Math.min(es.duration_ms, Number(r.suggested_out_ms) || es.duration_ms));
+  app().setTrim('in', nextIn);
+  app().setTrim('out', nextOut);
+  app().workflowDirty();
+  unexportedDirty = true;
+  renderUploadReadiness();
+  const v = app().getVideo();
+  if (v && Number.isFinite(v.duration) && Number.isFinite(Number(r.peak_at_ms))) {
+   v.currentTime = Math.max(0, Math.min(v.duration, Number(r.peak_at_ms) / 1000));
+  }
+  const peaks = Array.isArray(r.top_peaks) ? r.top_peaks.slice(0, 3).map(p => app().time((Number(p.ms ?? p.at_ms) || 0) / 1000).slice(0, 5)).join(', ') : '';
+  const msg = 'Viral window: ' + app().time(nextIn / 1000).slice(0, 5) + ' → ' + app().time(nextOut / 1000).slice(0, 5) + (peaks ? ' · Top peaks: ' + peaks : '');
+  if (out) out.textContent = msg;
+  app().note('⚡ ' + msg);
+ } catch (e) {
+  if (out) out.textContent = 'Viral moment scan failed: ' + e.message;
+  app().note('Viral moment scan failed: ' + e.message);
+ } finally {
+  app().renderNvenc();
+ }
+};
+
+// 19. 1-Click Local AI / Smart Auto-Captions Generator
+if ($('edit-auto-captions')) $('edit-auto-captions').onclick = async () => {
+ const row = app().getSelected(), es = app().getEditState(), btn = $('edit-auto-captions'), out = $('auto-captions-status');
+ if (!row?.from_sources || btn.disabled) return;
+ btn.disabled = true;
+ if (out) out.textContent = 'Generating timed captions (checking local Whisper model)…';
+ try {
+  const seed = ($('edit-hook')?.value || '').trim() || ($('caption')?.value || '').trim() || ($('title')?.value || '').trim() || row.name;
+  const r = await app().get('/api/workspace/film-roll/' + encodeURIComponent(row.clip_id) + '/auto-captions', {
+   method: 'POST',
+   headers: { 'Content-Type': 'application/json' },
+   body: JSON.stringify({
+    seed_text: seed,
+    in_ms: es?.in_ms || 0,
+    out_ms: es?.out_ms || es?.duration_ms || null
+   })
+  });
+  if ($('edit-srt-text')) $('edit-srt-text').value = r.srt || '';
+  if ($('edit-srt-style')) $('edit-srt-style').value = 'vice_neon';
+  unexportedDirty = true;
+  renderUploadReadiness();
+  const modeLabel = r.engine === 'whisper-local' ? 'Local Whisper AI' : 'Smart 3-word Vice bursts (drop whisper-cli.exe + ggml-*.bin in tools/ for speech-to-text)';
+  if (out) out.textContent = '✓ Generated ' + (r.cue_count || 0) + ' cues via ' + modeLabel + '.';
+  app().note('Auto-Captions ready (' + (r.cue_count || 0) + ' cues · GTA 6 Vice Neon Pop style).');
+ } catch (e) {
+  if (out) out.textContent = 'Auto-captions failed: ' + e.message;
+  app().note('Auto-captions failed: ' + e.message);
+ } finally {
+  app().renderNvenc();
+ }
+};
+
+// 20. Drag-and-Drop Local Video Intake Straight Into the Viewfinder (+ Drop MP4 button)
+async function importLocalVideoFile(file) {
+ if (!file) return;
+ const ext = (file.name.split('.').pop() || '').toLowerCase();
+ if (!['mp4', 'mov', 'mkv', 'webm'].includes(ext)) {
+  app().note('Supported video formats: .mp4, .mov, .mkv, .webm');
+  return;
+ }
+ app().note('Importing "' + file.name + '" into Film Roll…');
+ try {
+  const fd = new FormData();
+  fd.append('file', file, file.name);
+  const resp = await fetch('/api/workspace/film-roll/import-file', {
+   method: 'POST',
+   credentials: 'same-origin',
+   body: fd
+  });
+  if (!resp.ok) {
+   const txt = (await resp.text()).trim();
+   let msg = txt || 'Import failed.';
+   try { const j = JSON.parse(txt); msg = j.reason || j.error || msg; } catch {}
+   throw Error(msg);
+  }
+  const r = await resp.json();
+  await app().reload();
+  app().refreshLocalStatus();
+  const hit = app().getItems().find(x => x.clip_id === r.clip_id);
+  if (hit) {
+   app().showView('studio', true);
+   app().select(hit);
+  }
+  app().note('Imported "' + (r.title || file.name) + '" (' + ((r.bytes || 0) / 1048576).toFixed(1) + ' MiB) into Film Roll!');
+ } catch (e) {
+  app().note('Video import failed: ' + e.message);
+ }
+}
+
+if ($('roll-drop-input')) {
+ $('roll-drop-input').onchange = e => {
+  const f = e.currentTarget.files?.[0];
+  e.currentTarget.value = '';
+  if (f) importLocalVideoFile(f);
+ };
+}
+
+const dropZone = $('vf-drop-zone'), dropOverlay = $('vf-drop-overlay');
+if (dropZone) {
+ let dragDepth = 0;
+ const setDragging = on => {
+  dropZone.classList.toggle('drag-over', on);
+  if (dropOverlay) dropOverlay.hidden = !on;
+ };
+ dropZone.addEventListener('dragenter', e => {
+  if (!e.dataTransfer?.types?.includes('Files')) return;
+  e.preventDefault();
+  dragDepth++;
+  setDragging(true);
+ });
+ dropZone.addEventListener('dragover', e => {
+  if (!e.dataTransfer?.types?.includes('Files')) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'copy';
+ });
+ dropZone.addEventListener('dragleave', () => {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) setDragging(false);
+ });
+ dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dragDepth = 0;
+  setDragging(false);
+  const f = e.dataTransfer?.files?.[0];
+  if (f) importLocalVideoFile(f);
+ });
+}
+
+// 21. 1-Click "Ship Recipe" Macro (Auto-Format -> Auto-Export -> Multi-Ship)
+if ($('ship-recipe-go')) $('ship-recipe-go').onclick = async () => {
+ const row = app().getSelected(), btn = $('ship-recipe-go'), st = $('ship-recipe-status');
+ if (!row?.from_sources || btn.disabled) return;
+ btn.disabled = true;
+ try {
+  if ($('recipe-autoformat')?.checked) {
+   if (st) st.textContent = '1/3 Auto-formatting captions, #Shorts & X post…';
+   $('auto-format-all')?.click();
+  }
+  const needExport = Boolean($('recipe-autoexport')?.checked) && (!row.exported || unexportedDirty);
+  if (needExport) {
+   const v = app().getVideo();
+   if (v && v.videoWidth > v.videoHeight && $('edit-framing')?.value === 'original') {
+    $('edit-framing').value = 'center_crop';
+    $('edit-framing').dispatchEvent(new Event('change'));
+   }
+   if (st) st.textContent = '2/3 Exporting optimized 9:16 H.264 MP4…';
+   const exportedOk = await new Promise(resolve => {
+    let settled = false;
+    const onDone = ev => {
+     if (ev.detail?.clip_id === row.clip_id && !settled) { settled = true; cleanup(); resolve(true); }
+    };
+    const pollBtn = setInterval(() => {
+     const b = $('edit-transcode');
+     if (!settled && b && !b.disabled && ($('edit-state')?.textContent || '').startsWith('Export failed')) {
+      settled = true; cleanup(); resolve(false);
+     }
+    }, 500);
+    const timeout = setTimeout(() => { if (!settled) { settled = true; cleanup(); resolve(false); } }, 240000);
+    function cleanup() { window.removeEventListener('snapmatic:exported', onDone); clearInterval(pollBtn); clearTimeout(timeout); }
+    window.addEventListener('snapmatic:exported', onDone);
+    $('edit-transcode')?.click();
+   });
+   if (!exportedOk) {
+    if (st) st.textContent = 'Export did not finish — review Edit & Export tab before shipping.';
+    return;
+   }
+  }
+  if (st) st.textContent = '3/3 Shipping to selected platforms…';
+  const res = await app().runMultiShip();
+  if (st) {
+   if (res?.cancelled) st.textContent = 'Ship cancelled before live publish.';
+   else st.textContent = '✓ Ship Recipe done: ' + (res?.okCount || 0) + '/' + (res?.total || 0) + ' platform(s) succeeded.';
+  }
+ } finally {
+  app().syncYoutubeDraftButton();
+ }
+};
+
+// 22. Smart Growth Coach in Channel Insights
+function renderGrowthCoach(data) {
+ const body = $('insights-coach-body');
+ if (!body) return;
+ const posts = Array.isArray(data?.posts) ? data.posts : [];
+ if (!posts.length) {
+  body.replaceChildren(
+   app().node('div', 'Sync live YouTube, Instagram & TikTok posts to unlock personalized best-time, hashtag, and engagement coaching.', 'muted')
+  );
+  return;
+ }
+ const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+ const slotMap = new Map();
+ const tagMap = new Map();
+ const platMap = new Map();
+ let viewsSum = 0, engNum = 0, engDen = 0;
+
+ for (const p of posts) {
+  const views = Number(p.views) || 0;
+  const likes = Number(p.likes) || 0;
+  const comments = Number(p.comments) || 0;
+  const score = views + likes * 12 + comments * 25;
+  viewsSum += views;
+  if (views > 0) { engNum += (likes + comments); engDen += views; }
+
+  const pCur = platMap.get(p.provider) || { provider: p.provider, count: 0, views: 0, likes: 0 };
+  pCur.count++; pCur.views += views; pCur.likes += likes;
+  platMap.set(p.provider, pCur);
+
+  if (p.published_at) {
+   const dt = new Date(p.published_at);
+   if (!Number.isNaN(dt.getTime())) {
+    const slotKey = dayNames[dt.getDay()] + ' @ ' + dt.toLocaleTimeString([], { hour: 'numeric' });
+    const sCur = slotMap.get(slotKey) || { key: slotKey, count: 0, score: 0 };
+    sCur.count++; sCur.score += score;
+    slotMap.set(slotKey, sCur);
+   }
+  }
+  const tags = ((p.title || '') + ' ' + (p.caption || '')).match(/#[a-zA-Z0-9_]+/g) || [];
+  const seen = new Set();
+  for (const rawTag of tags) {
+   const k = rawTag.toLowerCase();
+   if (seen.has(k)) continue;
+   seen.add(k);
+   const tCur = tagMap.get(k) || { tag: k, count: 0, views: 0, score: 0 };
+   tCur.count++; tCur.views += views; tCur.score += score;
+   tagMap.set(k, tCur);
+  }
+ }
+
+ const bestSlot = Array.from(slotMap.values()).sort((a, b) => (b.score / b.count) - (a.score / a.count))[0];
+ const bestTags = Array.from(tagMap.values()).sort((a, b) => (b.score / b.count) - (a.score / a.count)).slice(0, 3);
+ const leaderPlat = Array.from(platMap.values()).sort((a, b) => (b.views / Math.max(1, b.count)) - (a.views / Math.max(1, a.count)))[0];
+ const engRate = engDen > 0 ? ((engNum / engDen) * 100).toFixed(2) : null;
+ const avgViews = Math.round(viewsSum / posts.length);
+
+ const tip = (eyebrow, headline, detail) => {
+  const card = app().node('div', undefined, 'coach-tip');
+  card.append(app().node('small', eyebrow), app().node('strong', headline), app().node('p', detail));
+  return card;
+ };
+
+ const platPretty = { youtube: 'YouTube Shorts', instagram: 'Instagram Reels', tiktok: 'TikTok' };
+ body.replaceChildren(
+  tip(
+   'Peak Posting Window',
+   bestSlot ? bestSlot.key : 'Evenings (6 PM)',
+   bestSlot ? 'Highest average engagement score across your synced drops (' + bestSlot.count + ' post' + (bestSlot.count === 1 ? '' : 's') + ' in this slot).' : 'Schedule more drops with timestamps to lock in your peak hour.'
+  ),
+  tip(
+   'Winning Hashtags',
+   bestTags.length ? bestTags.map(t => t.tag).join(' ') : '#gta6 #gtavi #rockstargames',
+   bestTags.length ? 'Top tags by avg reach (' + Math.round(bestTags[0].views / bestTags[0].count).toLocaleString() + ' avg views on ' + bestTags[0].tag + ').' : 'Pair 3–5 focused GTA 6 tags in Studio Captions to track tag lift.'
+  ),
+  tip(
+   'Engagement & Reach',
+   engRate ? engRate + '% eng · ' + avgViews.toLocaleString() + ' avg views' : avgViews.toLocaleString() + ' avg views',
+   leaderPlat ? (platPretty[leaderPlat.provider] || leaderPlat.provider) + ' leads your per-post reach (' + Math.round(leaderPlat.views / leaderPlat.count).toLocaleString() + ' views/post).' : 'Cross-post every clip to Shorts, Reels & TikTok.'
+  ),
+  tip(
+   'Next GTA 6 Drop Playbook',
+   'Keep Shorts ≤59s · Reels ≤89s',
+   'Use ⚡ Find Viral Moment + Auto-Captions (Vice Neon Pop) in Studio, then hit 🔥 Run Ship Recipe to auto-format, export 9:16, and ship in 1 click.'
+  )
+ );
+}
+window.addEventListener('snapmatic:insights-rendered', e => renderGrowthCoach(e.detail?.data));
+if (app()?.getAnalyticsData?.()) renderGrowthCoach(app().getAnalyticsData());
 })();

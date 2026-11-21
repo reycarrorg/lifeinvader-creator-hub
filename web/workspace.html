@@ -145,8 +145,13 @@
     <!-- LEFT PANE: FILM ROLL QUEUE -->
     <aside class="rail panel flex flex-col" aria-labelledby="roll-title">
       <header class="panel-head">
-        <div class="eyebrow">01 / LIBRARY</div>
-        <h1 id="roll-title" class="font-display">Film Roll</h1>
+        <div class="flex items-center justify-between gap-2">
+          <div>
+            <div class="eyebrow">01 / LIBRARY</div>
+            <h1 id="roll-title" class="font-display">Film Roll</h1>
+          </div>
+          <label class="mini-btn file-btn" title="Import local MP4/MOV/MKV/WebM (or drag &amp; drop onto Viewfinder)">+ Drop MP4<input id="roll-drop-input" type="file" accept=".mp4,.mov,.mkv,.webm,video/*" hidden></label>
+        </div>
         <p id="roll-count">Loading indexed clips…</p>
       </header>
       <div class="rail-search">
@@ -197,7 +202,11 @@
         </div>
       </header>
 
-      <div class="view-shell">
+      <div class="view-shell" id="vf-drop-zone">
+        <div id="vf-drop-overlay" class="vf-drop-overlay" hidden>
+          <strong>DROP VIDEO TO IMPORT</strong>
+          <small>MP4 · MOV · MKV · WEBM → Instant Viewfinder Studio</small>
+        </div>
         <div class="viewfinder rounded-2xl shadow-2xl" id="viewfinder" tabindex="0" aria-label="Vertical viewfinder. Space or K plays, J/L shuttle, arrows seek, M mutes, G toggles framing guides.">
           <span class="corner tl"></span>
           <span class="corner tr"></span>
@@ -266,6 +275,8 @@
         <div class="trim-track" id="trim-track" title="Click anywhere to seek · drag handles to trim">
           <div class="trim-filmstrip" id="trim-filmstrip"></div>
           <div class="trim-range" id="trim-range"></div>
+          <button type="button" class="trim-limit trim-limit-59" id="trim-limit-59" hidden title="Click to snap Out to 59s (Guaranteed YouTube Short)"><span>59s YT</span></button>
+          <button type="button" class="trim-limit trim-limit-89" id="trim-limit-89" hidden title="Click to snap Out to 89s (Instagram Reels Sweet Spot)"><span>89s IG</span></button>
           <div class="trim-markers" id="trim-markers"></div>
           <div class="trim-playhead" id="trim-playhead"></div>
           <button type="button" class="trim-handle trim-handle-in" id="trim-handle-in" aria-label="Drag trim In handle" title="Drag to set Trim In"></button>
@@ -488,6 +499,7 @@
             </div>
             <div class="export-btn-row">
               <button type="button" id="trim-detect-silence" disabled>Auto-Trim Dead Air</button>
+              <button type="button" id="trim-viral-moment" disabled>⚡ Find Viral Moment (≤56s)</button>
             </div>
             <output id="silence-status" class="muted" aria-live="polite"></output>
           </section>
@@ -507,6 +519,10 @@
                   <option value="original">Original shape</option>
                   <option value="center_crop">9:16 Center Crop</option>
                   <option value="blurred_fit">Blurred-Background Fit</option>
+                  <option value="split_top_right">9:16 Split-Screen (Cam Top-Right)</option>
+                  <option value="split_top_left">9:16 Split-Screen (Cam Top-Left)</option>
+                  <option value="split_bottom_right">9:16 Split-Screen (Cam Bottom-Right)</option>
+                  <option value="split_bottom_left">9:16 Split-Screen (Cam Bottom-Left)</option>
                 </select>
               </label>
               <label>Quality
@@ -597,16 +613,21 @@
             </details>
 
             <details class="overlay-box">
-              <summary>Burn-in Subtitles (.srt)</summary>
+              <summary>Burn-in Subtitles (.srt) &amp; Auto-Captions</summary>
               <div class="export-grid">
                 <label>Style
                   <select id="edit-srt-style">
+                    <option value="vice_neon">GTA 6 Vice Neon Pop</option>
                     <option value="bold_yellow">CapCut Bold Yellow</option>
                     <option value="clean_white">Clean White Outline</option>
                   </select>
                 </label>
                 <label>Load .srt file <input id="edit-srt-file" type="file" accept=".srt,text/plain"></label>
               </div>
+              <div class="export-btn-row">
+                <button type="button" id="edit-auto-captions" disabled>✨ Auto-Generate Timed Captions</button>
+              </div>
+              <output id="auto-captions-status" class="muted" aria-live="polite"></output>
               <label>SRT content <textarea id="edit-srt-text" rows="4" placeholder="1&#10;00:00:00,000 --> 00:00:02,500&#10;WAIT FOR THIS CLIP!"></textarea></label>
             </details>
 
@@ -681,6 +702,19 @@
               </details>
             </div>
 
+            <div class="queue-handoff multi-ship-card" id="ship-recipe-card">
+              <h4>🔥 1-Click Ship Recipe Macro</h4>
+              <p class="muted">Runs Auto-Format Captions → Export 9:16 MP4 (if needed) → Ship Selected Platforms in one automated pipeline.</p>
+              <div class="export-checks">
+                <label class="inline-check"><input type="checkbox" id="recipe-autoformat" checked> Auto-format #Shorts, tags &amp; X post</label>
+                <label class="inline-check"><input type="checkbox" id="recipe-autoexport" checked> Export 9:16 48 kHz MP4 first if not exported</label>
+              </div>
+              <div class="export-btn-row">
+                <button type="button" id="ship-recipe-go" class="vice-btn-primary" disabled>🔥 Ship GTA 6 Drop (All-in-One)</button>
+              </div>
+              <output id="ship-recipe-status" class="muted" role="status"></output>
+            </div>
+
             <div class="queue-handoff multi-ship-card" id="multi-ship-card">
               <h4>One-Click Ship to Multiple Platforms</h4>
               <div class="multi-ship-checks">
@@ -691,6 +725,7 @@
               </div>
               <div class="export-btn-row">
                 <button type="button" id="multi-ship-go" class="vice-btn-primary" disabled>Ship Selected Platforms</button>
+                <button type="button" id="multi-ship-retry" hidden>↻ Retry Failed Platforms</button>
                 <button type="button" id="batch-queue-add" disabled>+ Add to Batch Upload Queue</button>
               </div>
               <ul id="multi-ship-log" class="multi-ship-log" hidden></ul>
@@ -747,6 +782,11 @@
               <p class="muted">Direct upload from your PC via Meta resumable upload (auto-optimized 48 kHz AAC, Share to Feed &amp; Cover frame offset).</p>
               <label class="inline-check"><input type="checkbox" id="ig-upload-share" checked> Also share Reel to Feed</label>
               <label>Cover frame offset (<output id="ig-thumb-val">0.0s</output>) <input id="ig-thumb-slider" type="range" min="0" max="1000" value="0" step="100" disabled></label>
+              <details class="overlay-box">
+                <summary>Optional: Full 1080p60 Cloud Relay URL (for 90s+ Reels)</summary>
+                <label>Public HTTPS MP4 URL (Cloudflare R2 / S3) <input id="ig-public-url" type="url" placeholder="https://cdn.yourdomain.com/clip.mp4"></label>
+                <p class="muted">Optional. Leave blank to upload straight from your PC. When set, Meta pulls full 1080p60 asynchronously via video_url.</p>
+              </details>
               <div class="export-btn-row">
                 <button type="button" id="ig-upload-container" disabled>Upload Test Container (Unpublished)</button>
                 <button type="button" id="ig-publish-arm" disabled>Upload &amp; Publish Reel…</button>
@@ -1091,6 +1131,13 @@
       </div>
     </div>
     <section class="kpi-grid" id="insights-kpis" aria-label="Connected account summary"></section>
+    <section class="panel coach-card mb-4" id="insights-coach" aria-label="Smart Growth Coach">
+      <header class="flex items-center justify-between gap-2">
+        <h3 class="font-display m-0">⚡ Smart Growth Coach</h3>
+        <span class="flag ready">LIVE DATA</span>
+      </header>
+      <div id="insights-coach-body" class="coach-grid">Sync live analytics to unlock personalized GTA 6 posting insights.</div>
+    </section>
     <section class="charts-grid" aria-label="Analytics charts">
       <div class="panel chart-card">
         <header><h3 class="font-display">Platform Performance</h3><small class="muted">Synced views &amp; engagement by platform</small></header>

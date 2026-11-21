@@ -267,6 +267,7 @@ function syncYoutubeDraftButton(){
  }
  const anyShip=['ship-chk-yt','ship-chk-ig','ship-chk-tt','ship-chk-x'].some(id=>$(id)?.checked&&!$(id)?.disabled);
  if($('multi-ship-go'))$('multi-ship-go').disabled=!selected?.from_sources||!anyShip;
+ if($('ship-recipe-go'))$('ship-recipe-go').disabled=!selected?.from_sources||!anyShip;
  renderClipShippedBanner(selected);
  updateMockOverlay();
 }
@@ -461,7 +462,8 @@ async function runInstagramUpload(publish){
     share_to_feed:Boolean($('ig-upload-share')?$('ig-upload-share').checked:$('draft-ig-share')?.checked),
     thumb_offset_ms:pdState?.cover?.thumb_offset_ms??(Number($('ig-thumb-slider')?.value)||null),
     use_source:!row.exported,
-    publish:Boolean(publish)
+    publish:Boolean(publish),
+    public_video_url:($('ig-public-url')?.value||'').trim()||null
    })
   });
   if(res.published&&res.media_id){
@@ -566,24 +568,30 @@ async function runXVideoPost(){
 }
 if($('x-post-confirm'))$('x-post-confirm').onclick=runXVideoPost;
 
-if($('multi-ship-go'))$('multi-ship-go').onclick=async()=>{
- const row=selected,btn=$('multi-ship-go'),log=$('multi-ship-log');
- if(!row?.from_sources||btn.disabled)return;
- const targets=[];
- if($('ship-chk-yt')?.checked&&!$('ship-chk-yt').disabled)targets.push('youtube');
- if($('ship-chk-ig')?.checked&&!$('ship-chk-ig').disabled)targets.push('instagram');
- if($('ship-chk-tt')?.checked&&!$('ship-chk-tt').disabled)targets.push('tiktok');
- if($('ship-chk-x')?.checked&&!$('ship-chk-x').disabled)targets.push('x');
- if(!targets.length)return;
+let lastFailedShipTargets=null;
+async function runMultiShip(targetSubset=null){
+ const row=selected,btn=$('multi-ship-go'),retryBtn=$('multi-ship-retry'),log=$('multi-ship-log');
+ if(!row?.from_sources)return {okCount:0,failedTargets:[],total:0};
+ const targets=Array.isArray(targetSubset)&&targetSubset.length?targetSubset.slice():[];
+ if(!targets.length){
+  if($('ship-chk-yt')?.checked&&!$('ship-chk-yt').disabled)targets.push('youtube');
+  if($('ship-chk-ig')?.checked&&!$('ship-chk-ig').disabled)targets.push('instagram');
+  if($('ship-chk-tt')?.checked&&!$('ship-chk-tt').disabled)targets.push('tiktok');
+  if($('ship-chk-x')?.checked&&!$('ship-chk-x').disabled)targets.push('x');
+ }
+ if(!targets.length)return {okCount:0,failedTargets:[],total:0};
  const igLive=targets.includes('instagram')&&$('ship-ig-mode')?.value==='publish';
  const xLive=targets.includes('x');
- if((igLive||xLive)&&!window.confirm('This will publish LIVE to '+[igLive?'Instagram':null,xLive?'X':null].filter(Boolean).join(' & ')+'. Continue?'))return;
- btn.disabled=true;
- if(log){log.hidden=false;log.replaceChildren();}
+ if((igLive||xLive)&&!window.confirm('This will publish LIVE to '+[igLive?'Instagram':null,xLive?'X':null].filter(Boolean).join(' & ')+'. Continue?'))return {okCount:0,failedTargets:[],total:0,cancelled:true};
+ if(btn)btn.disabled=true;
+ if(retryBtn)retryBtn.disabled=true;
+ if(log){log.hidden=false;if(!targetSubset)log.replaceChildren();}
  const addRow=(txt,cls)=>{const li=node('li',txt,cls);if(log)log.append(li);return li;};
  const common={title:$('title').value.trim()||row.name,caption:$('caption').value.trim(),tags:$('tags').value.trim()};
  const mats=pd.materialize(common,pdState?.overrides||{},pdState||{});
+ const publicVideoUrl=($('ig-public-url')?.value||'').trim()||null;
  let okCount=0;
+ const failedTargets=[];
  for(const t of targets){
   if(t==='youtube'){
    const li=addRow('⏳ Uploading YouTube draft…');
@@ -609,18 +617,18 @@ if($('multi-ship-go'))$('multi-ship-go').onclick=async()=>{
     });
     row.yt_video_id=r.video_id;okCount++;
     li.className='ok';li.textContent='✓ YouTube '+String(r.privacy||'private').toUpperCase()+(r.as_short?' Short':'')+' draft ('+r.video_id+')'+(r.shorts_note?' — '+r.shorts_note:'');
-   }catch(e){li.className='err';li.textContent='✕ YouTube: '+e.message;}
+   }catch(e){failedTargets.push('youtube');li.className='err';li.textContent='✕ YouTube: '+e.message;}
   }else if(t==='instagram'){
    const li=addRow(igLive?'⏳ Publishing Instagram Reel…':'⏳ Uploading Instagram Test Container…');
    try{
     const r=await get('/api/oauth/instagram/upload-reel/'+encodeURIComponent(row.clip_id),{
      method:'POST',headers:{'Content-Type':'application/json'},
-     body:JSON.stringify({caption:mats.instagram,share_to_feed:Boolean($('ig-upload-share')?$('ig-upload-share').checked:$('draft-ig-share')?.checked),thumb_offset_ms:pdState?.cover?.thumb_offset_ms??(Number($('ig-thumb-slider')?.value)||null),use_source:!row.exported,publish:igLive})
+     body:JSON.stringify({caption:mats.instagram,share_to_feed:Boolean($('ig-upload-share')?$('ig-upload-share').checked:$('draft-ig-share')?.checked),thumb_offset_ms:pdState?.cover?.thumb_offset_ms??(Number($('ig-thumb-slider')?.value)||null),use_source:!row.exported,publish:igLive,public_video_url:publicVideoUrl})
     });
     if(r.published&&r.media_id){row.ig_media_id=r.media_id;row.ig_permalink=r.permalink||'';}
     okCount++;
     li.className='ok';li.textContent=r.published?'✓ Instagram Reel published ('+r.media_id+')':'✓ Instagram Test Container ready ('+r.container_id+')';
-   }catch(e){li.className='err';li.textContent='✕ Instagram: '+e.message;}
+   }catch(e){failedTargets.push('instagram');li.className='err';li.textContent='✕ Instagram: '+e.message;}
   }else if(t==='tiktok'){
    const li=addRow('⏳ Sending TikTok Inbox draft…');
    try{
@@ -629,7 +637,7 @@ if($('multi-ship-go'))$('multi-ship-go').onclick=async()=>{
     });
     row.tt_publish_id=r.publish_id;okCount++;
     li.className='ok';li.textContent='✓ TikTok Inbox draft ('+(r.status||'SENT')+')';
-   }catch(e){li.className='err';li.textContent='✕ TikTok: '+e.message;}
+   }catch(e){failedTargets.push('tiktok');li.className='err';li.textContent='✕ TikTok: '+e.message;}
   }else if(t==='x'){
    const li=addRow('⏳ Publishing video to X…');
    try{
@@ -638,11 +646,24 @@ if($('multi-ship-go'))$('multi-ship-go').onclick=async()=>{
     });
     row.x_tweet_id=r.tweet_id;okCount++;
     li.className='ok';li.textContent='✓ X Post published ('+r.tweet_id+')';
-   }catch(e){li.className='err';li.textContent='✕ X: '+e.message;}
+   }catch(e){failedTargets.push('x');li.className='err';li.textContent='✕ X: '+e.message;}
   }
  }
- note('Multi-platform ship finished: '+okCount+'/'+targets.length+' succeeded.');
+ if(failedTargets.length){
+  lastFailedShipTargets={clip_id:row.clip_id,targets:failedTargets};
+  if(retryBtn){retryBtn.hidden=false;retryBtn.disabled=false;retryBtn.textContent='↻ Retry Failed ('+failedTargets.map(x=>x.toUpperCase()).join(', ')+')';}
+ }else{
+  lastFailedShipTargets=null;
+  if(retryBtn){retryBtn.hidden=true;retryBtn.disabled=false;}
+ }
+ note('Multi-platform ship finished: '+okCount+'/'+targets.length+' succeeded'+(failedTargets.length?' ('+failedTargets.length+' failed — click Retry Failed)':'')+'.');
  renderClipShippedBanner(row);await reload();loadExportHistory();syncYoutubeDraftButton();
+ return {okCount,failedTargets,total:targets.length};
+}
+if($('multi-ship-go'))$('multi-ship-go').onclick=()=>{if(!$('multi-ship-go').disabled)runMultiShip();};
+if($('multi-ship-retry'))$('multi-ship-retry').onclick=()=>{
+ if(!lastFailedShipTargets||lastFailedShipTargets.clip_id!==selected?.clip_id||!lastFailedShipTargets.targets.length)return;
+ runMultiShip(lastFailedShipTargets.targets);
 };
 
 function extractHashtags(text){
@@ -844,6 +865,7 @@ function renderInsights(){
   return tr;
  }));
  if(empty)empty.textContent=list.length?list.length+' synced post'+(list.length===1?'':'s')+' shown':posts.length?'No synced posts match this filter.':'No synced posts yet. Click Sync Live Analytics to pull recent YouTube uploads, Instagram posts, and TikTok videos.';
+ window.dispatchEvent(new CustomEvent('snapmatic:insights-rendered',{detail:{data:analyticsData}}));
 }
 let calendarItems=[], calMonth=new Date(), calSelectedKey=null;
 function dateKeyLocal(dt){return dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0');}
@@ -1116,6 +1138,8 @@ function renderNvenc(){
   if($('edit-vivid'))$('edit-vivid').disabled=!hasDuration;
   if($('edit-export-speed'))$('edit-export-speed').disabled=!hasDuration;
   if($('trim-detect-silence'))$('trim-detect-silence').disabled=!hasDuration||!ffmpegOk;
+  if($('trim-viral-moment'))$('trim-viral-moment').disabled=!hasDuration||!ffmpegOk;
+  if($('edit-auto-captions'))$('edit-auto-captions').disabled=!hasDuration;
   if(hw){hw.disabled=!hasDuration||!hwName;if(!hwName)hw.checked=false;}
   if($('queue-send'))$('queue-send').disabled=!$('queue-profile')?.value;
   b.textContent='Export MP4 (FFmpeg)';
@@ -1133,6 +1157,8 @@ function renderNvenc(){
  if($('edit-vivid'))$('edit-vivid').disabled=true;
  if($('edit-export-speed'))$('edit-export-speed').disabled=true;
  if($('trim-detect-silence'))$('trim-detect-silence').disabled=true;
+ if($('trim-viral-moment'))$('trim-viral-moment').disabled=true;
+ if($('edit-auto-captions'))$('edit-auto-captions').disabled=true;
  if(hw)hw.disabled=true;
  if($('queue-send'))$('queue-send').disabled=true;
  const r=target?requestFromEditor():null;
@@ -1289,7 +1315,7 @@ function knownDuration(row){
 }
 function resetEdit(row){
  const savedFraming=readExportPrefs().framing;
- const defFraming=row?.from_sources&&['original','center_crop','blurred_fit'].includes(savedFraming)?savedFraming:(row?.from_sources?'original':'center_crop');
+ const defFraming=row?.from_sources&&['original','center_crop','blurred_fit','split_top_right','split_top_left','split_bottom_right','split_bottom_left'].includes(savedFraming)?savedFraming:(row?.from_sources?'original':'center_crop');
  const d=row?.clip_id===phase3Clip?20800:knownDuration(row),key=row?.clip_id+':'+row?.preview_sha256;
  editState=d?(editSessions.get(key)||{clip_id:row.clip_id,media_sha256:row.preview_sha256,duration_ms:d,in_ms:0,out_ms:d,framing:defFraming,facecam:[],gameplay:[]}):null;
  if(editState)editSessions.set(key,editState);approvedSeed();
@@ -1319,6 +1345,19 @@ function updateTrim(){
    if(hOut)hOut.style.left=pOut+'%';
    if($('trim-visual-range'))$('trim-visual-range').textContent=time(editState.in_ms/1000)+' → '+time(editState.out_ms/1000);
    if($('trim-visual-dur'))$('trim-visual-dur').textContent='Clip: '+time(Math.max(0,editState.out_ms-editState.in_ms)/1000);
+   const l59=$('trim-limit-59'),l89=$('trim-limit-89');
+   if(l59){
+    const t59=editState.in_ms+59000;
+    const show59=d>59000&&t59<d;
+    l59.hidden=!show59;
+    if(show59)l59.style.left=Math.max(0,Math.min(100,(t59/d)*100))+'%';
+   }
+   if(l89){
+    const t89=editState.in_ms+89000;
+    const show89=d>89000&&t89<d;
+    l89.hidden=!show89;
+    if(show89)l89.style.left=Math.max(0,Math.min(100,(t89/d)*100))+'%';
+   }
   }
  }
 }
@@ -1343,7 +1382,7 @@ function bindTrimDrag(handleId,which){
 bindTrimDrag('trim-handle-in','in');
 bindTrimDrag('trim-handle-out','out');
 if($('trim-track'))$('trim-track').addEventListener('pointerdown',e=>{
- if(e.target.closest('.trim-handle')||!editState||editState.duration_ms<=0)return;
+ if(e.target.closest('.trim-handle')||e.target.closest('.trim-limit')||!editState||editState.duration_ms<=0)return;
  const rect=$('trim-track').getBoundingClientRect();
  if(rect.width<=0)return;
  const ratio=Math.max(0,Math.min(1,(e.clientX-rect.left)/rect.width));
@@ -2045,9 +2084,10 @@ function renderProviders(){
    const tag=oa.handle||oa.account_name||'';
    const days=id==='instagram'?igDaysLeft(oa):null;
    const expiring=days!==null&&days<7;
-   const statusWord=expiring?(days<=0?'TOKEN EXPIRED':'EXPIRES IN '+Math.max(1,Math.ceil(days))+'D'):'CONNECTED';
+   const shortProv={youtube:'YT',instagram:'IG',tiktok:'TT',x:'X'}[id]||providerNames[id].toUpperCase();
+   const statusWord=expiring?(days<=0?'EXPIRED':Math.max(1,Math.ceil(days))+'D LEFT'):'✓';
    const badge=node('a',undefined,expiring?'warn':'ready');
-   badge.append(accountAvatar(id,oa.avatar_url),providerNames[id].toUpperCase()+(tag?' '+tag:'')+' · '+statusWord);
+   badge.append(accountAvatar(id,oa.avatar_url),shortProv+(tag?' '+tag:'')+' '+statusWord);
    badge.title=providerNames[id]+' connected ('+tag+')'+(expiring?' · Extend your 60-day token in Connections & System!':' · Public auto-posting OFF');
    badge.href='/workspace?view=system';badge.onclick=e=>{e.preventDefault();showView('system',true);};return badge;
   }
@@ -2147,6 +2187,10 @@ function select(row){workflowFlush();saveDraft();disarmIgPublish();selected=row;
  const fsEl=$('trim-filmstrip');
  if(fsEl){fsEl.style.backgroundImage=row.from_sources?'url("/api/workspace/film-roll/'+encodeURIComponent(row.clip_id)+'/filmstrip")':'none';}
  if($('silence-status'))$('silence-status').textContent='';
+ if($('auto-captions-status'))$('auto-captions-status').textContent='';
+ if($('ship-recipe-status'))$('ship-recipe-status').textContent='';
+ lastFailedShipTargets=null;
+ if($('multi-ship-retry'))$('multi-ship-retry').hidden=true;
  if($('multi-ship-log')){$('multi-ship-log').hidden=true;$('multi-ship-log').replaceChildren();}
  if($('draft-x'))$('draft-x').value='';
  syncReviewButtons(row);
@@ -2671,7 +2715,7 @@ window.snapmaticApp={
  select,setTrim,reload,loadExportHistory,loadPresets,refreshLocalStatus,refreshOAuthStatus,
  renderRoll,renderGallery,renderNvenc,renderPreflight,refreshDraftEditor,syncYoutubeDraftButton,
  setInspectorTab,showView,updateGuides,updateOverlayPreview,buildCaptionPackText,coverBase64,
- xPostText,note,get,node,brandIcon,time,pd,workflowDirty,
+ xPostText,note,get,node,brandIcon,time,pd,workflowDirty,runMultiShip,
  getCalendarItems:()=>calendarItems,loadCalendar,
  getAnalyticsData:()=>analyticsData,loadInsights,syncInsights,
 };

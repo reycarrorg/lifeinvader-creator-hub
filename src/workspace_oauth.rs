@@ -28,6 +28,8 @@ struct UploadProgressState {
     stage: String,
     percent: u8,
     bytes_total: u64,
+    bytes_sent: u64,
+    started_at_ms: i64,
     message: String,
 }
 
@@ -37,14 +39,29 @@ fn upload_progress_state() -> &'static Mutex<UploadProgressState> {
 }
 
 fn set_upload_progress(active: bool, provider: &str, clip_id: &str, stage: &str, percent: u8, bytes_total: u64, message: &str) {
+    let now_ms = chrono::Utc::now().timestamp_millis();
     if let Ok(mut st) = upload_progress_state().lock() {
+        let same_job = st.active && st.provider == provider && st.clip_id == clip_id && st.started_at_ms > 0;
+        let started_at_ms = if active {
+            if same_job { st.started_at_ms } else { now_ms }
+        } else {
+            0
+        };
+        let pct = percent.min(100);
+        let bytes_sent = if active && bytes_total > 0 {
+            ((bytes_total as f64) * (pct as f64 / 100.0)).round() as u64
+        } else {
+            0
+        };
         *st = UploadProgressState {
             active,
             provider: provider.to_owned(),
             clip_id: clip_id.to_owned(),
             stage: stage.to_owned(),
-            percent: percent.min(100),
+            percent: pct,
             bytes_total,
+            bytes_sent,
+            started_at_ms,
             message: message.to_owned(),
         };
     }
@@ -52,6 +69,23 @@ fn set_upload_progress(active: bool, provider: &str, clip_id: &str, stage: &str,
 
 pub(crate) async fn get_upload_progress() -> Json<Value> {
     let st = upload_progress_state().lock().map(|g| g.clone()).unwrap_or_default();
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let elapsed_s = if st.active && st.started_at_ms > 0 {
+        ((now_ms - st.started_at_ms).max(200) as f64) / 1000.0
+    } else {
+        0.0
+    };
+    let speed_mib_s = if st.active && elapsed_s >= 0.4 && st.bytes_sent > 0 {
+        (st.bytes_sent as f64 / 1_048_576.0) / elapsed_s
+    } else {
+        0.0
+    };
+    let eta_secs = if st.active && speed_mib_s > 0.05 && st.bytes_total > st.bytes_sent {
+        let rem_mib = (st.bytes_total - st.bytes_sent) as f64 / 1_048_576.0;
+        Some((rem_mib / speed_mib_s).ceil() as u64)
+    } else {
+        None
+    };
     Json(json!({
         "active": st.active,
         "provider": st.provider,
@@ -59,6 +93,10 @@ pub(crate) async fn get_upload_progress() -> Json<Value> {
         "stage": st.stage,
         "percent": st.percent,
         "bytes_total": st.bytes_total,
+        "bytes_sent": st.bytes_sent,
+        "elapsed_s": (elapsed_s * 10.0).round() / 10.0,
+        "speed_mib_s": (speed_mib_s * 100.0).round() / 100.0,
+        "eta_secs": eta_secs,
         "message": st.message,
     }))
 }
@@ -679,6 +717,8 @@ pub(crate) struct InstagramReelUploadInput {
     share_to_feed: bool,
     #[serde(default)]
     thumb_offset_ms: Option<u64>,
+    #[serde(default)]
+    public_video_url: Option<String>,
     #[serde(default)]
     use_source: bool,
     #[serde(default)]
@@ -2141,6 +2181,19 @@ pub(crate) async fn upload_instagram_reel(
         .collect::<String>();
     let share_to_feed = input.share_to_feed;
     let thumb_offset = input.thumb_offset_ms;
+    let public_video_url = input
+        .public_video_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            if s.starts_with("https://") && s.len() <= 2048 && !s.chars().any(char::is_whitespace) {
+                Ok(s.to_owned())
+            } else {
+                Err(bad("Public video URL must start with https:// and contain no spaces."))
+            }
+        })
+        .transpose()?;
     let do_publish = input.publish;
     let total_bytes = meta.len();
     let clip_prog = clip_id.clone();
@@ -2149,6 +2202,47 @@ pub(crate) async fn upload_instagram_reel(
     set_upload_progress(true, "instagram", &clip_id, "initializing", 8, total_bytes, "Checking MP4 compatibility for Instagram Reels…");
     let res = tokio::task::spawn_blocking(move || -> Result<(String, Option<String>, Option<String>, String), String> {
         let file_sha = sha256_file_hex(&file_sha_path).unwrap_or_default();
+        let (container_id, upload_bytes_len) = if let Some(ref pub_url) = public_video_url {
+            // Optional full-1080p60 async pull path via public HTTPS URL (e.g. Cloudflare R2 / S3 presigned link)
+            set_upload_progress(true, "instagram", &clip_prog, "initializing", 30, total_bytes, "Submitting public HTTPS 1080p video URL to Meta…");
+            let mut form = format!(
+                "media_type=REELS&video_url={}&share_to_feed={}&access_token={}",
+                url_encode(pub_url),
+                if share_to_feed { "true" } else { "false" },
+                url_encode(&access_token),
+            );
+            if !caption.trim().is_empty() {
+                form.push_str("&caption=");
+                form.push_str(&url_encode(caption.trim()));
+            }
+            if let Some(off) = thumb_offset {
+                form.push_str("&thumb_offset=");
+                form.push_str(&off.to_string());
+            }
+            let init_path = format!("/v21.0/{}/media", url_encode(&ig_id));
+            let init_resp = platform::https_request(
+                "graph.facebook.com",
+                "POST",
+                &init_path,
+                &[("Content-Type", "application/x-www-form-urlencoded")],
+                form.as_bytes(),
+                25_000,
+            )?;
+            let init_val: Value = serde_json::from_slice(&init_resp.body).unwrap_or_default();
+            if init_resp.status != 200 {
+                let msg = init_val["error"]["error_user_msg"]
+                    .as_str()
+                    .or_else(|| init_val["error"]["message"].as_str())
+                    .unwrap_or("Instagram rejected Reel video_url container creation.");
+                return Err(msg.to_owned());
+            }
+            let cid = init_val["id"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| "Instagram did not return a container ID.".to_owned())?
+                .to_owned();
+            (cid, total_bytes)
+        } else {
         let probe = crate::workspace_film_roll::probe_mp4_summary(&file_path);
         let dur_s = probe.as_ref().map(|p| p.duration_s).unwrap_or(0.0);
         let initial_needs_opt = total_bytes > 12 * 1024 * 1024
@@ -2325,7 +2419,7 @@ pub(crate) async fn upload_instagram_reel(
         };
 
         let first_bytes = load_bytes(initial_needs_opt, false)?;
-        let (container_id, upload_bytes_len) = match attempt_upload(&first_bytes) {
+        match attempt_upload(&first_bytes) {
             Ok(ok) => ok,
             Err((_first_err, true)) => {
                 drop(first_bytes);
@@ -2333,6 +2427,7 @@ pub(crate) async fn upload_instagram_reel(
                 attempt_upload(&fallback_bytes).map_err(|(e, _)| e)?
             }
             Err((e, false)) => return Err(e),
+        }
         };
 
         // Step 3: Poll container processing until FINISHED (up to 60s)

@@ -1080,6 +1080,19 @@ fn run_ffmpeg_once(
             fc_parts.push(vf);
             used_filter_complex = true;
         }
+        "split_top_left" | "split_top_right" | "split_bottom_left" | "split_bottom_right" => {
+            let (cx, cy) = match framing {
+                "split_top_left" => ("0", "0"),
+                "split_bottom_left" => ("0", "ih-oh"),
+                "split_bottom_right" => ("iw-ow", "ih-oh"),
+                _ => ("iw-ow", "0"),
+            };
+            let vf = format!(
+                "[0:v]split[csrc][gsrc];[csrc]crop='iw*0.38':'ih*0.38':'{cx}':'{cy}',scale=1080:672:force_original_aspect_ratio=increase,crop=1080:672[cam];[gsrc]crop='min(iw,ih*0.865)':'ih':'(iw-ow)*{pan_frac:.4}':'0',scale=1080:1248:force_original_aspect_ratio=increase,crop=1080:1248[game];[cam][game]vstack=inputs=2{dt_chain}[v]"
+            );
+            fc_parts.push(vf);
+            used_filter_complex = true;
+        }
         _ => {
             if music_bed.is_some() {
                 if video_filters.is_empty() {
@@ -1433,6 +1446,7 @@ async fn render_clip_internal(
         if std::fs::write(&srt_file, raw_srt).is_ok() {
             let style = match input.subtitle_style.as_deref() {
                 Some("clean_white") => "FontName=Arial,FontSize=20,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=70",
+                Some("vice_neon") => "FontName=Arial,FontSize=25,Bold=1,PrimaryColour=&H00FFE500,OutlineColour=&H00932EFF,BackColour=&H80120809,BorderStyle=1,Outline=3,Shadow=2,Alignment=2,MarginV=90",
                 _ => "FontName=Arial,FontSize=24,Bold=1,PrimaryColour=&H0000EAFF,OutlineColour=&H00000000,BorderStyle=1,Outline=3,Shadow=1,Alignment=2,MarginV=85",
             };
             video_filters.push(format!(
@@ -3129,4 +3143,446 @@ pub(crate) fn prepare_instagram_safe_mp4(
         }
     }
     run_pass("libx264")
+}
+
+#[derive(Deserialize)]
+pub(crate) struct AutoCaptionRequest {
+    #[serde(default)]
+    seed_text: Option<String>,
+    #[serde(default)]
+    in_ms: Option<u64>,
+    #[serde(default)]
+    out_ms: Option<u64>,
+}
+
+fn fmt_srt_time(ms: u64) -> String {
+    let h = ms / 3_600_000;
+    let m = (ms % 3_600_000) / 60_000;
+    let s = (ms % 60_000) / 1000;
+    let rem = ms % 1000;
+    format!("{h:02}:{m:02}:{s:02},{rem:03}")
+}
+
+fn find_local_whisper() -> Option<(PathBuf, PathBuf)> {
+    let exe_bin = find_tool_binary("SNAPMATIC_WHISPER", "whisper-cli.exe", "whisper-cli")
+        .or_else(|| find_tool_binary("SNAPMATIC_WHISPER", "whisper.exe", "whisper"))
+        .or_else(|| find_tool_binary("SNAPMATIC_WHISPER", "main.exe", "main"))?;
+    let mut dirs = Vec::new();
+    if let Some(p) = exe_bin.parent() {
+        dirs.push(p.to_path_buf());
+    }
+    dirs.push(PathBuf::from("tools"));
+    for d in dirs {
+        if let Ok(entries) = std::fs::read_dir(&d) {
+            for ent in entries.flatten() {
+                let p = ent.path();
+                if p.is_file()
+                    && p.extension()
+                        .and_then(|e| e.to_str())
+                        .is_some_and(|e| e.eq_ignore_ascii_case("bin"))
+                    && p.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.to_ascii_lowercase().contains("ggml"))
+                {
+                    return Some((exe_bin, p));
+                }
+            }
+        }
+    }
+    None
+}
+
+pub(crate) async fn viral_moment(
+    State(app): State<App>,
+    AxumPath(clip_id): AxumPath<String>,
+) -> ApiResult<Json<Value>> {
+    if !crate::workspace_media::hex(&clip_id) {
+        return Err(bad("Invalid clip ID."));
+    }
+    let Some(source_path) = resolve_video(&app, &clip_id) else {
+        return Err((StatusCode::NOT_FOUND, "Source video is unavailable.".into()));
+    };
+    let Some(ffmpeg) = find_ffmpeg() else {
+        return Err(bad("FFmpeg not found in tools/ffmpeg.exe."));
+    };
+    let dur_ms_hint = probed_duration_ms(&app, &clip_id).unwrap_or(0);
+    let result = tokio::task::spawn_blocking(move || -> Result<Value, String> {
+        let dur_ms = if dur_ms_hint > 0 {
+            dur_ms_hint
+        } else {
+            probe_mp4_summary(&source_path)
+                .map(|s| (s.duration_s * 1000.0).round() as u64)
+                .unwrap_or(60_000)
+        };
+        let mut cmd = std::process::Command::new(&ffmpeg);
+        cmd.args([
+            "-hide_banner",
+            "-nostats",
+            "-i",
+        ])
+        .arg(&source_path)
+        .args([
+            "-vn",
+            "-af",
+            "aresample=16000,asetnsamples=16000,astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=-",
+            "-f",
+            "null",
+            "-",
+        ]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        let out = cmd
+            .output()
+            .map_err(|e| format!("Failed to analyze clip audio energy: {e}"))?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut buckets: Vec<(u64, f64)> = Vec::new();
+        let mut cur_sec = 0u64;
+        for line in text.lines() {
+            if let Some(rest) = line.split("pts_time:").nth(1) {
+                if let Some(t) = rest.split_whitespace().next().and_then(|s| s.parse::<f64>().ok()) {
+                    cur_sec = t.max(0.0).round() as u64;
+                }
+            } else if let Some(val_str) = line.strip_prefix("lavfi.astats.Overall.RMS_level=") {
+                if let Ok(db) = val_str.trim().parse::<f64>()
+                    && db.is_finite()
+                {
+                    let energy = ((db + 60.0) / 60.0).clamp(0.0, 1.0);
+                    buckets.push((cur_sec * 1000, energy));
+                }
+            }
+        }
+        if buckets.is_empty() {
+            let cap = dur_ms.min(58_000);
+            return Ok(json!({
+                "duration_ms": dur_ms,
+                "peak_at_ms": cap / 2,
+                "suggested_in_ms": 0,
+                "suggested_out_ms": cap,
+                "top_peaks": []
+            }));
+        }
+        let win_len = 48usize.min(buckets.len()).max(1);
+        let mut best_idx = 0usize;
+        let mut best_score = -1.0f64;
+        for i in 0..=buckets.len().saturating_sub(win_len) {
+            let sum: f64 = buckets[i..i + win_len].iter().map(|(_, e)| *e).sum();
+            let peak: f64 = buckets[i..i + win_len]
+                .iter()
+                .map(|(_, e)| *e)
+                .fold(0.0f64, f64::max);
+            let score = (sum / win_len as f64) * 0.65 + peak * 0.35;
+            if score > best_score {
+                best_score = score;
+                best_idx = i;
+            }
+        }
+        let suggested_in = buckets[best_idx].0.min(dur_ms.saturating_sub(3000));
+        let suggested_out = (suggested_in + 56_000).min(dur_ms);
+        let peak_ms = buckets[best_idx..best_idx + win_len]
+            .iter()
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(ms, _)| *ms)
+            .unwrap_or(suggested_in);
+
+        let mut sorted = buckets.clone();
+        sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let mut top_peaks: Vec<Value> = Vec::new();
+        for (ms, energy) in sorted {
+            if top_peaks
+                .iter()
+                .all(|p| p["ms"].as_u64().unwrap_or(0).abs_diff(ms) >= 6000)
+            {
+                top_peaks.push(json!({
+                    "ms": ms,
+                    "intensity": (energy * 100.0).round() as u64
+                }));
+                if top_peaks.len() >= 3 {
+                    break;
+                }
+            }
+        }
+        Ok(json!({
+            "duration_ms": dur_ms,
+            "peak_at_ms": peak_ms,
+            "suggested_in_ms": suggested_in,
+            "suggested_out_ms": suggested_out,
+            "top_peaks": top_peaks
+        }))
+    })
+    .await
+    .map_err(internal)?
+    .map_err(bad)?;
+    Ok(Json(result))
+}
+
+pub(crate) async fn auto_captions(
+    State(app): State<App>,
+    AxumPath(clip_id): AxumPath<String>,
+    Json(input): Json<AutoCaptionRequest>,
+) -> ApiResult<Json<Value>> {
+    if !crate::workspace_media::hex(&clip_id) {
+        return Err(bad("Invalid clip ID."));
+    }
+    let Some(source_path) = resolve_video(&app, &clip_id) else {
+        return Err((StatusCode::NOT_FOUND, "Source video is unavailable.".into()));
+    };
+    let Some(ffmpeg) = find_ffmpeg() else {
+        return Err(bad("FFmpeg not found in tools/ffmpeg.exe."));
+    };
+    let fallback_title: String = {
+        let db = app.db.lock().map_err(internal)?;
+        db.query_row(
+            "SELECT title FROM workspace_film_roll WHERE clip_id=?1",
+            [&clip_id],
+            |r| r.get::<_, String>(0),
+        )
+        .unwrap_or_default()
+    };
+    let seed = input
+        .seed_text
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&fallback_title)
+        .to_owned();
+    let in_ms = input.in_ms.unwrap_or(0);
+    let out_ms_opt = input.out_ms;
+    let res = tokio::task::spawn_blocking(move || -> Result<Value, String> {
+        let dur_ms = probe_mp4_summary(&source_path)
+            .map(|s| (s.duration_s * 1000.0).round() as u64)
+            .unwrap_or(30_000);
+        let end_ms = out_ms_opt
+            .filter(|&e| e > in_ms)
+            .unwrap_or(dur_ms)
+            .min(dur_ms.max(1000));
+        let clip_span = end_ms.saturating_sub(in_ms).max(1500);
+
+        // Path A: Full local Whisper AI transcription if whisper-cli.exe + ggml-*.bin exist in tools/
+        if let Some((whisper_bin, model_path)) = find_local_whisper() {
+            let stamp = uuid::Uuid::new_v4().simple();
+            let wav_path = std::env::temp_dir().join(format!("snapmatic-cap-{stamp}.wav"));
+            let out_base = std::env::temp_dir().join(format!("snapmatic-cap-{stamp}"));
+            let mut ex = std::process::Command::new(&ffmpeg);
+            ex.args(["-y", "-hide_banner", "-loglevel", "error"]);
+            if in_ms > 0 {
+                ex.args(["-ss", &format!("{:.3}", in_ms as f64 / 1000.0)]);
+            }
+            ex.arg("-i").arg(&source_path);
+            ex.args([
+                "-t",
+                &format!("{:.3}", clip_span as f64 / 1000.0),
+                "-vn",
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-c:a",
+                "pcm_s16le",
+            ])
+            .arg(&wav_path);
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                ex.creation_flags(0x08000000);
+            }
+            let ex_ok = ex.status().is_ok_and(|s| s.success());
+            if ex_ok {
+                let mut wcmd = std::process::Command::new(&whisper_bin);
+                wcmd.arg("-m")
+                    .arg(&model_path)
+                    .arg("-f")
+                    .arg(&wav_path)
+                    .args(["-osrt", "-ml", "28", "-of"])
+                    .arg(&out_base);
+                #[cfg(windows)]
+                {
+                    use std::os::windows::process::CommandExt;
+                    wcmd.creation_flags(0x08000000);
+                }
+                let w_ok = wcmd.status().is_ok_and(|s| s.success());
+                let srt_file = PathBuf::from(format!("{}.srt", out_base.display()));
+                let srt_out = if w_ok {
+                    std::fs::read_to_string(&srt_file).ok()
+                } else {
+                    None
+                };
+                let _ = std::fs::remove_file(&wav_path);
+                let _ = std::fs::remove_file(&srt_file);
+                if let Some(raw) = srt_out
+                    && !raw.trim().is_empty()
+                {
+                    let cues = raw.matches(" --> ").count();
+                    return Ok(json!({
+                        "srt": raw.trim(),
+                        "engine": "whisper-local",
+                        "cue_count": cues,
+                        "whisper_ready": true
+                    }));
+                }
+            }
+            let _ = std::fs::remove_file(&wav_path);
+        }
+
+        // Path B: Smart CapCut-style 3-word punchy timed captions from hook/caption text
+        let words: Vec<String> = seed
+            .split_whitespace()
+            .filter(|w| !w.starts_with('#') && !w.starts_with("http"))
+            .map(|w| w.trim().to_uppercase())
+            .filter(|w| !w.is_empty())
+            .take(90)
+            .collect();
+        let chunks: Vec<String> = if words.is_empty() {
+            vec![
+                "WAIT FOR IT...".to_owned(),
+                "WATCH WHAT HAPPENS".to_owned(),
+                "FOLLOW FOR MORE GTA 6".to_owned(),
+            ]
+        } else {
+            words
+                .chunks(3)
+                .map(|c| c.join(" "))
+                .collect()
+        };
+        let n = chunks.len().max(1) as u64;
+        let active_ms = clip_span.min(n * 2400).max(2000);
+        let step_ms = (active_ms / n).max(700);
+        let mut srt = String::new();
+        for (idx, line) in chunks.iter().enumerate() {
+            let st = (idx as u64) * step_ms + 250;
+            let en = (st + step_ms.saturating_sub(120)).min(clip_span);
+            if st >= en {
+                break;
+            }
+            srt.push_str(&format!(
+                "{}\n{} --> {}\n{}\n\n",
+                idx + 1,
+                fmt_srt_time(st),
+                fmt_srt_time(en),
+                line
+            ));
+        }
+        Ok(json!({
+            "srt": srt.trim(),
+            "engine": "smart-timed-bursts",
+            "cue_count": chunks.len(),
+            "whisper_ready": false
+        }))
+    })
+    .await
+    .map_err(internal)?
+    .map_err(bad)?;
+    Ok(Json(res))
+}
+
+pub(crate) async fn import_file(
+    State(app): State<App>,
+    mut multipart: axum::extract::Multipart,
+) -> ApiResult<Json<Value>> {
+    let mut orig_name = String::new();
+    let mut bytes_vec: Option<Vec<u8>> = None;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|_| bad("Invalid multipart upload."))?
+    {
+        if field.name() == Some("file") || bytes_vec.is_none() {
+            if let Some(fname) = field.file_name() {
+                orig_name = fname.to_owned();
+            }
+            let data = field
+                .bytes()
+                .await
+                .map_err(|_| bad("Could not read uploaded video file (max 250 MiB)."))?;
+            if data.is_empty() || data.len() > 250 * 1024 * 1024 {
+                return Err(bad("Dropped video must be between 1 byte and 250 MiB."));
+            }
+            bytes_vec = Some(data.to_vec());
+            break;
+        }
+    }
+    let Some(data) = bytes_vec else {
+        return Err(bad("Drop an .mp4, .mov, .mkv, or .webm video file."));
+    };
+    let ext = Path::new(&orig_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_else(|| "mp4".to_owned());
+    if !matches!(ext.as_str(), "mp4" | "mov" | "mkv" | "webm") {
+        return Err(bad("Unsupported video format. Drop .mp4, .mov, .mkv, or .webm."));
+    }
+    let stem_raw = Path::new(&orig_name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Dropped Clip");
+    let clean_title = stem_raw.trim().chars().take(120).collect::<String>();
+    let safe_stem = sanitize_stem(stem_raw);
+
+    let (source_id, root_dir) = {
+        let db = app.db.lock().map_err(internal)?;
+        let cfg = source::config(&db).map_err(internal)?;
+        let root = if cfg.root.trim().is_empty() {
+            let fallback = app.media.join("sources");
+            let _ = std::fs::create_dir_all(&fallback);
+            let _ = db.execute(
+                "INSERT INTO settings(key, value) VALUES('source_root', ?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                [fallback.to_string_lossy().as_ref()],
+            );
+            fallback
+        } else {
+            PathBuf::from(&cfg.root)
+        };
+        let existing_id: Option<i64> = db
+            .query_row(
+                "SELECT id FROM profiles WHERE role='source' AND url='https://local.snapmatic/drops' LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(internal)?;
+        let sid = if let Some(id) = existing_id {
+            let _ = db.execute(
+                "UPDATE profiles SET archived=0, source_folder='Snapmatic Drops' WHERE id=?1",
+                [id],
+            );
+            id
+        } else {
+            db.execute(
+                "INSERT INTO profiles(name, platform, url, role, tags, source_folder) VALUES('Snapmatic Drops', 'other', 'https://local.snapmatic/drops', 'source', '[\"Local\"]', 'Snapmatic Drops')",
+                [],
+            )
+            .map_err(internal)?;
+            db.last_insert_rowid()
+        };
+        (sid, root)
+    };
+
+    let drops_dir = root_dir.join("Snapmatic Drops");
+    std::fs::create_dir_all(&drops_dir).map_err(internal)?;
+    let stamp = chrono::Utc::now().timestamp();
+    let file_name = format!("{safe_stem}-{stamp}.{ext}");
+    let dest = drops_dir.join(&file_name);
+    let written_bytes = data.len() as u64;
+    std::fs::write(&dest, &data).map_err(internal)?;
+
+    let clip_id = stable_id(source_id, &file_name);
+    {
+        let db = app.db.lock().map_err(internal)?;
+        db.execute(
+            "INSERT OR REPLACE INTO workspace_film_roll(clip_id, source_id, path, title, description, bytes, added_at, review_state)
+             VALUES(?1, ?2, ?3, ?4, '', ?5, unixepoch(), 'pending_review')",
+            params![clip_id, source_id, file_name, clean_title, written_bytes as i64],
+        )
+        .map_err(internal)?;
+    }
+
+    Ok(Json(json!({
+        "clip_id": clip_id,
+        "title": clean_title,
+        "file_name": file_name,
+        "bytes": written_bytes
+    })))
 }
