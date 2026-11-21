@@ -13,9 +13,7 @@ mod controller_worker;
 #[cfg(feature="snapmatic-hud")] mod workspace_nvenc;
 #[cfg(feature="snapmatic-hud")] mod workspace_phase4;
 #[cfg(feature="snapmatic-hud")] mod workspace_triage;
-#[cfg(feature="snapmatic-hud")] mod workspace_source_download;
-#[cfg(feature="snapmatic-hud")] mod workspace_sources_v2;
-#[cfg(feature="snapmatic-hud")] mod workspace_local_import;
+#[cfg(feature="snapmatic-hud")] mod workspace_film_roll;
 #[cfg(feature="snapmatic-hud")] mod workspace_tiktok_export;
 #[cfg(feature="snapmatic-hud")] mod controller_tiktok_inbox;
 #[cfg(windows)] mod controller_youtube;
@@ -797,6 +795,7 @@ async fn owner_review_policy(request: axum::extract::Request,next:axum::middlewa
         ||target=="/api/editor/render"||target=="/api/settings"
         ||target.starts_with("/api/bridge/");
     let workspace_local=lifeinvader_local||target=="/api/workspace/publish"
+        ||target=="/api/workspace/film-roll"||target.starts_with("/api/workspace/film-roll/")
         ||target=="/api/workspace/triage"||target=="/api/controller/ui-lifetime"
         ||(target.starts_with("/api/clips/")&&(target.ends_with("/draft")||target.ends_with("/platform-draft")));
     if target.starts_with("/api/")&&((request.method()!=axum::http::Method::GET&&request.method()!=axum::http::Method::HEAD&&!workspace_local)
@@ -1123,6 +1122,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut db = Connection::open(&db_path)?;
     db.busy_timeout(std::time::Duration::from_millis(2500))?;
     init(&db)?;
+    #[cfg(feature="snapmatic-hud")]
+    workspace_film_roll::init(&db)?;
     controller_store::init(&db).map_err(|e|std::io::Error::other(e.0))?;
     controller_store::recover(&mut db, chrono::Utc::now().timestamp()).map_err(|e|std::io::Error::other(e.0))?;
     let cache_scope = {
@@ -1170,10 +1171,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let ui_lifetime=app.controller_ui.clone();
     #[cfg(windows)]
     let manual_shutdown=app.controller_manual.clone();
-    #[cfg(all(windows,feature="snapmatic-hud"))]
-    let mut import_inbox=if review_only{workspace_local_import::supervised_inbox(app.clone(),port,server_only)}else{None};
-    #[cfg(all(windows,feature="snapmatic-hud"))]
-    let inbox_fixture=server_only&&port==43858&&import_inbox.is_some()&&args.iter().any(|a|a=="--snapmatic-inbox-fixture");
     let router = Router::new().merge(controller::routes());
     #[cfg(feature="snapmatic-hud")]
     let router = router.merge(workspace::routes(app.clone()));
@@ -1293,6 +1290,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/sources/{id}/preview", post(selection::preview))
         .route("/api/sources/{id}/selection", post(selection::choose))
         .route("/api/sources/discover", get(source::discover))
+        .route("/api/sources/cancel-sync", post(source::cancel_sync))
+        .route("/api/sources/{id}/sync-recovery", get(recovery::get_source).post(recovery::save_source))
         .route(
             "/api/date-audit",
             get(date_audit::status).post(date_audit::start),
@@ -1360,8 +1359,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     None
                 };
-                #[cfg(all(windows,feature="snapmatic-hud"))]
-                if let Some(w)=import_inbox.take(){w.abort();}
                 #[cfg(feature="snapmatic-hud")]
                 if let Some(w)=phase4_watcher{let _=tokio::task::spawn_blocking(move||w.stop()).await;}
                 let _=lifetime_tx.send(close_reason);
@@ -1393,14 +1390,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         let result=tokio::time::timeout(std::time::Duration::from_secs(secs),run).await;
         if let Some(w)=phase4_watcher{let _=tokio::task::spawn_blocking(move||w.stop()).await;}
         if let Ok(Err(e))=result{return Err(std::io::Error::other(format!("PHASE4_FIXTURE_SERVE_FAILED: {e}")).into());}
-        return Ok(());
-    }
-    #[cfg(all(windows,feature="snapmatic-hud"))]
-    if inbox_fixture {
-        let until=std::time::Duration::from_secs(35);
-        let result=tokio::time::timeout(until,axum::serve(listener,router)).await;
-        if let Some(w)=import_inbox.take(){w.abort();}
-        if let Ok(Err(e))=result{return Err(std::io::Error::other(format!("INBOX_FIXTURE_SERVE_FAILED: {e}")).into());}
         return Ok(());
     }
     #[cfg(all(windows,feature="snapmatic-hud"))]

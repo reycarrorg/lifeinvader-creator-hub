@@ -43,10 +43,19 @@ pub async fn get(
     State(app): State<App>,
     Path(id): Path<i64>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    get_for(app, id, "destination")
+}
+pub async fn get_source(
+    State(app): State<App>,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<serde_json::Value>> {
+    get_for(app, id, "source")
+}
+fn get_for(app: App, id: i64, role: &str) -> ApiResult<Json<serde_json::Value>> {
     let db = app.db.lock().map_err(internal)?;
-    let (platform, _, _) = source::account_profile(&db, id, "destination")?;
+    let (platform, _, _) = source::account_profile(&db, id, role)?;
     if platform != "tiktok" {
-        return Err(bad("Recovery links are available for TikTok profiles."));
+        return Err(bad("Recovery links are available for TikTok accounts."));
     }
     let seed: Option<String> = db
         .query_row(
@@ -65,10 +74,20 @@ pub async fn save(
     Path(id): Path<i64>,
     Json(input): Json<Input>,
 ) -> ApiResult<StatusCode> {
+    save_for(app, id, "destination", input)
+}
+pub async fn save_source(
+    State(app): State<App>,
+    Path(id): Path<i64>,
+    Json(input): Json<Input>,
+) -> ApiResult<StatusCode> {
+    save_for(app, id, "source", input)
+}
+fn save_for(app: App, id: i64, role: &str, input: Input) -> ApiResult<StatusCode> {
     let db = app.db.lock().map_err(internal)?;
-    let (platform, url, _) = source::account_profile(&db, id, "destination")?;
+    let (platform, url, _) = source::account_profile(&db, id, role)?;
     if platform != "tiktok" {
-        return Err(bad("Recovery links are available for TikTok profiles."));
+        return Err(bad("Recovery links are available for TikTok accounts."));
     }
     let seed = input.post_url.trim();
     if !seed.is_empty() && (seed.len() > 2048 || !valid_seed(&url, seed)) {

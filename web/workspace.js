@@ -422,15 +422,15 @@ function updateGuides(){
  const [ratios,name,right,bottom]=guides[$('platform-zone').value];$('zones').style.setProperty('--zone',ratios);$('zones').style.setProperty('--right',right);$('zones').style.setProperty('--bottom',bottom);$('zone-label').textContent=name;
 }
 function showView(mode,push=false){
- if(!['studio','gallery','ledger','system','profiles','sources','controller'].includes(mode))mode='studio';
+ if(!['studio','gallery','ledger','system','profiles','sources'].includes(mode))mode='studio';
  activeView=mode;
- for(const id of ['studio','gallery','ledger','system','profiles','sources','controller'])$(id).hidden=id!==mode;
+ for(const id of ['studio','gallery','ledger','system','profiles','sources'])$(id).hidden=id!==mode;
  document.querySelectorAll('.view-nav [data-view]').forEach(a=>{if(a.dataset.view===mode)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');});
  document.querySelectorAll('.utility-strip [data-shell-link]').forEach(a=>{if(a.dataset.shellLink===mode)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');});
  if(push&&new URLSearchParams(location.search).get('view')!==mode)history.pushState(null,'','/workspace?view='+mode);
  if(mode!=='studio')video.pause();
  if(mode==='profiles')renderShellProfile();
- if(mode==='sources'||mode==='controller'){const frame=$(mode).querySelector('iframe');if(!frame.hasAttribute('src'))frame.src=frame.dataset.embed;}
+ if(mode==='sources'){const frame=$('sources').querySelector('iframe');if(!frame.hasAttribute('src'))frame.src=frame.dataset.embed;}
  if(mode==='gallery'){renderGallery();inspectMetadata();if(indexReady)reload();}
  if(mode==='ledger'){renderLedger();if(ledgerReady)loadLedger();}
  if(mode==='system'){renderSystem();updatePhase4();cacheUsage();}
@@ -446,6 +446,12 @@ function renderGallery(){
   b.append(node('strong',r.name),node('small',labels[r.state]||r.state,tone(r)));
   const m=node('small',(dimensions.get(r.clip_id)||'Resolution unmeasured')+' · '+(durations.has(r.clip_id)?time(durations.get(r.clip_id)):'--:--'),'dimensions');
   if(r.import_metadata?.description){const summary=node('small',r.import_metadata.description,'import-description');summary.title=r.import_metadata.description;b.append(summary);} b.append(m);b.onclick=()=>{showView('studio',true);select(r);$('viewfinder').focus();};
+  if(r.from_sources){
+   const wrap=node('div',undefined,'gallery-card-wrap');wrap.append(b);
+   const rm=node('button','Remove from Film Roll','gallery-remove-btn');rm.type='button';rm.title='Remove from Film Roll Gallery (keeps file on disk)';
+   rm.onclick=async()=>{rm.disabled=true;try{await fetch('/api/workspace/film-roll/'+encodeURIComponent(r.clip_id),{method:'DELETE',credentials:'same-origin',redirect:'error'});if(selected?.clip_id===r.clip_id){selected=null;stopVideo();}await reload();}catch{rm.disabled=false;}};
+   wrap.append(rm);return wrap;
+  }
   if(r.clip_id!==phase3Clip)return b;
   const host=node('div',undefined,'gallery-export');host.append(b);const tool=node('button','Transcode to H.264 (NVENC)');tool.type='button';tool.disabled=!nvenc?.can_dispatch;
   tool.onclick=()=>{showView('studio',true);select(r);$('edit-transcode').focus();};host.append(tool);return host;
@@ -518,7 +524,6 @@ function updatePhase4(){
  phase4Read=get('/api/workspace/intake').then(d=>{
   const status=$('phase4-source'),watch=d.watcher?.state||'unknown';
   $('sm-live-source').textContent='Source · '+(d.admission_enabled?'Local Media mounted, pending review only':(d.source_state||'unverified'));
-  if($('sm-source-summary'))$('sm-source-summary').textContent=d.admission_enabled?'Local Media is mounted. Source stays read-only.':'Local Media · '+(d.source_state||'not verified');
   const readable={held_unconfigured:'Not configured',read_only_no_observer_authority:'Read-only sidecar; observer not authorized',not_started:'Not started',
         observer_starting:'Starting bounded observer',fixture_verified:'Fixture observer finished',observed_read_only:'Read-only metadata observation recorded',
         checking_pending_only:'Checking for pending review',pending_only_checked:d.admission_enabled?'Active · pending review only':'Pending-only: source unavailable'};

@@ -30,12 +30,8 @@ fn snapshot(app:&App)->store::Result<Vec<Value>>{
         entries.extend(rows.into_iter().take(64).map(|r|json!({"job_id":r["clip_id"],"clip_id":r["clip_id"],
             "stage":"intake_pending_review","controller_state":"PENDING_REVIEW"})));
     }
-    if let Ok(rows)=crate::workspace_source_download::rows(app){
-        entries.extend(rows.into_iter().take(64).map(|r|json!({"job_id":r["clip_id"],"clip_id":r["clip_id"],
-            "stage":"intake_pending_review","controller_state":"PENDING_REVIEW"})));
-    }
-    if let Ok(rows)=crate::workspace_local_import::rows(app){
-        entries.extend(rows.into_iter().take(64).map(|r|json!({"job_id":r["clip_id"],"clip_id":r["clip_id"],
+    if let Ok(rows)=crate::workspace_film_roll::rows(app){
+        entries.extend(rows.into_iter().take(128).map(|r|json!({"job_id":r["clip_id"],"clip_id":r["clip_id"],
             "stage":"intake_pending_review","controller_state":"PENDING_REVIEW"})));
     }
     Ok(entries)

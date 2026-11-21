@@ -90,7 +90,7 @@ struct Run {
 }
 #[derive(Deserialize)]
 pub struct FileQuery {
-    path: String,
+    pub(crate) path: String,
 }
 #[derive(Deserialize)]
 pub struct SyncInput {
@@ -846,7 +846,7 @@ fn overview_for(app: App, id: i64, role: &str) -> ApiResult<Json<serde_json::Val
         Ok(r) => r,
         Err(_) => {
             return Ok(Json(
-                serde_json::json!({"configured":false,"root":cfg.root,"folder":folder,"files":[],"last_run":last,"platform":platform,"url":url,"photos_supported":if role=="destination" && platform=="instagram" {gallery_dl_dir().join("gallery_dl").is_dir()} else {Path::new(&cfg.photo_helper).is_file()}}),
+                serde_json::json!({"configured":false,"root":cfg.root,"folder":folder,"files":[],"last_run":last,"platform":platform,"url":url,"photos_supported":if platform=="instagram" {gallery_dl_dir().join("gallery_dl").is_dir()} else if platform=="tiktok" {Path::new(&cfg.photo_helper).is_file()} else {false}}),
             ));
         }
     };
@@ -891,7 +891,7 @@ fn overview_for(app: App, id: i64, role: &str) -> ApiResult<Json<serde_json::Val
             .then_with(|| a.name.cmp(&b.name))
     });
     Ok(Json(
-        serde_json::json!({"configured":true,"root":cfg.root,"folder":folder,"files":files,"last_run":last,"platform":platform,"url":url,"photos_supported":if role=="destination" && platform=="instagram" {gallery_dl_dir().join("gallery_dl").is_dir()} else {Path::new(&cfg.photo_helper).is_file()}}),
+        serde_json::json!({"configured":true,"root":cfg.root,"folder":folder,"files":files,"last_run":last,"platform":platform,"url":url,"photos_supported":if platform=="instagram" {gallery_dl_dir().join("gallery_dl").is_dir()} else if platform=="tiktok" {Path::new(&cfg.photo_helper).is_file()} else {false}}),
     ))
 }
 pub async fn summary(
@@ -1052,7 +1052,7 @@ fn update_preview_registration(
     .map_err(|_| ())
 }
 
-async fn thumbnail_for(
+pub(crate) async fn thumbnail_for(
     app: App,
     id: i64,
     q: FileQuery,
@@ -1405,6 +1405,40 @@ async fn thumbnail_for(
         ))
     }
 }
+static SYNC_CANCELLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn run_cancellable(cmd: &mut Command, log: &fs::File) -> std::io::Result<i32> {
+    if SYNC_CANCELLED.load(Ordering::Acquire) {
+        return Ok(130);
+    }
+    let mut child = cmd
+        .stdout(Stdio::from(log.try_clone()?))
+        .stderr(Stdio::from(log.try_clone()?))
+        .spawn()?;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status.code().unwrap_or(1));
+        }
+        if SYNC_CANCELLED.load(Ordering::Acquire) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(130);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+}
+
+pub async fn cancel_sync(State(app): State<App>) -> ApiResult<StatusCode> {
+    SYNC_CANCELLED.store(true, Ordering::Release);
+    let db = app.db.lock().map_err(internal)?;
+    db.execute(
+        "UPDATE source_queue SET state='cancelled',message='Stopped by user' WHERE state IN ('pending','starting')",
+        [],
+    )
+    .map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub async fn sync(
     State(app): State<App>,
     AxumPath(id): AxumPath<i64>,
@@ -1542,10 +1576,10 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
                 "TikTok photos need the existing photo helper; check Source settings.",
             ));
         }
-        if platform == "instagram" && is_profile && !gallery_dl_dir().join("gallery_dl").is_dir() {
+        if platform == "instagram" && !gallery_dl_dir().join("gallery_dl").is_dir() {
             return Err(bad("Instagram photo downloader is missing."));
         }
-        if platform != "tiktok" && !(platform == "instagram" && is_profile) {
+        if platform != "tiktok" && platform != "instagram" {
             return Err(bad("Photo sync is unavailable for this account."));
         }
     }
@@ -1610,6 +1644,7 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
     .map_err(internal)?;
     let run_id = tx.last_insert_rowid();
     tx.commit().map_err(internal)?;
+    SYNC_CANCELLED.store(false, Ordering::Release);
     let fallback_links: Vec<String> = if platform == "instagram" {
         match db.prepare("SELECT url FROM analytics_bridge_links WHERE profile_id=? ORDER BY captured_at DESC LIMIT 50") {
             Ok(mut stmt) => stmt.query_map([id], |r| r.get(0)).ok().map(|rows| rows.filter_map(Result::ok).collect()).unwrap_or_default(),
@@ -1618,7 +1653,7 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
     } else {
         Vec::new()
     };
-    let recovery_seed: Option<String> = if is_profile && platform == "tiktok" {
+    let recovery_seed: Option<String> = if platform == "tiktok" {
         db.query_row(
             "SELECT value FROM settings WHERE key=?",
             [format!("profile_recovery_seed_{id}")],
@@ -1700,13 +1735,11 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
                 }
                 command
             };
-            let status = make_command(&url)
-                .stdout(Stdio::from(log.try_clone()?))
-                .stderr(Stdio::from(log.try_clone()?))
-                .status()?;
-            let mut code = status.code().unwrap_or(1);
+            let mut cmd = make_command(&url);
+            let mut code = run_cancellable(&mut cmd, &log)?;
             let mut effective_url = url.clone();
             if code != 0
+                && !SYNC_CANCELLED.load(Ordering::Acquire)
                 && let Some(seed) = recovery_seed
                     .as_ref()
                     .filter(|s| crate::recovery::valid_seed(&url, s))
@@ -1760,11 +1793,8 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
                         log,
                         "Account verified. Retrying profile sync with the recovered ID."
                     )?;
-                    let status = make_command(&effective_url)
-                        .stdout(Stdio::from(log.try_clone()?))
-                        .stderr(Stdio::from(log.try_clone()?))
-                        .status()?;
-                    code = status.code().unwrap_or(1);
+                    let mut retry_cmd = make_command(&effective_url);
+                    code = run_cancellable(&mut retry_cmd, &log)?;
                 } else {
                     writeln!(
                         log,
@@ -1772,7 +1802,7 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
                     )?;
                 }
             }
-            if code != 0 && !fallback_links.is_empty() {
+            if code != 0 && !SYNC_CANCELLED.load(Ordering::Acquire) && !fallback_links.is_empty() {
                 used_partial_fallback = true;
                 writeln!(
                     log,
@@ -1815,13 +1845,9 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
                     use std::os::windows::process::CommandExt;
                     retry.creation_flags(0x08000000);
                 }
-                let status = retry
-                    .stdout(Stdio::from(log.try_clone()?))
-                    .stderr(Stdio::from(log.try_clone()?))
-                    .status()?;
-                code = status.code().unwrap_or(1);
+                code = run_cancellable(&mut retry, &log)?;
             }
-            if input.include_photos && platform == "tiktok" {
+            if input.include_photos && platform == "tiktok" && !SYNC_CANCELLED.load(Ordering::Acquire) {
                 writeln!(log, "\nChecking TikTok photo posts...")?;
                 let mut cmd = Command::new(crate::tools::python_command());
                 cmd.arg(photo_helper)
@@ -1835,15 +1861,12 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
                     use std::os::windows::process::CommandExt;
                     cmd.creation_flags(0x08000000);
                 }
-                let result = cmd
-                    .stdout(Stdio::from(log.try_clone()?))
-                    .stderr(Stdio::from(log.try_clone()?))
-                    .status()?;
-                if !result.success() {
-                    code = result.code().unwrap_or(1);
+                let photo_code = run_cancellable(&mut cmd, &log)?;
+                if photo_code != 0 {
+                    code = photo_code;
                 }
             }
-            if input.include_photos && platform == "instagram" && is_profile {
+            if input.include_photos && platform == "instagram" && !SYNC_CANCELLED.load(Ordering::Acquire) {
                 writeln!(log, "\nChecking Instagram photo posts...")?;
                 let mut cmd = Command::new(crate::tools::python_command());
                 cmd.arg("-s")
@@ -1867,12 +1890,8 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
                     use std::os::windows::process::CommandExt;
                     cmd.creation_flags(0x08000000);
                 }
-                let result = cmd
-                    .stdout(Stdio::from(log.try_clone()?))
-                    .stderr(Stdio::from(log.try_clone()?))
-                    .status()?;
-                let mut photo_code = result.code().unwrap_or(1);
-                if photo_code != 0 && !fallback_links.is_empty() {
+                let mut photo_code = run_cancellable(&mut cmd, &log)?;
+                if photo_code != 0 && !SYNC_CANCELLED.load(Ordering::Acquire) && !fallback_links.is_empty() {
                     let photos: Vec<_> = fallback_links
                         .iter()
                         .filter(|link| link.contains("/p/"))
@@ -1907,12 +1926,7 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
                             use std::os::windows::process::CommandExt;
                             retry.creation_flags(0x08000000);
                         }
-                        photo_code = retry
-                            .stdout(Stdio::from(log.try_clone()?))
-                            .stderr(Stdio::from(log.try_clone()?))
-                            .status()?
-                            .code()
-                            .unwrap_or(1);
+                        photo_code = run_cancellable(&mut retry, &log)?;
                     }
                 }
                 if photo_code != 0 {
@@ -1921,6 +1935,7 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
             }
             Ok(code)
         })();
+        let cancelled = SYNC_CANCELLED.swap(false, Ordering::AcqRel);
         let code = match result {
             Ok(c) => c,
             Err(e) => {
@@ -1928,7 +1943,10 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
                 1
             }
         };
-        let state = if code != 0 {
+        let state = if cancelled {
+            let _ = writeln!(log, "\nSync stopped by user.");
+            "interrupted"
+        } else if code != 0 {
             "error"
         } else if used_partial_fallback {
             "partial"

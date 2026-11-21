@@ -7,7 +7,6 @@ use serde_json::{Value,json};
 
 pub fn routes(app:App)->Router<App>{
     Router::new().route("/workspace",get(page)).route("/workspace/manage",get(manage)).route("/workspace.css",get(css)).route("/workspace.js",get(js))
-        .route("/snapmatic-utility.css",get(utility_css)).route("/snapmatic-utility.js",get(utility_js))
         .route("/manifest.webmanifest",get(manifest)).route("/favicon.ico",get(favicon))
         .route("/icon-192.png",get(icon_192)).route("/icon-512.png",get(icon_512))
         .route("/workspace-phase5.js",get(||async{([(header::CONTENT_TYPE,"text/javascript; charset=utf-8")],include_str!("../web/workspace-phase5.js"))}))
@@ -17,6 +16,8 @@ pub fn routes(app:App)->Router<App>{
         .route("/workspace-preflight.js",get(||async{([(header::CONTENT_TYPE,"text/javascript; charset=utf-8")],include_str!("../web/workspace-preflight.js"))}))
         .route("/api/workspace/media-facts",get(||async{([(header::CONTENT_TYPE,"application/json"),(header::CACHE_CONTROL,"no-store")],include_str!("../web/workspace-media-facts.json"))}))
         .route("/api/workspace",get(data))
+        .route("/api/workspace/film-roll",get(crate::workspace_film_roll::list).post(crate::workspace_film_roll::add))
+        .route("/api/workspace/film-roll/{id}",axum::routing::delete(crate::workspace_film_roll::remove))
         .route("/api/workspace/intake",get(phase4_state))
         .route("/api/workspace/tiktok/export/{id}",get(crate::workspace_tiktok_export::status).post(crate::workspace_tiktok_export::export).layer(axum::extract::DefaultBodyLimit::max(5*1024*1024)))
         .route("/api/workspace/tiktok/export-folder",post(crate::workspace_tiktok_export::open_folder))
@@ -42,8 +43,6 @@ async fn manage()->Html<String>{Html(include_str!("../web/index.html").replace("
 async fn page()->Html<&'static str>{Html(include_str!("../web/workspace.html"))}
 async fn css()->impl IntoResponse{([(header::CONTENT_TYPE,"text/css; charset=utf-8")],include_str!("../web/workspace.css"))}
 async fn js()->impl IntoResponse{([(header::CONTENT_TYPE,"text/javascript; charset=utf-8")],include_str!("../web/workspace.js"))}
-async fn utility_css()->impl IntoResponse{([(header::CONTENT_TYPE,"text/css; charset=utf-8")],include_str!("../web/snapmatic-utility.css"))}
-async fn utility_js()->impl IntoResponse{([(header::CONTENT_TYPE,"text/javascript; charset=utf-8")],include_str!("../web/snapmatic-utility.js"))}
 async fn manifest()->impl IntoResponse {
     ([(header::CONTENT_TYPE,"application/manifest+json"),(header::CACHE_CONTROL,"no-cache")],
         include_str!("../web/manifest.webmanifest"))
@@ -100,9 +99,12 @@ async fn data(State(app):State<App>)->Response{
                 }
             }
         }
-        for row in crate::workspace_source_download::rows(&app)?.into_iter().chain(crate::workspace_local_import::rows(&app)?){
-            if !index.iter().any(|r|r["clip_id"]==row["clip_id"]||
-                (r["preview_sha256"].is_string()&&r["preview_sha256"]==row["preview_sha256"])){index.push(row);}
+        if let Ok(add)=crate::workspace_film_roll::rows(&app) {
+            for row in add{
+                if !index.iter().any(|r|r["clip_id"]==row["clip_id"]){
+                    index.push(row);
+                }
+            }
         }
         let d=app.db.lock().map_err(|_|store::Error("storage_unavailable"))?;
         let jobs=store::jobs(&d)?.into_iter().map(|j|{
@@ -149,9 +151,7 @@ async fn staged_asset(app:App,id:String,request:Request,poster:bool)->Response{
     let resolved=tokio::task::spawn_blocking(move||match media::open(&app,&id,poster){
         Err(e) if matches!(e.0,"preview_unavailable"|"manifest_unavailable")=>{
             if media::index(&app)?.iter().any(|r|r["clip_id"]==id){Err(e)}
-            else{match crate::workspace_phase4::open(&app,&id,poster){
-                Ok(x)=>Ok(x),Err(_)=>crate::workspace_source_download::open(&app,&id,poster).or_else(|_|crate::workspace_local_import::open(&app,&id,poster)).map_err(|_|store::Error("preview_unavailable"))
-            }}
+            else{crate::workspace_phase4::open(&app,&id,poster).map_err(|_|store::Error("preview_unavailable"))}
         }
         result=>result,
     })
@@ -165,7 +165,11 @@ async fn staged_asset(app:App,id:String,request:Request,poster:bool)->Response{
     Response::from_parts(parts,Body::from_stream(owned))
 }
 async fn poster(State(app):State<App>,AxumPath(id):AxumPath<String>,r:Request)->Response {
-    if media::hex(&id){staged_asset(app,id,r,true).await}else{missing()}
+    if !media::hex(&id){return missing();}
+    if let Some((source_id,path))=crate::workspace_film_roll::resolve_source_ref(&app,&id){
+        return crate::source::thumbnail_for(app,source_id,crate::source::FileQuery{path},"source").await.into_response();
+    }
+    staged_asset(app,id,r,true).await
 }
 fn one_range(raw:&str,n:usize)->Option<(usize,usize)>{
     let i=raw.strip_prefix("bytes=")?;let (left,right)=i.split_once('-')?;
@@ -198,7 +202,16 @@ fn rendered_bytes(bytes:Vec<u8>,request:Request)->Response{
     b.body(body).unwrap()
 }
 async fn clip_stream(State(app):State<App>,AxumPath(id):AxumPath<String>,r:Request)->Response {
-    if media::hex(&id){return staged_asset(app,id,r,false).await;}
+    if media::hex(&id){
+        if let Some(path)=crate::workspace_film_roll::resolve_video(&app,&id){
+            let resp=ServeFile::new(path).oneshot(r).await.unwrap_or_else(|never|match never{});
+            let (mut parts,body)=resp.into_response().into_parts();
+            parts.headers.insert(header::CACHE_CONTROL,header::HeaderValue::from_static("no-store"));
+            parts.headers.insert(header::X_CONTENT_TYPE_OPTIONS,header::HeaderValue::from_static("nosniff"));
+            return Response::from_parts(parts,body);
+        }
+        return staged_asset(app,id,r,false).await;
+    }
     if uuid::Uuid::parse_str(&id).ok().is_none_or(|v|v.to_string()!=id){return missing();}
     let result=tokio::task::spawn_blocking(move||{
         let d=app.db.lock().map_err(|_|store::Error("storage_unavailable"))?;

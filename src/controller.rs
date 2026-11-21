@@ -1,5 +1,5 @@
 use crate::{App, controller_store as store};
-use axum::{body::Bytes, extract::{DefaultBodyLimit,Path,State}, http::{header,HeaderMap,StatusCode}, response::{Html,IntoResponse,Response}, routing::{get,post}, Json,Router};
+use axum::{body::Bytes, extract::{DefaultBodyLimit,Path,State}, http::{header,HeaderMap,StatusCode}, response::{IntoResponse,Response}, routing::{get,post}, Json,Router};
 use serde::Deserialize;
 use serde_json::json;
 fn now()->i64 {chrono::Utc::now().timestamp()}
@@ -15,7 +15,7 @@ fn same_origin(h:&HeaderMap)->bool {
 }
 fn denied()->Response { (StatusCode::FORBIDDEN,Json(json!({"reason":"same_origin_required"}))).into_response() }
 pub fn routes()->Router<App>{
-    Router::new().route("/controller",get(page)).route("/controller.js",get(script))
+    Router::new()
         .route("/api/controller",get(snapshot))
         .route("/api/controller/editor-render-reviewed",post(editor_render_reviewed))
         .route("/api/controller/editor-candidate",post(editor_candidate))
@@ -39,7 +39,7 @@ pub fn routes()->Router<App>{
 }
 /// Package qualification cannot dispatch, import, enqueue, publish or delete.
 pub fn package_routes()->Router<App>{
-    Router::new().route("/controller",get(page)).route("/controller.js",get(script))
+    Router::new()
         .route("/api/controller",get(package_snapshot))
         .route("/api/controller/authorized-sources",get(authorized_sources))
         .route("/api/controller/provider-auth",get(provider_auth))
@@ -55,7 +55,6 @@ async fn package_snapshot(State(app):State<App>)->Response{
         Ok::<_,store::Error>(json!({"schema":"controller-v1","settings":store::settings(&db)?,"jobs":store::jobs(&db)?,"total_jobs":db.query_row("SELECT COUNT(*) FROM controller_jobs",[],|r|r.get::<_,i64>(0))?,"listed_limit":500,"quota":{"local_receipts":store::quota(&db,now())?,"ops":{"ok":false,"reason":"not_configured","actions_enabled":false,"cleanup_eligible":false}},"worker_connected":false,"manual_native_enabled":false,"isolated_ui_lifetime":app.controller_ui.enabled(),"publishing_connected":false,"review_required":true,"package_read_only":true}))})();
     match result{Ok(v)=>([(header::CACHE_CONTROL,"no-store")],Json(v)).into_response(),Err(e)=>fail(e)}
 }
-async fn page()->Html<&'static str>{Html(include_str!("../web/controller.html"))}
 fn youtube_default()->serde_json::Value {
     json!({"provider":"youtube","health":"unconfigured","automatic_refresh_configured":false,"refreshed":false,"publishing_enabled":false})
 }
@@ -128,7 +127,6 @@ async fn authorized_sources(State(app):State<App>)->Response{
     let Ok(db)=app.db.lock() else{return fail(store::Error("storage_unavailable"))};
     ([(header::CACHE_CONTROL,"no-store")],Json(json!({"configured":true,"sources":catalog.available(&db),"render_authorized":false}))).into_response()
 }
-async fn script()->impl IntoResponse{ ([(header::CONTENT_TYPE,"text/javascript; charset=utf-8"),(header::CACHE_CONTROL,"no-store")],include_str!("../web/controller.js")) }
 #[derive(Deserialize)] #[serde(deny_unknown_fields)] struct UiSignal{action:String}
 async fn ui_lifetime(State(app):State<App>,headers:HeaderMap,Json(signal):Json<UiSignal>)->Response{
     if !same_origin(&headers){return denied()}
@@ -363,12 +361,12 @@ pub(crate) mod tests {
     #[tokio::test] async fn controller_reachability_inprocess_real_middleware(){
         let app=app();let before=app.db.lock().unwrap().total_changes();
         let api=routes().layer(axum::middleware::from_fn(crate::local_only)).with_state(app.clone());
-        for path in ["/controller","/controller.js","/api/controller"]{
+        for path in ["/api/controller"]{
             let response=tokio::time::timeout(std::time::Duration::from_secs(2),api.clone().oneshot(request("GET",path,"",false))).await.unwrap().unwrap();
             assert_eq!(response.status(),StatusCode::OK,"{path}");
             assert!(!to_bytes(response.into_body(),256*1024).await.unwrap().is_empty());
         }
-        let bad_origin=Request::builder().uri("/controller").header("host","127.0.0.1:43847").header("origin","https://example.invalid").body(Body::empty()).unwrap();
+        let bad_origin=Request::builder().uri("/api/controller").header("host","127.0.0.1:43847").header("origin","https://example.invalid").body(Body::empty()).unwrap();
         assert_eq!(api.oneshot(bad_origin).await.unwrap().status(),StatusCode::FORBIDDEN);
         assert_eq!(before,app.db.lock().unwrap().total_changes());
     }
@@ -386,13 +384,12 @@ pub(crate) mod tests {
         });
         // Same test process, fresh ephemeral port; never probes a held app origin.
         let client=tokio::task::spawn_blocking(move||{
-            for (method,path,body) in [("GET","/controller",""),("GET","/controller.js",""),("GET","/api/controller",""),("POST","/api/controller/ui-lifetime",r#"{"action":"ready"}"#),("POST","/api/controller/ui-lifetime",r#"{"action":"close"}"#)]{
+            for (method,path,body) in [("GET","/api/controller",""),("POST","/api/controller/ui-lifetime",r#"{"action":"ready"}"#),("POST","/api/controller/ui-lifetime",r#"{"action":"close"}"#)]{
                 let mut socket=std::net::TcpStream::connect_timeout(&address,Duration::from_secs(2)).unwrap();
                 socket.set_read_timeout(Some(Duration::from_secs(2))).unwrap();socket.set_write_timeout(Some(Duration::from_secs(2))).unwrap();
                 write!(socket,"{method} {path} HTTP/1.1\r\nHost: {address}\r\nOrigin: http://{address}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
                 let mut response=String::new();socket.take(256*1024).read_to_string(&mut response).unwrap();
                 assert!(response.starts_with("HTTP/1.1 200"),"{path}: unexpected status");
-                if path=="/controller"{assert!(response.contains("controller-page"));}
                 if path=="/api/controller"{assert!(response.contains("\"manual_native_enabled\":false"));}
             }
         });

@@ -91,3 +91,7 @@
 .snapmatic-shell :is(.inspector,.telemetry) :is(p,output,small){overflow-wrap:anywhere}
 .snapmatic-shell .viewfinder video{inline-size:100%;block-size:100%;object-fit:contain}
 .ingest-toast{position:fixed;right:12px;bottom:40px;z-index:4;max-width:min(400px,90vw);background:#161e29;color:#f2f4f8;border:1px solid #2f6580;padding:8px 12px;border-radius:6px;overflow-wrap:anywhere}.ingest-toast:empty{display:none}.import-description{color:var(--muted)}#inspect-description{white-space:pre-wrap;overflow-wrap:anywhere}
+.gallery-card-wrap{display:flex;flex-direction:column;gap:5px;min-width:0}
+.gallery-card-wrap .gallery-card{width:100%}
+.gallery-remove-btn{border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--muted);padding:5px 8px;font:11px var(--mono)}
+.gallery-remove-btn:hover{border-color:var(--red);color:var(--red)}
