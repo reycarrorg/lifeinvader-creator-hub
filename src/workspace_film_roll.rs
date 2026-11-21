@@ -130,7 +130,7 @@ pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
             [],
         )?;
     }
-    for col in ["yt_video_id", "ig_media_id", "ig_permalink"] {
+    for col in ["yt_video_id", "ig_media_id", "ig_permalink", "tt_publish_id"] {
         if !cols.iter().any(|c| c == col) {
             db.execute(
                 &format!("ALTER TABLE workspace_film_roll ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"),
@@ -143,7 +143,7 @@ pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
         let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
-    for col in ["youtube_video_id", "ig_permalink"] {
+    for col in ["youtube_video_id", "ig_permalink", "tiktok_publish_id"] {
         if !hcols.iter().any(|c| c == col) {
             db.execute(
                 &format!("ALTER TABLE workspace_export_history ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"),
@@ -1668,7 +1668,7 @@ pub(crate) async fn export_history(State(app): State<App>) -> ApiResult<Json<Val
             .prepare(
                 "SELECT id, clip_id, title, source_name, file_name, caption_file, cover_file,
                         framing, quality, in_ms, out_ms, muted, normalized_audio, bytes, exported_at,
-                        youtube_video_id, ig_permalink
+                        youtube_video_id, ig_permalink, tiktok_publish_id
                  FROM workspace_export_history
                  ORDER BY exported_at DESC, id DESC
                  LIMIT 200",
@@ -1681,6 +1681,7 @@ pub(crate) async fn export_history(State(app): State<App>) -> ApiResult<Json<Val
                 let cover_file: String = r.get(6)?;
                 let yt_id: String = r.get(15)?;
                 let ig_link: String = r.get(16)?;
+                let tt_id: String = r.get(17)?;
                 Ok(json!({
                     "id": r.get::<_, i64>(0)?,
                     "clip_id": r.get::<_, String>(1)?,
@@ -1700,6 +1701,7 @@ pub(crate) async fn export_history(State(app): State<App>) -> ApiResult<Json<Val
                     "exported_at": r.get::<_, i64>(14)?,
                     "youtube_video_id": if yt_id.is_empty() { None } else { Some(yt_id) },
                     "ig_permalink": if ig_link.is_empty() { None } else { Some(ig_link) },
+                    "tiktok_publish_id": if tt_id.is_empty() { None } else { Some(tt_id) },
                 }))
             })
             .map_err(internal)?;
@@ -1993,6 +1995,7 @@ pub(crate) fn rows(app: &App) -> store::Result<Vec<Value>> {
         yt_video_id: String,
         ig_media_id: String,
         ig_permalink: String,
+        tt_publish_id: String,
     }
     let entries: Vec<RollRow> = {
         let db = app.db.lock().map_err(|_| store::Error("storage_unavailable"))?;
@@ -2000,7 +2003,7 @@ pub(crate) fn rows(app: &App) -> store::Result<Vec<Value>> {
             .prepare(
                 "SELECT f.clip_id, f.source_id, f.path, f.title, f.description, f.bytes,
                         f.review_state, f.exported_path, p.name, p.platform,
-                        f.yt_video_id, f.ig_media_id, f.ig_permalink
+                        f.yt_video_id, f.ig_media_id, f.ig_permalink, f.tt_publish_id
                  FROM workspace_film_roll f
                  JOIN profiles p ON p.id = f.source_id
                  WHERE p.archived = 0 AND p.role = 'source'
@@ -2024,6 +2027,7 @@ pub(crate) fn rows(app: &App) -> store::Result<Vec<Value>> {
                     yt_video_id: r.get(10)?,
                     ig_media_id: r.get(11)?,
                     ig_permalink: r.get(12)?,
+                    tt_publish_id: r.get(13)?,
                 })
             })
             .map_err(|_| store::Error("storage_unavailable"))?;
@@ -2067,6 +2071,7 @@ pub(crate) fn rows(app: &App) -> store::Result<Vec<Value>> {
             "yt_video_id": if e.yt_video_id.is_empty() { None } else { Some(e.yt_video_id) },
             "ig_media_id": if e.ig_media_id.is_empty() { None } else { Some(e.ig_media_id) },
             "ig_permalink": if e.ig_permalink.is_empty() { None } else { Some(e.ig_permalink) },
+            "tt_publish_id": if e.tt_publish_id.is_empty() { None } else { Some(e.tt_publish_id) },
             "from_sources": true,
         });
         if !e.description.is_empty() {

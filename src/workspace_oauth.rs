@@ -117,6 +117,11 @@ fn pkce_challenge(verifier: &str) -> String {
     base64url(&digest)
 }
 
+fn pkce_challenge_hex(verifier: &str) -> String {
+    let digest = Sha256::digest(verifier.as_bytes());
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 fn port_from_headers(headers: &HeaderMap) -> u16 {
     headers
         .get("host")
@@ -415,6 +420,7 @@ fn client_target(provider: &str) -> Option<&'static str> {
     match provider {
         "youtube" => Some("Snapmatic/OAuth/YouTube/Client"),
         "instagram" => Some("Snapmatic/OAuth/Instagram/Client"),
+        "tiktok" => Some("Snapmatic/OAuth/TikTok/Client"),
         _ => None,
     }
 }
@@ -423,6 +429,7 @@ fn token_target(provider: &str) -> Option<&'static str> {
     match provider {
         "youtube" => Some("Snapmatic/OAuth/YouTube/Tokens"),
         "instagram" => Some("Snapmatic/OAuth/Instagram/Tokens"),
+        "tiktok" => Some("Snapmatic/OAuth/TikTok/Tokens"),
         _ => None,
     }
 }
@@ -556,6 +563,12 @@ pub(crate) struct InstagramReelUploadInput {
     publish: bool,
 }
 
+#[derive(Deserialize)]
+pub(crate) struct TikTokDraftUploadInput {
+    #[serde(default)]
+    use_source: bool,
+}
+
 fn default_true() -> bool {
     true
 }
@@ -603,6 +616,8 @@ pub(crate) async fn status(State(app): State<App>, headers: HeaderMap) -> ApiRes
     let yt_tokens = platform::vault_read(token_target("youtube").unwrap());
     let ig_client = platform::vault_read(client_target("instagram").unwrap());
     let ig_tokens = platform::vault_read(token_target("instagram").unwrap());
+    let tt_client = platform::vault_read(client_target("tiktok").unwrap());
+    let tt_tokens = platform::vault_read(token_target("tiktok").unwrap());
 
     let build_provider = |id: &str, client: Option<Value>, tokens: Option<Value>| -> Value {
         let meta = rows.get(id);
@@ -643,12 +658,7 @@ pub(crate) async fn status(State(app): State<App>, headers: HeaderMap) -> ApiRes
     Ok(Json(json!({
         "youtube": build_provider("youtube", yt_client, yt_tokens),
         "instagram": build_provider("instagram", ig_client, ig_tokens),
-        "tiktok": {
-            "provider": "tiktok",
-            "status": "manual_export",
-            "connected": false,
-            "note": "TikTok uses local MP4 + caption pack export (public auto-posting disabled)."
-        },
+        "tiktok": build_provider("tiktok", tt_client, tt_tokens),
         "public_posting_enabled": false
     })))
 }
@@ -658,7 +668,7 @@ pub(crate) async fn save_config(
     Json(input): Json<ConfigInput>,
 ) -> ApiResult<Json<Value>> {
     let Some(target) = client_target(&provider) else {
-        return Err(bad("Choose youtube or instagram."));
+        return Err(bad("Choose youtube, instagram, or tiktok."));
     };
     let (client_id, client_secret) = if let Some(raw) = input
         .client_json
@@ -729,7 +739,7 @@ pub(crate) async fn start_oauth(
     headers: HeaderMap,
 ) -> ApiResult<Json<Value>> {
     let Some(target) = client_target(&provider) else {
-        return Err(bad("Choose youtube or instagram."));
+        return Err(bad("Choose youtube, instagram, or tiktok."));
     };
     let client = platform::vault_read(target)
         .ok_or_else(|| bad("Save your OAuth Client ID and Secret first."))?;
@@ -740,6 +750,7 @@ pub(crate) async fn start_oauth(
     let state = random_token();
     let verifier = random_token();
     let challenge = pkce_challenge(&verifier);
+    let challenge_hex = pkce_challenge_hex(&verifier);
     let redirect_uri = redirect_uri_for(&headers, &provider);
 
     {
@@ -772,6 +783,14 @@ pub(crate) async fn start_oauth(
             url_encode(&redirect_uri),
             url_encode("instagram_basic,pages_show_list,pages_read_engagement,instagram_content_publish,business_management"),
             url_encode(&state),
+        ),
+        "tiktok" => format!(
+            "https://www.tiktok.com/v2/auth/authorize/?client_key={}&redirect_uri={}&response_type=code&scope={}&state={}&code_challenge={}&code_challenge_method=S256",
+            url_encode(client_id),
+            url_encode(&redirect_uri),
+            url_encode("user.info.basic,user.info.profile,user.info.stats,video.list,video.upload"),
+            url_encode(&state),
+            url_encode(&challenge_hex),
         ),
         _ => return Err(bad("Unsupported provider.")),
     };
@@ -895,6 +914,128 @@ fn refresh_youtube_access_token() -> Result<(String, i64), String> {
         }),
     )?;
     Ok((new_access, new_exp))
+}
+
+fn fetch_tiktok_user(access_token: &str) -> Result<(String, String, String, Option<i64>, Option<i64>), String> {
+    let auth = format!("Bearer {access_token}");
+    let paths = [
+        "/v2/user/info/?fields=open_id,display_name,username,avatar_url,follower_count,likes_count,video_count",
+        "/v2/user/info/?fields=open_id,display_name,avatar_url,follower_count,likes_count,video_count",
+        "/v2/user/info/?fields=open_id,display_name,avatar_url",
+    ];
+    let mut last_err = "TikTok user info request failed.".to_owned();
+    for path in paths {
+        let resp = platform::https_request(
+            "open.tiktokapis.com",
+            "GET",
+            path,
+            &[("Authorization", &auth)],
+            &[],
+            15_000,
+        )?;
+        let parsed: Value = serde_json::from_slice(&resp.body)
+            .map_err(|_| "Unreadable response from TikTok user info API.".to_owned())?;
+        let err_code = parsed["error"]["code"].as_str().unwrap_or("");
+        if resp.status == 200 && (err_code.is_empty() || err_code == "ok") {
+            let user = &parsed["data"]["user"];
+            let open_id = user["open_id"].as_str().unwrap_or("").to_owned();
+            let display = user["display_name"].as_str().unwrap_or("TikTok Account").to_owned();
+            let username = user["username"].as_str().unwrap_or("");
+            let handle = if username.is_empty() {
+                String::new()
+            } else {
+                format!("@{}", username.trim_start_matches('@'))
+            };
+            let followers = user["follower_count"].as_i64();
+            let videos = user["video_count"].as_i64();
+            return Ok((open_id, display, handle, followers, videos));
+        }
+        last_err = parsed["error"]["message"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("TikTok rejected user info request.")
+            .to_owned();
+    }
+    Err(last_err)
+}
+
+fn refresh_tiktok_access_token() -> Result<(String, i64), String> {
+    let client = platform::vault_read(client_target("tiktok").unwrap())
+        .ok_or_else(|| "TikTok OAuth client not configured.".to_owned())?;
+    let tokens = platform::vault_read(token_target("tiktok").unwrap())
+        .ok_or_else(|| "TikTok is not connected.".to_owned())?;
+    let expires_at = tokens["expires_at"].as_i64().unwrap_or(0);
+    if expires_at > now_unix() + 120
+        && let Some(tok) = tokens["access_token"].as_str().filter(|s| !s.is_empty())
+    {
+        return Ok((tok.to_owned(), expires_at));
+    }
+    let refresh = tokens["refresh_token"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Missing TikTok refresh token. Please reconnect TikTok.".to_owned())?;
+    let ckey = client["client_id"].as_str().unwrap_or("");
+    let csec = client["client_secret"].as_str().unwrap_or("");
+    let body = format!(
+        "client_key={}&client_secret={}&grant_type=refresh_token&refresh_token={}",
+        url_encode(ckey),
+        url_encode(csec),
+        url_encode(refresh),
+    );
+    let resp = platform::https_request(
+        "open.tiktokapis.com",
+        "POST",
+        "/v2/oauth/token/",
+        &[("Content-Type", "application/x-www-form-urlencoded")],
+        body.as_bytes(),
+        15_000,
+    )?;
+    let parsed: Value = serde_json::from_slice(&resp.body)
+        .map_err(|_| "Unreadable response from TikTok token refresh.".to_owned())?;
+    if resp.status != 200 || parsed["access_token"].as_str().unwrap_or("").is_empty() {
+        let msg = parsed["error_description"]
+            .as_str()
+            .or_else(|| parsed["error"].as_str())
+            .unwrap_or("TikTok rejected the token refresh.");
+        return Err(msg.to_owned());
+    }
+    let new_access = parsed["access_token"].as_str().unwrap_or("").to_owned();
+    let new_refresh = parsed["refresh_token"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(refresh)
+        .to_owned();
+    let new_exp = now_unix() + parsed["expires_in"].as_i64().unwrap_or(86_400);
+    let refresh_exp = now_unix() + parsed["refresh_expires_in"].as_i64().unwrap_or(31_536_000);
+    platform::vault_write(
+        token_target("tiktok").unwrap(),
+        &json!({
+            "access_token": new_access,
+            "refresh_token": new_refresh,
+            "expires_at": new_exp,
+            "refresh_expires_at": refresh_exp,
+            "open_id": parsed["open_id"].as_str().or_else(|| tokens["open_id"].as_str()).unwrap_or(""),
+        }),
+    )?;
+    Ok((new_access, new_exp))
+}
+
+fn parse_tiktok_upload_url(url: &str) -> Result<(String, String), String> {
+    let rest = url
+        .strip_prefix("https://")
+        .ok_or_else(|| "TikTok upload URL must use HTTPS.".to_owned())?;
+    let (host, path_part) = rest
+        .split_once('/')
+        .ok_or_else(|| "TikTok upload URL is missing path.".to_owned())?;
+    let host_lc = host.to_ascii_lowercase();
+    let allowed = host_lc == "open-upload.tiktokapis.com"
+        || host_lc.ends_with(".tiktokapis.com")
+        || host_lc.ends_with(".tiktokv.com")
+        || host_lc.ends_with(".tiktokcdn.com");
+    if !allowed {
+        return Err(format!("Unexpected TikTok upload host: {host}"));
+    }
+    Ok((host.to_owned(), format!("/{path_part}")))
 }
 
 fn parse_ig_node(ig: &Value) -> Option<(String, String, String, Option<i64>, Option<i64>)> {
@@ -1097,6 +1238,74 @@ pub(crate) async fn callback(
             };
             ensure_destination_profile(&app_clone, "youtube", &ch_name, &ch_url);
             Ok(format!("Connected YouTube channel {ch_name} ({ch_handle})."))
+        } else if provider_clone == "tiktok" {
+            let body = format!(
+                "client_key={}&client_secret={}&code={}&grant_type=authorization_code&redirect_uri={}&code_verifier={}",
+                url_encode(&client_id),
+                url_encode(&client_secret),
+                url_encode(&code),
+                url_encode(&pending.redirect_uri),
+                url_encode(&pending.code_verifier),
+            );
+            let resp = platform::https_request(
+                "open.tiktokapis.com",
+                "POST",
+                "/v2/oauth/token/",
+                &[("Content-Type", "application/x-www-form-urlencoded")],
+                body.as_bytes(),
+                15_000,
+            )?;
+            let parsed: Value = serde_json::from_slice(&resp.body)
+                .map_err(|_| "Unreadable response from TikTok OAuth.".to_owned())?;
+            let access = parsed["access_token"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    parsed["error_description"]
+                        .as_str()
+                        .or_else(|| parsed["error"].as_str())
+                        .unwrap_or("TikTok rejected the authorization code.")
+                        .to_owned()
+                })?
+                .to_owned();
+            let refresh = parsed["refresh_token"].as_str().unwrap_or("").to_owned();
+            let open_id = parsed["open_id"].as_str().unwrap_or("").to_owned();
+            let exp_at = now_unix() + parsed["expires_in"].as_i64().unwrap_or(86_400);
+            let refresh_exp = now_unix() + parsed["refresh_expires_in"].as_i64().unwrap_or(31_536_000);
+            platform::vault_write(
+                t_target,
+                &json!({
+                    "access_token": access,
+                    "refresh_token": refresh,
+                    "expires_at": exp_at,
+                    "refresh_expires_at": refresh_exp,
+                    "open_id": open_id,
+                }),
+            )?;
+            let (uid, display, handle, followers, vids) = fetch_tiktok_user(&access)
+                .unwrap_or_else(|_| (open_id.clone(), "TikTok Account".to_owned(), String::new(), None, None));
+            let acct_id = if uid.is_empty() { open_id } else { uid };
+            save_account_row(
+                &app_clone,
+                "tiktok",
+                "connected",
+                &acct_id,
+                &display,
+                &handle,
+                "",
+                followers,
+                vids,
+                Some(exp_at),
+                "",
+            )?;
+            if !handle.is_empty() {
+                let tt_url = format!("https://www.tiktok.com/{handle}");
+                ensure_destination_profile(&app_clone, "tiktok", &display, &tt_url);
+            }
+            Ok(format!(
+                "Connected TikTok account {display}{}.",
+                if handle.is_empty() { String::new() } else { format!(" ({handle})") }
+            ))
         } else {
             let path = format!(
                 "/v21.0/oauth/access_token?client_id={}&redirect_uri={}&client_secret={}&code={}",
@@ -1174,8 +1383,8 @@ pub(crate) async fn refresh(
     State(app): State<App>,
     AxumPath(provider): AxumPath<String>,
 ) -> ApiResult<Json<Value>> {
-    if !matches!(provider.as_str(), "youtube" | "instagram") {
-        return Err(bad("Choose youtube or instagram."));
+    if !matches!(provider.as_str(), "youtube" | "instagram" | "tiktok") {
+        return Err(bad("Choose youtube, instagram, or tiktok."));
     }
     let app_clone = app.clone();
     let prov = provider.clone();
@@ -1185,6 +1394,11 @@ pub(crate) async fn refresh(
             let (id, name, handle, subs, vids) = fetch_youtube_channel(&tok)?;
             save_account_row(&app_clone, "youtube", "connected", &id, &name, &handle, "", subs, vids, Some(exp), "")?;
             Ok(json!({ "provider": "youtube", "connected": true, "account_name": name, "handle": handle, "subscribers": subs, "media_count": vids, "expires_at": exp }))
+        } else if prov == "tiktok" {
+            let (tok, exp) = refresh_tiktok_access_token()?;
+            let (id, name, handle, followers, vids) = fetch_tiktok_user(&tok)?;
+            save_account_row(&app_clone, "tiktok", "connected", &id, &name, &handle, "", followers, vids, Some(exp), "")?;
+            Ok(json!({ "provider": "tiktok", "connected": true, "account_name": name, "handle": handle, "subscribers": followers, "media_count": vids, "expires_at": exp }))
         } else {
             let tokens = platform::vault_read(token_target("instagram").unwrap())
                 .ok_or_else(|| "Instagram is not connected.".to_owned())?;
@@ -1213,7 +1427,7 @@ pub(crate) async fn disconnect(
     Json(input): Json<DisconnectInput>,
 ) -> ApiResult<Json<Value>> {
     let Some(t_target) = token_target(&provider) else {
-        return Err(bad("Choose youtube or instagram."));
+        return Err(bad("Choose youtube, instagram, or tiktok."));
     };
     platform::vault_delete(t_target);
     if input.clear_config
@@ -1719,6 +1933,146 @@ pub(crate) async fn upload_instagram_reel(
     })))
 }
 
+pub(crate) async fn upload_tiktok_inbox_draft(
+    State(app): State<App>,
+    AxumPath(clip_id): AxumPath<String>,
+    Json(input): Json<TikTokDraftUploadInput>,
+) -> ApiResult<Json<Value>> {
+    if !crate::workspace_media::hex(&clip_id) {
+        return Err(bad("Invalid clip ID."));
+    }
+    let (file_path, _) = resolve_upload_file(&app, &clip_id, input.use_source)?;
+    let meta = std::fs::metadata(&file_path).map_err(internal)?;
+    if meta.len() == 0 || meta.len() > 250 * 1024 * 1024 {
+        return Err(bad("TikTok draft video must be between 1 byte and 250 MiB."));
+    }
+
+    let (publish_id, status_str) = tokio::task::spawn_blocking(move || -> Result<(String, String), String> {
+        let (access_token, _) = refresh_tiktok_access_token()?;
+        let video_bytes = std::fs::read(&file_path).map_err(|e| format!("Could not read MP4: {e}"))?;
+        let total = video_bytes.len();
+        let (chunk_size, total_chunks) = if total <= 64 * 1024 * 1024 {
+            (total, 1usize)
+        } else {
+            let cs = 10 * 1024 * 1024;
+            (cs, total / cs)
+        };
+        let auth = format!("Bearer {access_token}");
+        let init_body = serde_json::to_vec(&json!({
+            "source_info": {
+                "source": "FILE_UPLOAD",
+                "video_size": total,
+                "chunk_size": chunk_size,
+                "total_chunk_count": total_chunks
+            }
+        }))
+        .map_err(|e| e.to_string())?;
+        let init_resp = platform::https_request(
+            "open.tiktokapis.com",
+            "POST",
+            "/v2/post/publish/inbox/video/init/",
+            &[
+                ("Authorization", &auth),
+                ("Content-Type", "application/json; charset=UTF-8"),
+            ],
+            &init_body,
+            20_000,
+        )?;
+        let init_val: Value = serde_json::from_slice(&init_resp.body).unwrap_or_default();
+        let err_code = init_val["error"]["code"].as_str().unwrap_or("");
+        if init_resp.status != 200 || (!err_code.is_empty() && err_code != "ok") {
+            let msg = init_val["error"]["message"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("TikTok rejected Inbox draft upload initialization (check video.upload scope).");
+            return Err(msg.to_owned());
+        }
+        let publish_id = init_val["data"]["publish_id"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "TikTok did not return a publish_id.".to_owned())?
+            .to_owned();
+        let upload_url = init_val["data"]["upload_url"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "TikTok did not return an upload_url.".to_owned())?;
+        let (up_host, up_path) = parse_tiktok_upload_url(upload_url)?;
+
+        for i in 0..total_chunks {
+            let start = i * chunk_size;
+            let end_excl = if i + 1 == total_chunks { total } else { start + chunk_size };
+            let slice = &video_bytes[start..end_excl];
+            let range = format!("bytes {}-{}/{}", start, end_excl - 1, total);
+            let put_resp = platform::https_request(
+                &up_host,
+                "PUT",
+                &up_path,
+                &[
+                    ("Content-Type", "video/mp4"),
+                    ("Content-Range", &range),
+                ],
+                slice,
+                180_000,
+            )?;
+            if !matches!(put_resp.status, 200 | 201 | 206) {
+                return Err(format!("TikTok chunk upload failed (HTTP {}).", put_resp.status));
+            }
+        }
+
+        // Briefly poll publish status so the user knows it reached their TikTok Inbox
+        let mut status_str = "PROCESSING_UPLOAD".to_owned();
+        let poll_body = serde_json::to_vec(&json!({ "publish_id": publish_id })).unwrap_or_default();
+        for _ in 0..15 {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            if let Ok(sr) = platform::https_request(
+                "open.tiktokapis.com",
+                "POST",
+                "/v2/post/publish/status/fetch/",
+                &[
+                    ("Authorization", &auth),
+                    ("Content-Type", "application/json; charset=UTF-8"),
+                ],
+                &poll_body,
+                15_000,
+            ) && sr.status == 200
+                && let Ok(sv) = serde_json::from_slice::<Value>(&sr.body)
+                && let Some(st) = sv["data"]["status"].as_str()
+            {
+                status_str = st.to_owned();
+                if matches!(st, "SEND_TO_USER_INBOX" | "PUBLISH_COMPLETE") {
+                    break;
+                }
+                if st == "FAILED" {
+                    let reason = sv["data"]["fail_reason"]
+                        .as_str()
+                        .unwrap_or("TikTok video processing failed.");
+                    return Err(reason.to_owned());
+                }
+            }
+        }
+        Ok((publish_id, status_str))
+    })
+    .await
+    .map_err(internal)?
+    .map_err(bad)?;
+
+    if let Ok(db) = app.db.lock() {
+        let _ = db.execute(
+            "UPDATE workspace_film_roll SET tt_publish_id=?1 WHERE clip_id=?2",
+            params![publish_id, clip_id],
+        );
+        let _ = db.execute(
+            "UPDATE workspace_export_history SET tiktok_publish_id=?1 WHERE id=(SELECT id FROM workspace_export_history WHERE clip_id=?2 ORDER BY id DESC LIMIT 1)",
+            params![publish_id, clip_id],
+        );
+    }
+    Ok(Json(json!({
+        "publish_id": publish_id,
+        "status": status_str,
+        "inbox_draft": true
+    })))
+}
+
 pub(crate) async fn extend_instagram_token(State(app): State<App>) -> ApiResult<Json<Value>> {
     let client = platform::vault_read(client_target("instagram").unwrap())
         .ok_or_else(|| bad("Instagram App ID & Secret are not configured."))?;
@@ -1778,6 +2132,8 @@ pub(crate) async fn sync_analytics(State(app): State<App>) -> ApiResult<Json<Val
         let mut yt_err: Option<String> = None;
         let mut ig_synced = 0usize;
         let mut ig_err: Option<String> = None;
+        let mut tt_synced = 0usize;
+        let mut tt_err: Option<String> = None;
 
         // 1. Sync YouTube channel stats + last 25 uploads
         if let Ok((tok, exp)) = refresh_youtube_access_token() {
@@ -1924,11 +2280,84 @@ pub(crate) async fn sync_analytics(State(app): State<App>) -> ApiResult<Json<Val
             }
         }
 
+        // 3. Sync TikTok account stats + last 20 videos
+        if platform::vault_read(token_target("tiktok").unwrap()).is_some() {
+            match refresh_tiktok_access_token() {
+                Ok((tok, exp)) => {
+                    match fetch_tiktok_user(&tok) {
+                        Ok((uid, name, handle, followers, vids)) => {
+                            let _ = save_account_row(&app_clone, "tiktok", "connected", &uid, &name, &handle, "", followers, vids, Some(exp), "");
+                            let auth = format!("Bearer {tok}");
+                            let vpath = "/v2/video/list/?fields=id,title,video_description,cover_image_url,share_url,create_time,view_count,like_count,comment_count";
+                            let mut sum_views = 0i64;
+                            let mut sum_likes = 0i64;
+                            let mut sum_comments = 0i64;
+                            if let Ok(vr) = platform::https_request(
+                                "open.tiktokapis.com",
+                                "POST",
+                                vpath,
+                                &[
+                                    ("Authorization", &auth),
+                                    ("Content-Type", "application/json; charset=UTF-8"),
+                                ],
+                                br#"{"max_count":20}"#,
+                                15_000,
+                            ) && vr.status == 200
+                                && let Ok(vv) = serde_json::from_slice::<Value>(&vr.body)
+                                && let Some(items) = vv["data"]["videos"].as_array()
+                                && let Ok(db) = app_clone.db.lock()
+                            {
+                                for item in items {
+                                    let pid = item["id"].as_str().unwrap_or("");
+                                    if pid.is_empty() { continue; }
+                                    let desc = item["video_description"].as_str().unwrap_or("");
+                                    let raw_title = item["title"].as_str().unwrap_or("");
+                                    let title: String = if !raw_title.trim().is_empty() {
+                                        raw_title.chars().take(120).collect()
+                                    } else {
+                                        desc.lines().next().unwrap_or("TikTok Video").chars().take(120).collect()
+                                    };
+                                    let link = item["share_url"].as_str().unwrap_or("");
+                                    let thumb = item["cover_image_url"].as_str().unwrap_or("");
+                                    let pub_at = item["create_time"]
+                                        .as_i64()
+                                        .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
+                                        .map(|dt| dt.to_rfc3339())
+                                        .unwrap_or_default();
+                                    let views = item["view_count"].as_i64().unwrap_or(0);
+                                    let likes = item["like_count"].as_i64().unwrap_or(0);
+                                    let comments = item["comment_count"].as_i64().unwrap_or(0);
+                                    sum_views += views;
+                                    sum_likes += likes;
+                                    sum_comments += comments;
+                                    let _ = db.execute(
+                                        "INSERT INTO workspace_channel_posts(provider, post_id, title, caption, permalink, thumbnail_url, published_at, views, likes, comments, media_type, synced_at)
+                                         VALUES('tiktok', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'VIDEO', unixepoch())
+                                         ON CONFLICT(provider, post_id) DO UPDATE SET
+                                           title=excluded.title, caption=excluded.caption, permalink=excluded.permalink,
+                                           thumbnail_url=excluded.thumbnail_url, published_at=excluded.published_at,
+                                           views=excluded.views, likes=excluded.likes, comments=excluded.comments, synced_at=unixepoch()",
+                                        params![pid, title, desc, link, thumb, pub_at, views, likes, comments],
+                                    );
+                                    tt_synced += 1;
+                                }
+                            }
+                            record_analytics_snapshot(&app_clone, "tiktok", followers, Some(sum_views), Some(sum_likes), Some(sum_comments));
+                        }
+                        Err(e) => tt_err = Some(e),
+                    }
+                }
+                Err(e) => tt_err = Some(e),
+            }
+        }
+
         json!({
             "youtube_synced": yt_synced,
             "youtube_error": yt_err,
             "instagram_synced": ig_synced,
             "instagram_error": ig_err,
+            "tiktok_synced": tt_synced,
+            "tiktok_error": tt_err,
             "synced_at": now_unix()
         })
     })

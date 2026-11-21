@@ -189,8 +189,10 @@
 .ship-badge{display:inline-flex;align-items:center;padding:1px 6px;border-radius:4px;font:700 10px var(--mono);letter-spacing:.03em;border:1px solid var(--line)}
 .ship-yt{background:rgba(255,82,82,.14);border-color:rgba(255,82,82,.45);color:#ff7b7b}
 .ship-ig{background:rgba(225,48,108,.15);border-color:rgba(225,48,108,.48);color:#ff7eb3}
+.ship-tt{background:rgba(37,244,238,.14);border-color:rgba(37,244,238,.45);color:#6ef7f2}
 :root[data-theme="light"] .ship-yt{color:#b71c1c}
 :root[data-theme="light"] .ship-ig{color:#ad1457}
+:root[data-theme="light"] .ship-tt{color:#00695c}
 .shipped-banner{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:8px 0;padding:8px 10px;border-radius:6px;background:rgba(41,182,246,.08);border:1px solid rgba(41,182,246,.35);font-size:12px}
 .confirm-publish-btn{border:1px solid #ff5252!important;background:rgba(255,82,82,.18)!important;color:#ff8a80!important;font-weight:700!important}
 .confirm-publish-btn:hover:not(:disabled){background:rgba(255,82,82,.32)!important}

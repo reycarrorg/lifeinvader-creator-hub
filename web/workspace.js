@@ -144,16 +144,17 @@ function disarmIgPublish(){
  if(arm)arm.hidden=false;
 }
 function renderShipBadges(row){
- if(!row?.yt_video_id&&!row?.ig_media_id)return null;
+ if(!row?.yt_video_id&&!row?.ig_media_id&&!row?.tt_publish_id)return null;
  const wrap=node('span',undefined,'ship-badges');
  if(row.yt_video_id)wrap.append(node('span','YT ✓','ship-badge ship-yt'));
  if(row.ig_media_id)wrap.append(node('span','IG ✓','ship-badge ship-ig'));
+ if(row.tt_publish_id)wrap.append(node('span','TT ✓','ship-badge ship-tt'));
  return wrap;
 }
 function renderClipShippedBanner(row){
  const box=$('clip-shipped-links');
  if(!box)return;
- if(!row||(!row.yt_video_id&&!row.ig_media_id)){box.hidden=true;box.replaceChildren();return;}
+ if(!row||(!row.yt_video_id&&!row.ig_media_id&&!row.tt_publish_id)){box.hidden=true;box.replaceChildren();return;}
  box.hidden=false;
  const parts=[node('strong','Already uploaded:')];
  if(row.yt_video_id){
@@ -169,6 +170,9 @@ function renderClipShippedBanner(row){
   }else{
    parts.push(node('span','Media '+row.ig_media_id,'muted'));
   }
+ }
+ if(row.tt_publish_id){
+  parts.push(node('span','TT ✓','ship-badge ship-tt'),node('span','Sent to TikTok Inbox','muted'));
  }
  box.replaceChildren(...parts);
 }
@@ -191,6 +195,12 @@ function syncYoutubeDraftButton(){
  if(igArm)igArm.disabled=!igConn||!selected?.from_sources;
  if(igOut&&!igOut.dataset.busy){
   igOut.textContent=!igConn?'Connect Instagram in Connections & System to upload Reels directly.':selected?.from_sources?(selected.ig_media_id?'Already published to Instagram ('+selected.ig_media_id+').':'Ready to upload '+(selected.exported?'your exported MP4':'this source clip')+' directly to '+(oauthStatus.instagram.handle||'Instagram')+'.'):'Select a Film Roll clip to upload a Reel.';
+ }
+ const ttBtn=$('tt-upload-draft'),ttOut=$('tt-upload-result');
+ const ttConn=Boolean(oauthStatus?.tiktok?.connected);
+ if(ttBtn)ttBtn.disabled=!ttConn||!selected?.from_sources;
+ if(ttOut&&!ttOut.dataset.busy){
+  ttOut.textContent=!ttConn?'Connect TikTok in Connections & System to send drafts straight to your TikTok Inbox.':selected?.from_sources?(selected.tt_publish_id?'Already sent to TikTok Inbox ('+selected.tt_publish_id+').':'Sends '+(selected.exported?'your exported MP4':'this source clip')+' to your TikTok phone app Inbox as a draft.'):'Select a Film Roll clip to send to TikTok Inbox.';
  }
  renderClipShippedBanner(selected);
 }
@@ -237,6 +247,7 @@ function refreshOAuthStatus(){
   oauthStatus=s;
   renderOAuthCard('yt',s.youtube,'YouTube');
   renderOAuthCard('ig',s.instagram,'Instagram');
+  renderOAuthCard('tt',s.tiktok,'TikTok');
   renderProviders();
   syncYoutubeDraftButton();
  }).catch(()=>{});
@@ -250,7 +261,7 @@ if($('ig-extend'))$('ig-extend').onclick=async()=>{
  }catch(e){note('Token extend failed: '+e.message);}
  finally{btn.disabled=false;}
 };
-for(const [prefix,prov] of [['yt','youtube'],['ig','instagram']]){
+for(const [prefix,prov] of [['yt','youtube'],['ig','instagram'],['tt','tiktok']]){
  if($(prefix+'-oauth-setup'))$(prefix+'-oauth-setup').addEventListener('toggle',e=>{e.currentTarget.dataset.touched='1';});
  if($(prefix+'-copy-uri'))$(prefix+'-copy-uri').onclick=async()=>{
   const text=$(prefix+'-redirect-uri')?.textContent||'';
@@ -407,6 +418,28 @@ if($('ig-publish-arm'))$('ig-publish-arm').onclick=()=>{
  igArmTimer=setTimeout(disarmIgPublish,10000);
 };
 if($('ig-publish-confirm'))$('ig-publish-confirm').onclick=()=>runInstagramUpload(true);
+if($('tt-upload-draft'))$('tt-upload-draft').onclick=async()=>{
+ const row=selected,btn=$('tt-upload-draft'),out=$('tt-upload-result');
+ if(!row?.from_sources||btn.disabled)return;
+ btn.disabled=true;
+ if(out){out.dataset.busy='1';out.textContent='Uploading MP4 to your TikTok Inbox (may take a few seconds)…';}
+ try{
+  const res=await get('/api/oauth/tiktok/upload-draft/'+encodeURIComponent(row.clip_id),{
+   method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({use_source:!row.exported})
+  });
+  row.tt_publish_id=res.publish_id;
+  if(out){
+   delete out.dataset.busy;
+   out.textContent='Sent to TikTok Inbox ('+(res.status||'PROCESSING')+' · ID '+res.publish_id+'). Open your TikTok phone app Inbox notification to add audio & publish!';
+  }
+  note('Sent draft to TikTok Inbox! Check your TikTok phone app notifications.');
+  renderClipShippedBanner(row);reload();loadExportHistory();
+ }catch(e){
+  if(out){delete out.dataset.busy;out.textContent='TikTok upload failed: '+e.message;}
+  note('TikTok upload failed: '+e.message);
+ }finally{syncYoutubeDraftButton();}
+};
 
 function extractHashtags(text){
  const matches=String(text||'').match(/#[\p{L}\p{N}_]+/gu)||[];
@@ -417,7 +450,7 @@ function renderInsights(){
  if(!kpis||!tbody)return;
  const acc=analyticsData?.accounts||{};
  const posts=Array.isArray(analyticsData?.posts)?analyticsData.posts:[];
- const yt=acc.youtube, ig=acc.instagram;
+ const yt=acc.youtube, ig=acc.instagram, tt=acc.tiktok;
  const totalViews=posts.reduce((s,p)=>s+(Number(p.views)||0),0);
  const totalLikes=posts.reduce((s,p)=>s+(Number(p.likes)||0),0);
  const totalComments=posts.reduce((s,p)=>s+(Number(p.comments)||0),0);
@@ -429,8 +462,8 @@ function renderInsights(){
  kpis.replaceChildren(
   makeCard('YouTube',yt?.status==='connected'?(Number.isSafeInteger(yt.subscribers)?yt.subscribers.toLocaleString()+' subs':'Connected'):'Not connected',yt?.status==='connected'?([yt.account_name,yt.handle,Number.isSafeInteger(yt.media_count)?yt.media_count.toLocaleString()+' videos':null].filter(Boolean).join(' · ')||'Synced'):'Connect in Connections & System'),
   makeCard('Instagram',ig?.status==='connected'?(Number.isSafeInteger(ig.subscribers)?ig.subscribers.toLocaleString()+' followers':'Connected'):'Not connected',ig?.status==='connected'?([ig.handle||ig.account_name,Number.isSafeInteger(ig.media_count)?ig.media_count.toLocaleString()+' posts':null].filter(Boolean).join(' · ')||'Synced'):'Connect in Connections & System'),
-  makeCard('Recent Views ('+posts.length+' posts)',totalViews.toLocaleString(),'Across synced YouTube uploads'),
-  makeCard('Recent Engagement',totalLikes.toLocaleString()+' likes',totalComments.toLocaleString()+' comments across synced posts')
+  makeCard('TikTok',tt?.status==='connected'?(Number.isSafeInteger(tt.subscribers)?tt.subscribers.toLocaleString()+' followers':'Connected'):'Not connected',tt?.status==='connected'?([tt.handle||tt.account_name,Number.isSafeInteger(tt.media_count)?tt.media_count.toLocaleString()+' videos':null].filter(Boolean).join(' · ')||'Synced'):'Connect in Connections & System'),
+  makeCard('Recent Views ('+posts.length+' posts)',totalViews.toLocaleString(),totalLikes.toLocaleString()+' likes · '+totalComments.toLocaleString()+' comments')
  );
  const prov=$('insights-provider')?.value||'all';
  const sort=$('insights-sort')?.value||'recent';
@@ -454,7 +487,9 @@ function renderInsights(){
   if(p.caption&&p.caption!==p.title)cap.append(node('small',p.caption.slice(0,140)));
   wrap.append(cap);postTd.append(wrap);
   const platTd=node('td');
-  platTd.append(node('span',p.provider==='youtube'?'YouTube':'Instagram','ship-badge '+(p.provider==='youtube'?'ship-yt':'ship-ig')));
+  const platName=p.provider==='youtube'?'YouTube':p.provider==='tiktok'?'TikTok':'Instagram';
+  const platCls=p.provider==='youtube'?'ship-yt':p.provider==='tiktok'?'ship-tt':'ship-ig';
+  platTd.append(node('span',platName,'ship-badge '+platCls));
   const pubStr=p.published_at?new Date(p.published_at).toLocaleDateString():'—';
   const actTd=node('td'),actWrap=node('div',undefined,'exp-actions');
   if(p.permalink){
@@ -496,7 +531,9 @@ async function syncInsights(){
   else if(r.youtube_error)notes.push('YouTube error: '+r.youtube_error);
   if(r.instagram_synced>0)notes.push('Instagram: '+r.instagram_synced+' posts');
   else if(r.instagram_error)notes.push('Instagram error: '+r.instagram_error);
-  const msg=notes.length?'Synced '+notes.join(' · '):'Sync complete (connect YouTube or Instagram to pull posts).';
+  if(r.tiktok_synced>0)notes.push('TikTok: '+r.tiktok_synced+' videos');
+  else if(r.tiktok_error)notes.push('TikTok error: '+r.tiktok_error);
+  const msg=notes.length?'Synced '+notes.join(' · '):'Sync complete (connect YouTube, Instagram, or TikTok to pull posts).';
   if(out)out.textContent=msg;
   note(msg);
   await Promise.all([loadInsights(),refreshOAuthStatus(),loadChannelProfiles()]);
@@ -1188,7 +1225,7 @@ function shown(row,mode=filter){
  if(mode==='pending')return row.state==='pending_review'||(row.state==='READY_FOR_REVIEW'&&row.review==='PENDING');
  if(mode==='approved')return row.state==='approved';
  if(mode==='exported')return row.state==='exported'||row.exported===true;
- if(mode==='unposted')return !row.yt_video_id&&!row.ig_media_id;
+ if(mode==='unposted')return !row.yt_video_id&&!row.ig_media_id&&!row.tt_publish_id;
  if(mode==='ready')return row.state==='READY_FOR_REVIEW'||row.state==='approved'||row.state==='exported';
  if(mode==='workflow-render')return row.state==='pending_review'&&!row.preview_only;
  if(mode==='workflow-export')return row.manual_export_ready===true||row.exported===true;
@@ -1343,6 +1380,9 @@ function renderExportHistory(){
    igA.href=r.ig_permalink;igA.target='_blank';igA.rel='noopener noreferrer';
    actWrap.append(igA);
   }
+  if(r.tiktok_publish_id){
+   actWrap.append(node('span','TT Inbox ✓','ship-badge ship-tt'));
+  }
   actTd.append(actWrap);
   tr.append(titleTd,setTd,node('td',files,r.exists?'verified':'warn'),node('td',fmtBytes(r.bytes)),node('td',healthTime(r.exported_at)),actTd);
   return tr;
@@ -1459,10 +1499,6 @@ function renderShellProfile(){
 function renderProviders(){
  renderShellProfile();
  $('credentials').replaceChildren(...['youtube','instagram','tiktok'].map(id=>{
-  if(id==='tiktok'){
-   const badge=node('a','TIKTOK · MANUAL EXPORT','');
-   badge.href='/workspace?view=system';badge.onclick=e=>{e.preventDefault();showView('system',true);};return badge;
-  }
   const oa=oauthStatus?.[id];
   if(oa?.connected){
    const tag=oa.handle||oa.account_name||'';
@@ -1474,7 +1510,7 @@ function renderProviders(){
    badge.href='/workspace?view=system';badge.onclick=e=>{e.preventDefault();showView('system',true);};return badge;
   }
   const p=(activeProfile()?providers:[]).find(x=>x.provider===id), health=p?.health||'unknown';
-  const label=oa?.client_configured?'READY TO CONNECT':(health==='ready'?'READY':'CONNECT');
+  const label=oa?.client_configured?'READY TO CONNECT':(health==='ready'?'READY':id==='tiktok'?'MANUAL / CONNECT':'CONNECT');
   const badge=node('a',providerNames[id].toUpperCase()+' · '+label,health==='ready'?'ready':oa?.client_configured?'warn':'');
   badge.title='Click to connect your '+providerNames[id]+' account in Connections & System';
   badge.href='/workspace?view=system';badge.onclick=e=>{e.preventDefault();showView('system',true);};return badge;
@@ -1483,7 +1519,7 @@ function renderProviders(){
   const l=node('label'),i=node('input');i.type='checkbox';i.checked=inspected.get(id);i.onchange=()=>{inspected.set(id,i.checked);if(i.checked){$('platform-zone').value={instagram:'reels',youtube:'shorts',tiktok:'tiktok'}[id];updateGuides();}};
   const oa=oauthStatus?.[id];
   const p=(activeProfile()?providers:[]).find(x=>x.provider===id),health=p?.health||'unknown';
-  const statusText=id==='tiktok'?'MANUAL EXPORT':oa?.connected?'CONNECTED · PRIVATE DRAFTS ONLY':health==='ready'?'AUTH READY · POST HELD':'NOT CONNECTED';
+  const statusText=oa?.connected?(id==='tiktok'?'CONNECTED · INBOX DRAFTS':'CONNECTED · PRIVATE DRAFTS ONLY'):id==='tiktok'?'MANUAL EXPORT / CONNECT':health==='ready'?'AUTH READY · POST HELD':'NOT CONNECTED';
   l.append(i,node('span',providerNames[id]),node('small',statusText));return l;
  }));
  renderSystem();
@@ -2009,6 +2045,7 @@ const p5Commands=[
  ['Copy All Platform Captions',()=>$('copy-all-captions')?.click(),()=>Boolean(selected)],
  ['Upload Draft to YouTube',()=>$('yt-upload-draft')?.click(),()=>Boolean(selected?.from_sources&&oauthStatus?.youtube?.connected)],
  ['Upload Instagram Reel (Test Container)',()=>$('ig-upload-container')?.click(),()=>Boolean(selected?.from_sources&&oauthStatus?.instagram?.connected)],
+ ['Send Draft to TikTok Inbox',()=>$('tt-upload-draft')?.click(),()=>Boolean(selected?.from_sources&&oauthStatus?.tiktok?.connected)],
  ['Toggle Light / Dark Theme',()=>applyShellTheme(document.documentElement.dataset.theme==='light'?'dark':'light')],
  ['Open Exports Folder',()=>$('edit-open-exports')?.click()],
  ['Toggle Source / Exported',()=>phase5Swap(derivedMode?'source':'render'),phase5SourcePair],

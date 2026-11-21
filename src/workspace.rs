@@ -30,6 +30,7 @@ pub fn routes(app:App)->Router<App>{
         .route("/api/oauth/instagram/token",post(crate::workspace_oauth::connect_instagram_token))
         .route("/api/oauth/instagram/extend",post(crate::workspace_oauth::extend_instagram_token))
         .route("/api/oauth/instagram/upload-reel/{clip_id}",post(crate::workspace_oauth::upload_instagram_reel))
+        .route("/api/oauth/tiktok/upload-draft/{clip_id}",post(crate::workspace_oauth::upload_tiktok_inbox_draft))
         .route("/api/oauth/youtube/upload-draft/{clip_id}",post(crate::workspace_oauth::upload_youtube_private_draft).layer(axum::extract::DefaultBodyLimit::max(6*1024*1024)))
         .route("/api/oauth/analytics",get(crate::workspace_oauth::get_analytics))
         .route("/api/oauth/analytics/sync",post(crate::workspace_oauth::sync_analytics))
