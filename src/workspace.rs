@@ -9,11 +9,11 @@ pub fn routes(app:App)->Router<App>{
     Router::new().route("/workspace",get(page)).route("/workspace/manage",get(manage)).route("/workspace.css",get(css)).route("/workspace.js",get(js))
         .route("/manifest.webmanifest",get(manifest)).route("/favicon.ico",get(favicon))
         .route("/icon-192.png",get(icon_192)).route("/icon-512.png",get(icon_512))
-        .route("/workspace-phase5.js",get(||async{([(header::CONTENT_TYPE,"text/javascript; charset=utf-8")],include_str!("../web/workspace-phase5.js"))}))
- .route("/workspace-edit.js",get(||async{([(header::CONTENT_TYPE,"text/javascript; charset=utf-8")],include_str!("../web/workspace-edit.js"))}))
-        .route("/workspace-platform-draft.js",get(||async{([(header::CONTENT_TYPE,"text/javascript; charset=utf-8")],include_str!("../web/workspace-platform-draft.js"))}))
+        .route("/workspace-phase5.js",get(||async{([(header::CONTENT_TYPE,"text/javascript; charset=utf-8"),(header::CACHE_CONTROL,"no-cache")],include_str!("../web/workspace-phase5.js"))}))
+ .route("/workspace-edit.js",get(||async{([(header::CONTENT_TYPE,"text/javascript; charset=utf-8"),(header::CACHE_CONTROL,"no-cache")],include_str!("../web/workspace-edit.js"))}))
+        .route("/workspace-platform-draft.js",get(||async{([(header::CONTENT_TYPE,"text/javascript; charset=utf-8"),(header::CACHE_CONTROL,"no-cache")],include_str!("../web/workspace-platform-draft.js"))}))
         .route("/api/clips/{id}/platform-draft",get(crate::workspace_platform_drafts::read).put(crate::workspace_platform_drafts::save))
-        .route("/workspace-preflight.js",get(||async{([(header::CONTENT_TYPE,"text/javascript; charset=utf-8")],include_str!("../web/workspace-preflight.js"))}))
+        .route("/workspace-preflight.js",get(||async{([(header::CONTENT_TYPE,"text/javascript; charset=utf-8"),(header::CACHE_CONTROL,"no-cache")],include_str!("../web/workspace-preflight.js"))}))
         .route("/api/workspace/media-facts",get(||async{([(header::CONTENT_TYPE,"application/json"),(header::CACHE_CONTROL,"no-store")],include_str!("../web/workspace-media-facts.json"))}))
         .route("/api/workspace",get(data))
         .route("/api/workspace/local-status",get(crate::workspace_film_roll::local_status))
@@ -68,9 +68,9 @@ pub fn routes(app:App)->Router<App>{
         .layer(Extension(workspace_events::Feed::start(app)))
 }
 async fn manage()->Html<String>{Html(include_str!("../web/index.html").replace("</head>","<style>.layout>.sidebar,#sidebar-toggle{display:none!important}.layout{display:block!important}</style></head>"))}
-async fn page()->Html<&'static str>{Html(include_str!("../web/workspace.html"))}
-async fn css()->impl IntoResponse{([(header::CONTENT_TYPE,"text/css; charset=utf-8")],include_str!("../web/workspace.css"))}
-async fn js()->impl IntoResponse{([(header::CONTENT_TYPE,"text/javascript; charset=utf-8")],include_str!("../web/workspace.js"))}
+async fn page()->impl IntoResponse{([(header::CACHE_CONTROL,"no-cache")],Html(include_str!("../web/workspace.html")))}
+async fn css()->impl IntoResponse{([(header::CONTENT_TYPE,"text/css; charset=utf-8"),(header::CACHE_CONTROL,"no-cache")],include_str!("../web/workspace.css"))}
+async fn js()->impl IntoResponse{([(header::CONTENT_TYPE,"text/javascript; charset=utf-8"),(header::CACHE_CONTROL,"no-cache")],include_str!("../web/workspace.js"))}
 async fn manifest()->impl IntoResponse {
     ([(header::CONTENT_TYPE,"application/manifest+json"),(header::CACHE_CONTROL,"no-cache")],
         include_str!("../web/manifest.webmanifest"))

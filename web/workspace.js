@@ -513,10 +513,17 @@ function renderInsights(){
  }));
  if(empty)empty.textContent=list.length?list.length+' synced post'+(list.length===1?'':'s')+' shown':posts.length?'No synced posts match this filter.':'No synced posts yet. Click Sync Live Analytics to pull recent YouTube uploads and Instagram posts.';
 }
-function loadInsights(){
+let insightsAutoSynced=false;
+function loadInsights(allowAutoSync=false){
  if(analyticsLoad)return analyticsLoad;
  analyticsLoad=get('/api/oauth/analytics').then(d=>{
   analyticsData=d;renderInsights();
+  if(allowAutoSync&&!insightsAutoSynced){
+   const posts=Array.isArray(d?.posts)?d.posts:[];
+   const connectedProvs=['youtube','instagram','tiktok'].filter(p=>oauthStatus?.[p]?.connected||d?.accounts?.[p]?.status==='connected');
+   const missingPosts=connectedProvs.some(p=>!posts.some(x=>x.provider===p));
+   if(missingPosts){insightsAutoSynced=true;setTimeout(()=>syncInsights(),0);}
+  }
  }).catch(()=>{if($('insights-status'))$('insights-status').textContent='Could not load analytics.';}).finally(()=>{analyticsLoad=null;});
  return analyticsLoad;
 }
@@ -1250,7 +1257,7 @@ function showView(mode,push=false){
  if(mode==='profiles'||mode==='sources'){const frame=$(mode).querySelector('iframe');if(frame&&!frame.hasAttribute('src')){frame.onload=()=>syncIframeThemes(document.documentElement.dataset.theme==='light'?'light':'dark');frame.src=frame.dataset.embed;}else{syncIframeThemes(document.documentElement.dataset.theme==='light'?'light':'dark');}}
  if(mode==='studio')refreshLocalStatus();
  if(mode==='gallery'){renderGallery();inspectMetadata();refreshLocalStatus();if(indexReady)reload();}
- if(mode==='insights'){loadInsights();refreshOAuthStatus();}
+ if(mode==='insights'){loadInsights(true);refreshOAuthStatus();}
  if(mode==='ledger'){renderExportHistory();loadExportHistory();renderLedger();if(ledgerReady)loadLedger();}
  if(mode==='system'){renderSystem();updatePhase4();cacheUsage();refreshLocalStatus();refreshOAuthStatus();}
 }
@@ -1827,7 +1834,7 @@ Promise.all([reload(),loadLedger(),loadExportHistory(),loadPresets(),loadNvenc()
  get('/api/workspace/film-roll/export-progress').then(p=>{if(p?.active){updateExportProgressUI(p);startExportPoll();}}).catch(()=>{});
  if(params.get('verify-workspace')==='1')verifyGalleryThenStudio();else if(verifyRequested)verifyVisibleFilmRoll();
 });
-window.addEventListener('message',e=>{if(e.origin===location.origin&&e.data?.type==='snapmatic:oauth-updated'){refreshOAuthStatus();loadChannelProfiles();}});
+window.addEventListener('message',e=>{if(e.origin===location.origin&&e.data?.type==='snapmatic:oauth-updated'){insightsAutoSynced=false;refreshOAuthStatus().then(()=>syncInsights());loadChannelProfiles();}});
 window.addEventListener('focus',()=>{if(activeView==='system')refreshOAuthStatus();});
 
 const p5Labels=new Map();
