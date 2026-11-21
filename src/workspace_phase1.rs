@@ -78,7 +78,7 @@ fn crc32(bytes:&[u8])->u32 {
 }
 fn u16le(v:&mut Vec<u8>,x:u16){v.extend(x.to_le_bytes());}
 fn u32le(v:&mut Vec<u8>,x:u32){v.extend(x.to_le_bytes());}
-fn zip(entries:&[(&str,&[u8])])->Vec<u8>{
+pub(crate) fn zip(entries:&[(&str,&[u8])])->Vec<u8>{
     let mut out=Vec::new();let mut central=Vec::new();
     for &(name,bytes) in entries{
         let name=name.as_bytes();let n=name.len() as u16;let size=bytes.len() as u32;let offset=out.len() as u32;let crc=crc32(bytes);

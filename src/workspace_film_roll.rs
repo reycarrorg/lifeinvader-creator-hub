@@ -130,13 +130,25 @@ pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
             [],
         )?;
     }
-    for col in ["yt_video_id", "yt_publish_at", "ig_media_id", "ig_permalink", "tt_publish_id", "x_tweet_id"] {
+    for col in ["yt_video_id", "yt_publish_at", "ig_media_id", "ig_permalink", "tt_publish_id", "x_tweet_id", "mood_tags", "content_sha256"] {
         if !cols.iter().any(|c| c == col) {
             db.execute(
                 &format!("ALTER TABLE workspace_film_roll ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"),
                 [],
             )?;
         }
+    }
+    if !cols.iter().any(|c| c == "rating") {
+        db.execute(
+            "ALTER TABLE workspace_film_roll ADD COLUMN rating INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    if !cols.iter().any(|c| c == "markers_json") {
+        db.execute(
+            "ALTER TABLE workspace_film_roll ADD COLUMN markers_json TEXT NOT NULL DEFAULT '[]'",
+            [],
+        )?;
     }
     let hcols: Vec<String> = {
         let mut stmt = db.prepare("PRAGMA table_info(workspace_export_history)")?;
@@ -151,20 +163,18 @@ pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
             )?;
         }
     }
-    let preset_count: i64 = db
-        .query_row("SELECT COUNT(*) FROM workspace_caption_presets", [], |r| r.get(0))
-        .unwrap_or(0);
-    if preset_count == 0 {
-        for (name, title_prefix, caption_body, tags) in [
-            ("GTA Clips", "", "", "#gta #gtav #gtaonline #gaming #clips"),
-            ("Shorts Hook", "", "Watch till the end!", "#shorts #gaming #viral"),
-            ("Reels Clean", "", "Save this for later.", "#reels #gamingclips #fyp"),
-        ] {
-            let _ = db.execute(
-                "INSERT OR IGNORE INTO workspace_caption_presets(name, title_prefix, caption_body, tags) VALUES(?1, ?2, ?3, ?4)",
-                params![name, title_prefix, caption_body, tags],
-            );
-        }
+    for (name, title_prefix, caption_body, tags) in [
+        ("GTA Clips", "", "", "#gta #gtav #gtaonline #gaming #clips"),
+        ("Shorts Hook", "", "Watch till the end!", "#shorts #gaming #viral"),
+        ("Reels Clean", "", "Save this for later.", "#reels #gamingclips #fyp"),
+        ("GTA 6 Funny", "", "Wait until the end 😂", "#GTA6 #GTAVI #GTA6Clips #GTA6Funny #GamingClips"),
+        ("GTA 6 Secrets & Details", "", "Did you notice this detail? 👀", "#GTA6 #GTAVI #GTA6Details #GTA6Secrets #RockstarGames"),
+        ("GTA 6 Gameplay", "", "Welcome back to Vice City 🌴", "#GTA6 #GTAVI #GrandTheftAutoVI #RockstarGames #ViceCity"),
+    ] {
+        let _ = db.execute(
+            "INSERT OR IGNORE INTO workspace_caption_presets(name, title_prefix, caption_body, tags) VALUES(?1, ?2, ?3, ?4)",
+            params![name, title_prefix, caption_body, tags],
+        );
     }
     Ok(())
 }
@@ -255,6 +265,76 @@ pub(crate) struct ExportRequest {
     srt_text: Option<String>,
     #[serde(default)]
     subtitle_style: Option<String>,
+    #[serde(default)]
+    crop_pan: Option<f64>,
+    #[serde(default)]
+    rotate_deg: Option<i32>,
+    #[serde(default)]
+    mirror_h: bool,
+    #[serde(default)]
+    subtle_zoom: bool,
+    #[serde(default)]
+    outro_cta: Option<String>,
+    #[serde(default)]
+    audio_preset: Option<String>,
+    #[serde(default)]
+    audio_gain_db: Option<f64>,
+    #[serde(default)]
+    music_path: Option<String>,
+    #[serde(default)]
+    music_volume_db: Option<f64>,
+    #[serde(default)]
+    max_duration_s: Option<f64>,
+    #[serde(default)]
+    force_30fps: bool,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct MetaUpdateRequest {
+    #[serde(default)]
+    rating: Option<i64>,
+    #[serde(default)]
+    mood_tags: Option<String>,
+    #[serde(default)]
+    markers: Option<Vec<Value>>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct SplitPartsRequest {
+    #[serde(default = "default_part_seconds")]
+    part_seconds: u64,
+    #[serde(default = "default_framing")]
+    framing: String,
+    #[serde(default = "default_quality")]
+    quality: String,
+    #[serde(default)]
+    use_hw_encode: bool,
+    #[serde(default)]
+    crop_pan: Option<f64>,
+    #[serde(default)]
+    hook_prefix: Option<String>,
+    #[serde(default)]
+    watermark_text: Option<String>,
+    #[serde(default = "default_wm_pos")]
+    watermark_pos: String,
+    #[serde(default)]
+    normalize_audio: bool,
+    #[serde(default)]
+    fade_io: bool,
+    #[serde(default)]
+    vivid_filter: bool,
+}
+
+fn default_part_seconds() -> u64 {
+    55
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ZipKitRequest {
+    #[serde(default)]
+    caption_text: Option<String>,
+    #[serde(default)]
+    cover_png_base64: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -395,6 +475,8 @@ fn build_drawtext_filters(
     hook_text: Option<&str>,
     watermark_text: Option<&str>,
     watermark_pos: &str,
+    outro_cta: Option<&str>,
+    out_dur_s: f64,
 ) -> Vec<String> {
     let font_opt = find_overlay_font()
         .map(|f| format!("fontfile='{f}':"))
@@ -416,6 +498,13 @@ fn build_drawtext_filters(
         };
         filters.push(format!(
             "drawtext={font_opt}expansion=none:text='{safe}':fontcolor=white@0.82:shadowcolor=black@0.75:shadowx=2:shadowy=2:fontsize=max(18\\,min(w/28\\,34)):x={x}:y={y}"
+        ));
+    }
+    if let Some(cta) = outro_cta.map(str::trim).filter(|s| !s.is_empty()) && out_dur_s > 2.2 {
+        let safe = escape_drawtext(&cta.chars().take(70).collect::<String>());
+        let start_s = (out_dur_s - 2.2).max(0.0);
+        filters.push(format!(
+            "drawtext={font_opt}expansion=none:enable='gte(t\\,{start_s:.2})':text='{safe}':fontcolor=#29B6F6:fontsize=max(22\\,min(w/20\\,44)):box=1:boxcolor=black@0.80:boxborderw=18:x=(w-text_w)/2:y=h*0.76"
         ));
     }
     filters
@@ -924,11 +1013,13 @@ fn run_ffmpeg_once(
     src: &Path,
     tmp_out: &Path,
     framing: &str,
+    crop_pan: f64,
     quality: &str,
     in_ms: Option<u64>,
     out_ms: Option<u64>,
     mute: bool,
     audio_filters: &[String],
+    music_bed: Option<(&Path, f64)>,
     encoder: &str,
     video_filters: &[String],
     target_duration_us: u64,
@@ -947,6 +1038,9 @@ fn run_ffmpeg_once(
         cmd.arg("-ss").arg(format!("{:.3}", start as f64 / 1000.0));
     }
     cmd.arg("-i").arg(src);
+    if let Some((music_file, _)) = music_bed {
+        cmd.args(["-stream_loop", "-1", "-i"]).arg(music_file);
+    }
     if let Some(end) = out_ms {
         let start = in_ms.unwrap_or(0);
         if end > start {
@@ -959,14 +1053,23 @@ fn run_ffmpeg_once(
     } else {
         format!(",{}", video_filters.join(","))
     };
+    let pan_frac = ((crop_pan.clamp(-1.0, 1.0) + 1.0) / 2.0).clamp(0.0, 1.0);
+    let mut used_filter_complex = false;
+    let mut fc_parts: Vec<String> = Vec::new();
     match framing {
         "center_crop" => {
-            cmd.arg("-vf").arg(format!(
-                "crop='min(iw,ih*9/16)':'min(ih,iw*16/9)',scale=1080:1920:flags=lanczos{dt_chain}"
-            ));
+            let vf = format!(
+                "crop='min(iw,ih*9/16)':'min(ih,iw*16/9)':'(iw-ow)*{pan_frac:.4}':'(ih-oh)/2',scale=1080:1920:flags=lanczos{dt_chain}"
+            );
+            if music_bed.is_some() {
+                fc_parts.push(format!("[0:v]{vf}[v]"));
+                used_filter_complex = true;
+            } else {
+                cmd.arg("-vf").arg(vf);
+            }
         }
         "blurred_fit" => {
-            let fc = if video_filters.is_empty() {
+            let vf = if video_filters.is_empty() {
                 "[0:v]split[bg][fg];[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[b];[fg]scale=1080:1920:force_original_aspect_ratio=decrease[f];[b][f]overlay=(W-w)/2:(H-h)/2[v]".to_owned()
             } else {
                 format!(
@@ -974,15 +1077,43 @@ fn run_ffmpeg_once(
                     video_filters.join(",")
                 )
             };
-            cmd.arg("-filter_complex").arg(fc).arg("-map").arg("[v]");
-            if !mute {
-                cmd.arg("-map").arg("0:a?");
-            }
+            fc_parts.push(vf);
+            used_filter_complex = true;
         }
         _ => {
-            if !video_filters.is_empty() {
+            if music_bed.is_some() {
+                if video_filters.is_empty() {
+                    fc_parts.push("[0:v]null[v]".to_owned());
+                } else {
+                    fc_parts.push(format!("[0:v]{}[v]", video_filters.join(",")));
+                }
+                used_filter_complex = true;
+            } else if !video_filters.is_empty() {
                 cmd.arg("-vf").arg(video_filters.join(","));
             }
+        }
+    }
+    if let Some((_, music_db)) = music_bed {
+        let clamped_db = music_db.clamp(-36.0, 0.0);
+        if mute {
+            fc_parts.push(format!("[1:a]volume={clamped_db:.1}dB[aout]"));
+        } else {
+            let main_af = if audio_filters.is_empty() {
+                "[0:a]anull[a0]".to_owned()
+            } else {
+                format!("[0:a]{}[a0]", audio_filters.join(","))
+            };
+            fc_parts.push(format!(
+                "{main_af};[1:a]volume={clamped_db:.1}dB[m];[a0][m]amix=inputs=2:duration=first:dropout_transition=2[aout]"
+            ));
+        }
+        cmd.arg("-filter_complex")
+            .arg(fc_parts.join(";"))
+            .args(["-map", "[v]", "-map", "[aout]", "-shortest"]);
+    } else if used_filter_complex {
+        cmd.arg("-filter_complex").arg(fc_parts.join(";")).args(["-map", "[v]"]);
+        if !mute {
+            cmd.args(["-map", "0:a?"]);
         }
     }
 
@@ -1046,10 +1177,10 @@ fn run_ffmpeg_once(
         }
     }
 
-    if mute {
+    if mute && music_bed.is_none() {
         cmd.arg("-an");
     } else {
-        if !audio_filters.is_empty() {
+        if music_bed.is_none() && !audio_filters.is_empty() {
             cmd.args(["-af", &audio_filters.join(",")]);
         }
         cmd.args(["-c:a", "aac", "-b:a", "192k"]);
@@ -1224,9 +1355,24 @@ async fn render_clip_internal(
     }
 
     let framing = input.framing.clone();
+    let crop_pan = input.crop_pan.filter(|v| v.is_finite()).unwrap_or(0.0).clamp(-1.0, 1.0);
     let quality = input.quality.clone();
     let in_ms = input.in_ms;
-    let out_ms = input.out_ms;
+    let out_ms = match (input.max_duration_s, input.out_ms) {
+        (Some(max_s), Some(end)) if max_s.is_finite() && max_s >= 1.0 => {
+            let cap = in_ms.unwrap_or(0).saturating_add((max_s * 1000.0).round() as u64);
+            Some(end.min(cap))
+        }
+        (Some(max_s), None) if max_s.is_finite() && max_s >= 1.0 => {
+            Some(in_ms.unwrap_or(0).saturating_add((max_s * 1000.0).round() as u64))
+        }
+        (_, other) => other,
+    };
+    let effective_target_ms = match (in_ms, out_ms) {
+        (Some(a), Some(b)) if b > a => b - a,
+        (None, Some(b)) if b > 0 => b,
+        _ => target_ms,
+    };
     let mute = input.mute;
     let normalize_audio = input.normalize_audio && !mute;
     let use_hw = input.use_hw_encode;
@@ -1234,10 +1380,25 @@ async fn render_clip_internal(
         .speed
         .filter(|s| s.is_finite() && *s >= 0.75 && *s <= 1.5)
         .unwrap_or(1.0);
-    let out_dur_s = (target_ms as f64 / 1000.0) / speed;
+    let out_dur_s = (effective_target_ms as f64 / 1000.0) / speed;
     let effective_target_us = ((out_dur_s * 1_000_000.0).round() as u64).max(100_000);
 
     let mut video_filters = Vec::new();
+    match input.rotate_deg.unwrap_or(0).rem_euclid(360) {
+        90 => video_filters.push("transpose=1".to_owned()),
+        180 => video_filters.push("hflip,vflip".to_owned()),
+        270 => video_filters.push("transpose=2".to_owned()),
+        _ => {}
+    }
+    if input.mirror_h {
+        video_filters.push("hflip".to_owned());
+    }
+    if input.subtle_zoom {
+        video_filters.push("scale=trunc(iw*1.06/2)*2:trunc(ih*1.06/2)*2,crop=iw/1.06:ih/1.06".to_owned());
+    }
+    if input.force_30fps {
+        video_filters.push("fps=30".to_owned());
+    }
     if input.vivid_filter {
         video_filters.push("eq=contrast=1.08:saturation=1.18:brightness=0.02,unsharp=3:3:0.5:3:3:0.0".to_owned());
     }
@@ -1252,6 +1413,8 @@ async fn render_clip_internal(
         input.hook_text.as_deref(),
         input.watermark_text.as_deref(),
         &input.watermark_pos,
+        input.outro_cta.as_deref(),
+        out_dur_s,
     ));
 
     let temp_srt_path = if let Some(raw_srt) = input.srt_text.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
@@ -1278,6 +1441,15 @@ async fn render_clip_internal(
         if (speed - 1.0).abs() > 0.01 {
             audio_filters.push(format!("atempo={speed:.4}"));
         }
+        match input.audio_preset.as_deref() {
+            Some("voice") => audio_filters.push("highpass=f=80,lowpass=f=12000,acompressor=threshold=-18dB:ratio=3".to_owned()),
+            Some("punch") => audio_filters.push("bass=g=3:f=100,treble=g=2:f=4000".to_owned()),
+            Some("denoise") => audio_filters.push("afftdn=nf=-25".to_owned()),
+            _ => {}
+        }
+        if let Some(gain) = input.audio_gain_db.filter(|g| g.is_finite() && g.abs() >= 0.25) {
+            audio_filters.push(format!("volume={:.1}dB", gain.clamp(-12.0, 12.0)));
+        }
         if normalize_audio {
             audio_filters.push("loudnorm=I=-14:TP=-1.5:LRA=11".to_owned());
         }
@@ -1287,6 +1459,20 @@ async fn render_clip_internal(
         }
     }
 
+    let music_bed_owned: Option<(PathBuf, f64)> = input
+        .music_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .filter(|p| {
+            p.is_file()
+                && p.extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "mp3" | "wav" | "m4a" | "aac" | "ogg" | "flac"))
+        })
+        .map(|p| (p, input.music_volume_db.filter(|v| v.is_finite()).unwrap_or(-18.0)));
+
     let src_clone = source_path.clone();
     let tmp_clone = tmp_path.clone();
     let final_clone = final_path.clone();
@@ -1294,17 +1480,20 @@ async fn render_clip_internal(
 
     let render = tokio::task::spawn_blocking(move || -> Result<(u64, String), String> {
         let mut chosen_encoder = "libx264".to_owned();
+        let music_ref = music_bed_owned.as_ref().map(|(p, db)| (p.as_path(), *db));
         let res = if use_hw && let Some(hw) = cached_hw_encoder() {
             match run_ffmpeg_once(
                 &ffmpeg,
                 &src_clone,
                 &tmp_clone,
                 &framing,
+                crop_pan,
                 &quality,
                 in_ms,
                 out_ms,
                 mute,
                 &audio_filters,
+                music_ref,
                 &hw,
                 &video_filters,
                 effective_target_us,
@@ -1325,11 +1514,13 @@ async fn render_clip_internal(
                         &src_clone,
                         &tmp_clone,
                         &framing,
+                        crop_pan,
                         &quality,
                         in_ms,
                         out_ms,
                         mute,
                         &audio_filters,
+                        music_ref,
                         "libx264",
                         &video_filters,
                         effective_target_us,
@@ -1342,11 +1533,13 @@ async fn render_clip_internal(
                 &src_clone,
                 &tmp_clone,
                 &framing,
+                crop_pan,
                 &quality,
                 in_ms,
                 out_ms,
                 mute,
                 &audio_filters,
+                music_ref,
                 "libx264",
                 &video_filters,
                 effective_target_us,
@@ -1643,6 +1836,17 @@ pub(crate) async fn export_batch(
                 speed,
                 srt_text: None,
                 subtitle_style: None,
+                crop_pan: None,
+                rotate_deg: None,
+                mirror_h: false,
+                subtle_zoom: false,
+                outro_cta: None,
+                audio_preset: None,
+                audio_gain_db: None,
+                music_path: None,
+                music_volume_db: None,
+                max_duration_s: None,
+                force_30fps: false,
             };
             match render_clip_internal(&app_clone, &clip_id, &req, false).await {
                 Ok(_) => completed += 1,
@@ -2087,6 +2291,10 @@ pub(crate) fn rows(app: &App) -> store::Result<Vec<Value>> {
         ig_permalink: String,
         tt_publish_id: String,
         x_tweet_id: String,
+        rating: i64,
+        mood_tags: String,
+        markers_json: String,
+        content_sha256: String,
     }
     let entries: Vec<RollRow> = {
         let db = app.db.lock().map_err(|_| store::Error("storage_unavailable"))?;
@@ -2095,7 +2303,7 @@ pub(crate) fn rows(app: &App) -> store::Result<Vec<Value>> {
                 "SELECT f.clip_id, f.source_id, f.path, f.title, f.description, f.bytes,
                         f.review_state, f.exported_path, p.name, p.platform,
                         f.yt_video_id, f.yt_publish_at, f.ig_media_id, f.ig_permalink,
-                        f.tt_publish_id, f.x_tweet_id
+                        f.tt_publish_id, f.x_tweet_id, f.rating, f.mood_tags, f.markers_json, f.content_sha256
                  FROM workspace_film_roll f
                  JOIN profiles p ON p.id = f.source_id
                  WHERE p.archived = 0 AND p.role = 'source'
@@ -2122,6 +2330,10 @@ pub(crate) fn rows(app: &App) -> store::Result<Vec<Value>> {
                     ig_permalink: r.get(13)?,
                     tt_publish_id: r.get(14)?,
                     x_tweet_id: r.get(15)?,
+                    rating: r.get(16)?,
+                    mood_tags: r.get(17)?,
+                    markers_json: r.get(18)?,
+                    content_sha256: r.get(19)?,
                 })
             })
             .map_err(|_| store::Error("storage_unavailable"))?;
@@ -2168,6 +2380,10 @@ pub(crate) fn rows(app: &App) -> store::Result<Vec<Value>> {
             "ig_permalink": if e.ig_permalink.is_empty() { None } else { Some(e.ig_permalink) },
             "tt_publish_id": if e.tt_publish_id.is_empty() { None } else { Some(e.tt_publish_id) },
             "x_tweet_id": if e.x_tweet_id.is_empty() { None } else { Some(e.x_tweet_id) },
+            "rating": e.rating.clamp(0, 5),
+            "mood_tags": e.mood_tags,
+            "markers": serde_json::from_str::<Value>(&e.markers_json).unwrap_or_else(|_| json!([])),
+            "content_sha256": if e.content_sha256.is_empty() { None } else { Some(e.content_sha256) },
             "from_sources": true,
         });
         if !e.description.is_empty() {
@@ -2371,4 +2587,357 @@ pub(crate) async fn detect_silence(
     .map_err(internal)?
     .map_err(bad)?;
     Ok(Json(result))
+}
+
+fn encode_base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    let mut i = 0;
+    while i < bytes.len() {
+        let b0 = bytes[i];
+        let b1 = if i + 1 < bytes.len() { bytes[i + 1] } else { 0 };
+        let b2 = if i + 2 < bytes.len() { bytes[i + 2] } else { 0 };
+        out.push(TABLE[(b0 >> 2) as usize] as char);
+        out.push(TABLE[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
+        out.push(if i + 1 < bytes.len() { TABLE[(((b1 & 0x0f) << 2) | (b2 >> 6)) as usize] as char } else { '=' });
+        out.push(if i + 2 < bytes.len() { TABLE[(b2 & 0x3f) as usize] as char } else { '=' });
+        i += 3;
+    }
+    out
+}
+
+pub(crate) async fn update_meta(
+    State(app): State<App>,
+    AxumPath(clip_id): AxumPath<String>,
+    Json(input): Json<MetaUpdateRequest>,
+) -> ApiResult<Json<Value>> {
+    if !crate::workspace_media::hex(&clip_id) {
+        return Err(bad("Invalid clip ID."));
+    }
+    let db = app.db.lock().map_err(internal)?;
+    if let Some(rating) = input.rating {
+        let clamped = rating.clamp(0, 5);
+        db.execute("UPDATE workspace_film_roll SET rating=?1 WHERE clip_id=?2", params![clamped, clip_id])
+            .map_err(internal)?;
+    }
+    if let Some(mood) = input.mood_tags {
+        let clean: String = mood.trim().chars().take(160).collect();
+        db.execute("UPDATE workspace_film_roll SET mood_tags=?1 WHERE clip_id=?2", params![clean, clip_id])
+            .map_err(internal)?;
+    }
+    if let Some(markers) = input.markers {
+        let capped: Vec<Value> = markers.into_iter().take(40).collect();
+        let raw = serde_json::to_string(&capped).unwrap_or_else(|_| "[]".to_owned());
+        db.execute("UPDATE workspace_film_roll SET markers_json=?1 WHERE clip_id=?2", params![raw, clip_id])
+            .map_err(internal)?;
+    }
+    Ok(Json(json!({ "ok": true, "clip_id": clip_id })))
+}
+
+pub(crate) async fn cover_candidates(
+    State(app): State<App>,
+    AxumPath(clip_id): AxumPath<String>,
+) -> ApiResult<Json<Value>> {
+    if !crate::workspace_media::hex(&clip_id) {
+        return Err(bad("Invalid clip ID."));
+    }
+    let Some(video_path) = resolve_video(&app, &clip_id) else {
+        return Err((StatusCode::NOT_FOUND, "Source video unavailable.".into()));
+    };
+    let Some(ffmpeg) = find_ffmpeg() else {
+        return Err(bad("FFmpeg was not found."));
+    };
+    let dur_ms = probed_duration_ms(&app, &clip_id).unwrap_or(15_000).max(2000);
+    let cache_dir = app.media.join("thumbnail-cache");
+    let candidates = tokio::task::spawn_blocking(move || -> Vec<Value> {
+        let _ = std::fs::create_dir_all(&cache_dir);
+        let mut out = Vec::new();
+        for (idx, frac) in [0.15f64, 0.45f64, 0.78f64].into_iter().enumerate() {
+            let offset_ms = ((dur_ms as f64) * frac).round() as u64;
+            let seek_s = format!("{:.3}", offset_ms as f64 / 1000.0);
+            let tmp = cache_dir.join(format!("cand_{clip_id}_{idx}.jpg"));
+            let mut cmd = std::process::Command::new(&ffmpeg);
+            cmd.args(["-y", "-hide_banner", "-loglevel", "error", "-ss", &seek_s, "-i"])
+                .arg(&video_path)
+                .args([
+                    "-vf",
+                    "thumbnail=n=15,scale=540:960:force_original_aspect_ratio=decrease,pad=540:960:(ow-iw)/2:(oh-ih)/2:black",
+                    "-frames:v",
+                    "1",
+                    "-q:v",
+                    "4",
+                ])
+                .arg(&tmp)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x08000000);
+            }
+            if cmd.status().is_ok_and(|s| s.success())
+                && let Ok(bytes) = std::fs::read(&tmp)
+                && bytes.len() > 256
+            {
+                out.push(json!({
+                    "thumb_offset_ms": offset_ms,
+                    "label": format!("{:.1}s", offset_ms as f64 / 1000.0),
+                    "data_url": format!("data:image/jpeg;base64,{}", encode_base64(&bytes))
+                }));
+            }
+            let _ = std::fs::remove_file(&tmp);
+        }
+        out
+    })
+    .await
+    .map_err(internal)?;
+    Ok(Json(json!({ "candidates": candidates })))
+}
+
+pub(crate) async fn split_parts(
+    State(app): State<App>,
+    AxumPath(clip_id): AxumPath<String>,
+    Json(input): Json<SplitPartsRequest>,
+) -> ApiResult<Json<Value>> {
+    if !crate::workspace_media::hex(&clip_id) {
+        return Err(bad("Invalid clip ID."));
+    }
+    let Some(source_path) = resolve_video(&app, &clip_id) else {
+        return Err((StatusCode::NOT_FOUND, "Source video unavailable.".into()));
+    };
+    let Some(ffmpeg) = find_ffmpeg() else {
+        return Err(bad("FFmpeg not found."));
+    };
+    let dur_ms = probed_duration_ms(&app, &clip_id).unwrap_or(0);
+    if dur_ms < 10_000 {
+        return Err(bad("Clip is shorter than 10 seconds — no need to split."));
+    }
+    let part_ms = input.part_seconds.clamp(15, 180) * 1000;
+    let total_parts = ((dur_ms as f64) / (part_ms as f64)).ceil() as usize;
+    if total_parts <= 1 {
+        return Err(bad("Clip already fits inside a single part at this length."));
+    }
+    let total_parts = total_parts.min(10);
+    let (title, source_name): (String, String) = {
+        let db = app.db.lock().map_err(internal)?;
+        db.query_row(
+            "SELECT f.title, COALESCE(p.name, '') FROM workspace_film_roll f LEFT JOIN profiles p ON p.id=f.source_id WHERE f.clip_id=?1",
+            [&clip_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(internal)?
+        .unwrap_or_default()
+    };
+    let out_dir = exports_dir(&app);
+    std::fs::create_dir_all(&out_dir).map_err(internal)?;
+    let stem = sanitize_stem(if title.is_empty() {
+        source_path.file_stem().and_then(|s| s.to_str()).unwrap_or("clip")
+    } else {
+        &title
+    });
+    let short_id = clip_id[..8].to_owned();
+    let crop_pan = input.crop_pan.filter(|v| v.is_finite()).unwrap_or(0.0).clamp(-1.0, 1.0);
+    let framing = input.framing.clone();
+    let quality = input.quality.clone();
+    let use_hw = input.use_hw_encode;
+    let normalize_audio = input.normalize_audio;
+    let fade_io = input.fade_io;
+    let vivid = input.vivid_filter;
+    let hook_prefix = input.hook_prefix.clone().unwrap_or_default();
+    let wm = input.watermark_text.clone();
+    let wm_pos = input.watermark_pos.clone();
+    let app_clone = app.clone();
+    let clip_owned = clip_id.clone();
+
+    let created = tokio::task::spawn_blocking(move || -> Result<Vec<Value>, String> {
+        let mut results = Vec::new();
+        let hw = if use_hw { cached_hw_encoder() } else { None };
+        let enc = hw.as_deref().unwrap_or("libx264");
+        for idx in 0..total_parts {
+            let start = (idx as u64) * part_ms;
+            if start >= dur_ms {
+                break;
+            }
+            let end = ((idx as u64 + 1) * part_ms).min(dur_ms);
+            if end.saturating_sub(start) < 2000 {
+                break;
+            }
+            let part_num = idx + 1;
+            let file_name = format!("{stem}-{short_id}-part{part_num}.mp4");
+            let tmp_path = out_dir.join(format!("{stem}-{short_id}-part{part_num}.tmp.mp4"));
+            let final_path = out_dir.join(&file_name);
+            let out_dur_s = (end - start) as f64 / 1000.0;
+            let mut vf = Vec::new();
+            if vivid {
+                vf.push("eq=contrast=1.08:saturation=1.18:brightness=0.02,unsharp=3:3:0.5:3:3:0.0".to_owned());
+            }
+            if fade_io && out_dur_s > 1.2 {
+                let fo = (out_dur_s - 0.35).max(0.1);
+                vf.push(format!("fade=t=in:st=0:d=0.35,fade=t=out:st={fo:.3}:d=0.35"));
+            }
+            let part_hook = if hook_prefix.trim().is_empty() {
+                format!("PART {part_num}/{total_parts}")
+            } else {
+                format!("PART {part_num}/{total_parts} · {}", hook_prefix.trim())
+            };
+            vf.extend(build_drawtext_filters(Some(&part_hook), wm.as_deref(), &wm_pos, None, out_dur_s));
+            let mut af = Vec::new();
+            if normalize_audio {
+                af.push("loudnorm=I=-14:TP=-1.5:LRA=11".to_owned());
+            }
+            let target_us = (end - start).max(100) * 1000;
+            let res = run_ffmpeg_once(
+                &ffmpeg,
+                &source_path,
+                &tmp_path,
+                &framing,
+                crop_pan,
+                &quality,
+                Some(start),
+                Some(end),
+                false,
+                &af,
+                None,
+                enc,
+                &vf,
+                target_us,
+            );
+            if res.is_err() && enc != "libx264" {
+                run_ffmpeg_once(
+                    &ffmpeg,
+                    &source_path,
+                    &tmp_path,
+                    &framing,
+                    crop_pan,
+                    &quality,
+                    Some(start),
+                    Some(end),
+                    false,
+                    &af,
+                    None,
+                    "libx264",
+                    &vf,
+                    target_us,
+                )?;
+            } else {
+                res?;
+            }
+            std::fs::rename(&tmp_path, &final_path).map_err(|e| e.to_string())?;
+            let bytes = std::fs::metadata(&final_path).map(|m| m.len()).unwrap_or(0);
+            let part_title = format!("{} (Part {part_num}/{total_parts})", if title.is_empty() { &stem } else { &title });
+            if let Ok(db) = app_clone.db.lock() {
+                let _ = db.execute(
+                    "INSERT INTO workspace_export_history(clip_id, title, source_name, file_name, framing, quality, in_ms, out_ms, muted, normalized_audio, bytes)
+                     VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9, ?10)",
+                    params![clip_owned, part_title, source_name, file_name, framing, quality, start as i64, end as i64, if normalize_audio { 1 } else { 0 }, bytes as i64],
+                );
+            }
+            results.push(json!({ "part": part_num, "file_name": file_name, "bytes": bytes, "in_ms": start, "out_ms": end }));
+        }
+        Ok(results)
+    })
+    .await
+    .map_err(internal)?
+    .map_err(bad)?;
+
+    Ok(Json(json!({ "parts": created, "count": created.len() })))
+}
+
+pub(crate) async fn zip_kit(
+    State(app): State<App>,
+    AxumPath(clip_id): AxumPath<String>,
+    Json(input): Json<ZipKitRequest>,
+) -> ApiResult<Json<Value>> {
+    if !crate::workspace_media::hex(&clip_id) {
+        return Err(bad("Invalid clip ID."));
+    }
+    let (title, exported_path): (String, String) = {
+        let db = app.db.lock().map_err(internal)?;
+        db.query_row(
+            "SELECT title, exported_path FROM workspace_film_roll WHERE clip_id=?1",
+            [&clip_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(internal)?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Clip not found.".into()))?
+    };
+    let out_dir = exports_dir(&app);
+    std::fs::create_dir_all(&out_dir).map_err(internal)?;
+    let video_path = if !exported_path.is_empty() && out_dir.join(&exported_path).is_file() {
+        out_dir.join(&exported_path)
+    } else {
+        resolve_video(&app, &clip_id).ok_or_else(|| (StatusCode::NOT_FOUND, "Video file unavailable.".into()))?
+    };
+    let stem = sanitize_stem(if title.is_empty() { "clip" } else { &title });
+    let short_id = &clip_id[..8];
+    let zip_name = format!("{stem}-{short_id}-post-kit.zip");
+    let zip_path = out_dir.join(&zip_name);
+    let mp4_entry_name = format!("{stem}-{short_id}.mp4");
+    let cap_text = input.caption_text.unwrap_or_default();
+    let cover_bytes = input
+        .cover_png_base64
+        .as_deref()
+        .and_then(decode_base64)
+        .filter(|b| b.starts_with(b"\x89PNG\r\n\x1a\n") && b.len() <= 9 * 1024 * 1024);
+
+    let (bytes, final_zip) = tokio::task::spawn_blocking(move || -> Result<(u64, PathBuf), String> {
+        let mp4_bytes = std::fs::read(&video_path).map_err(|e| format!("Could not read video: {e}"))?;
+        if mp4_bytes.len() > 250 * 1024 * 1024 {
+            return Err("Video exceeds 250 MiB post-kit limit.".to_owned());
+        }
+        let mut entries: Vec<(&str, &[u8])> = vec![(&mp4_entry_name, &mp4_bytes)];
+        let cap_bytes = cap_text.as_bytes();
+        if !cap_text.trim().is_empty() {
+            entries.push(("captions.txt", cap_bytes));
+        }
+        if let Some(ref cov) = cover_bytes {
+            entries.push(("cover-1080x1920.png", cov));
+        }
+        let zip_data = crate::workspace_phase1::zip(&entries);
+        std::fs::write(&zip_path, &zip_data).map_err(|e| format!("Could not write zip kit: {e}"))?;
+        Ok((zip_data.len() as u64, zip_path))
+    })
+    .await
+    .map_err(internal)?
+    .map_err(bad)?;
+
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("explorer.exe")
+            .arg(format!("/select,{}", final_zip.display()))
+            .spawn();
+    }
+    Ok(Json(json!({ "zip_name": zip_name, "bytes": bytes })))
+}
+
+pub(crate) async fn pick_music() -> ApiResult<Json<Value>> {
+    #[cfg(windows)]
+    {
+        let picked = tokio::task::spawn_blocking(|| -> Result<Option<String>, String> {
+            use std::os::windows::process::CommandExt;
+            let script = r#"Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.OpenFileDialog; $d.Title = 'Select Background Music Track'; $d.Filter = 'Audio Files (*.mp3;*.wav;*.m4a;*.aac;*.ogg;*.flac)|*.mp3;*.wav;*.m4a;*.aac;*.ogg;*.flac|All Files (*.*)|*.*'; if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.FileName) }"#;
+            let out = std::process::Command::new("powershell")
+                .args(["-NoProfile", "-STA", "-Command", script])
+                .creation_flags(0x08000000)
+                .output()
+                .map_err(|e| format!("Could not open file picker: {e}"))?;
+            let path = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+            if path.is_empty() { Ok(None) } else { Ok(Some(path)) }
+        })
+        .await
+        .map_err(internal)?
+        .map_err(bad)?;
+        let name = picked
+            .as_deref()
+            .and_then(|p| Path::new(p).file_name().and_then(|n| n.to_str()))
+            .map(str::to_owned);
+        Ok(Json(json!({ "path": picked, "name": name })))
+    }
+    #[cfg(not(windows))]
+    {
+        Err(bad("Music file picker is supported on Windows builds."))
+    }
 }

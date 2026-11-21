@@ -20,6 +20,90 @@ struct PendingOAuth {
     created_at: i64,
 }
 
+#[derive(Clone, Default)]
+struct UploadProgressState {
+    active: bool,
+    provider: String,
+    clip_id: String,
+    stage: String,
+    percent: u8,
+    bytes_total: u64,
+    message: String,
+}
+
+fn upload_progress_state() -> &'static Mutex<UploadProgressState> {
+    static ST: OnceLock<Mutex<UploadProgressState>> = OnceLock::new();
+    ST.get_or_init(|| Mutex::new(UploadProgressState::default()))
+}
+
+fn set_upload_progress(active: bool, provider: &str, clip_id: &str, stage: &str, percent: u8, bytes_total: u64, message: &str) {
+    if let Ok(mut st) = upload_progress_state().lock() {
+        *st = UploadProgressState {
+            active,
+            provider: provider.to_owned(),
+            clip_id: clip_id.to_owned(),
+            stage: stage.to_owned(),
+            percent: percent.min(100),
+            bytes_total,
+            message: message.to_owned(),
+        };
+    }
+}
+
+pub(crate) async fn get_upload_progress() -> Json<Value> {
+    let st = upload_progress_state().lock().map(|g| g.clone()).unwrap_or_default();
+    Json(json!({
+        "active": st.active,
+        "provider": st.provider,
+        "clip_id": st.clip_id,
+        "stage": st.stage,
+        "percent": st.percent,
+        "bytes_total": st.bytes_total,
+        "message": st.message,
+    }))
+}
+
+fn sha256_file_hex(path: &std::path::Path) -> Option<String> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut h = Sha256::new();
+    let mut buf = [0u8; 65536];
+    loop {
+        let n = f.read(&mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Some(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+fn record_upload_receipt(
+    app: &App,
+    clip_id: &str,
+    sha256: &str,
+    provider: &str,
+    remote_id: &str,
+    remote_url: &str,
+    status: &str,
+    privacy: &str,
+    scheduled_at: &str,
+) {
+    if let Ok(db) = app.db.lock() {
+        if !sha256.is_empty() {
+            let _ = db.execute(
+                "UPDATE workspace_film_roll SET content_sha256=?1 WHERE clip_id=?2",
+                params![sha256, clip_id],
+            );
+        }
+        let _ = db.execute(
+            "INSERT INTO workspace_upload_receipts(clip_id, content_sha256, provider, remote_id, remote_url, status, privacy, scheduled_at, uploaded_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, unixepoch())",
+            params![clip_id, sha256, provider, remote_id, remote_url, status, privacy, scheduled_at],
+        );
+    }
+}
+
 fn pending_map() -> &'static Mutex<HashMap<String, PendingOAuth>> {
     static MAP: OnceLock<Mutex<HashMap<String, PendingOAuth>>> = OnceLock::new();
     MAP.get_or_init(|| Mutex::new(HashMap::new()))
@@ -55,7 +139,20 @@ pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
             media_type TEXT NOT NULL DEFAULT '',
             synced_at INTEGER NOT NULL DEFAULT (unixepoch()),
             PRIMARY KEY (provider, post_id)
-        );",
+        );
+        CREATE TABLE IF NOT EXISTS workspace_upload_receipts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            clip_id TEXT NOT NULL DEFAULT '',
+            content_sha256 TEXT NOT NULL DEFAULT '',
+            provider TEXT NOT NULL,
+            remote_id TEXT NOT NULL DEFAULT '',
+            remote_url TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT '',
+            privacy TEXT NOT NULL DEFAULT '',
+            scheduled_at TEXT NOT NULL DEFAULT '',
+            uploaded_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        CREATE INDEX IF NOT EXISTS idx_upload_receipts_sha ON workspace_upload_receipts(content_sha256);",
     )?;
     let cols: Vec<String> = {
         let mut stmt = db.prepare("PRAGMA table_info(workspace_export_history)")?;
@@ -559,6 +656,10 @@ pub(crate) struct YoutubeDraftUploadInput {
     publish_at: Option<String>,
     #[serde(default)]
     thumbnail_png_base64: Option<String>,
+    #[serde(default)]
+    category_id: Option<String>,
+    #[serde(default)]
+    made_for_kids: bool,
     #[serde(default)]
     use_source: bool,
 }
@@ -1789,15 +1890,25 @@ pub(crate) async fn upload_youtube_private_draft(
         .collect();
     let privacy_clone = privacy.clone();
     let publish_at_clone = publish_at.clone();
+    let category_id = match input.category_id.as_deref() {
+        Some(c @ ("1" | "2" | "10" | "17" | "20" | "22" | "23" | "24" | "25" | "26" | "27" | "28")) => c.to_owned(),
+        _ => "20".to_owned(),
+    };
+    let made_for_kids = input.made_for_kids;
+    let total_bytes = meta.len();
+    let clip_for_prog = clip_id.clone();
+    let file_path_sha = file_path.clone();
 
-    let (video_id, thumb_uploaded, thumb_note) = tokio::task::spawn_blocking(move || -> Result<(String, bool, Option<String>), String> {
+    set_upload_progress(true, "youtube", &clip_id, "initializing", 12, total_bytes, "Initializing YouTube resumable upload…");
+    let res = tokio::task::spawn_blocking(move || -> Result<(String, bool, Option<String>, String), String> {
         let (access_token, _) = refresh_youtube_access_token()?;
         let video_bytes = std::fs::read(&file_path).map_err(|e| format!("Could not read MP4: {e}"))?;
+        let file_sha = sha256_file_hex(&file_path_sha).unwrap_or_default();
         let auth = format!("Bearer {access_token}");
         let len_str = video_bytes.len().to_string();
         let mut status_obj = json!({
             "privacyStatus": privacy_clone,
-            "selfDeclaredMadeForKids": false
+            "selfDeclaredMadeForKids": made_for_kids
         });
         if let Some(when) = publish_at_clone {
             status_obj["publishAt"] = json!(when);
@@ -1807,7 +1918,7 @@ pub(crate) async fn upload_youtube_private_draft(
                 "title": title,
                 "description": description,
                 "tags": tags,
-                "categoryId": "20"
+                "categoryId": category_id
             },
             "status": status_obj
         });
@@ -1838,6 +1949,7 @@ pub(crate) async fn upload_youtube_private_draft(
         let upload_path = loc
             .strip_prefix("https://www.googleapis.com")
             .ok_or_else(|| "Unexpected YouTube upload host.".to_owned())?;
+        set_upload_progress(true, "youtube", &clip_for_prog, "uploading", 45, total_bytes, &format!("Uploading {:.1} MiB to YouTube…", total_bytes as f64 / 1_048_576.0));
         let put_resp = platform::https_request(
             "www.googleapis.com",
             "PUT",
@@ -1865,6 +1977,7 @@ pub(crate) async fn upload_youtube_private_draft(
         let mut thumb_ok = false;
         let mut thumb_err = None;
         if let Some(png) = thumb_bytes {
+            set_upload_progress(true, "youtube", &clip_for_prog, "thumbnail", 85, total_bytes, "Uploading custom 1080×1920 cover thumbnail…");
             let tpath = format!("/upload/youtube/v3/thumbnails/set?videoId={}&uploadType=media", url_encode(&video_id));
             match platform::https_request(
                 "www.googleapis.com",
@@ -1887,11 +2000,23 @@ pub(crate) async fn upload_youtube_private_draft(
                 Err(e) => thumb_err = Some(e),
             }
         }
-        Ok((video_id, thumb_ok, thumb_err))
+        Ok((video_id, thumb_ok, thumb_err, file_sha))
     })
     .await
-    .map_err(internal)?
-    .map_err(bad)?;
+    .map_err(|e| {
+        set_upload_progress(false, "youtube", &clip_id, "error", 0, total_bytes, "Upload thread failed.");
+        internal(e)
+    })?;
+    let (video_id, thumb_uploaded, thumb_note, file_sha) = match res {
+        Ok(v) => {
+            set_upload_progress(false, "youtube", &clip_id, "done", 100, total_bytes, "YouTube draft upload complete!");
+            v
+        }
+        Err(e) => {
+            set_upload_progress(false, "youtube", &clip_id, "error", 0, total_bytes, &e);
+            return Err(bad(e));
+        }
+    };
 
     let studio_url = format!("https://studio.youtube.com/video/{video_id}/edit");
     let sched_str = publish_at.as_deref().unwrap_or("");
@@ -1905,6 +2030,17 @@ pub(crate) async fn upload_youtube_private_draft(
             params![video_id, clip_id],
         );
     }
+    record_upload_receipt(
+        &app,
+        &clip_id,
+        &file_sha,
+        "youtube",
+        &video_id,
+        &studio_url,
+        if sched_str.is_empty() { "uploaded" } else { "scheduled" },
+        &privacy,
+        sched_str,
+    );
     sync_posting_queue_url(&app, &clip_id, "youtube", &studio_url);
     Ok(Json(json!({
         "video_id": video_id,
@@ -1959,9 +2095,14 @@ pub(crate) async fn upload_instagram_reel(
     let share_to_feed = input.share_to_feed;
     let thumb_offset = input.thumb_offset_ms;
     let do_publish = input.publish;
+    let total_bytes = meta.len();
+    let clip_prog = clip_id.clone();
+    let file_sha_path = file_path.clone();
 
-    let result = tokio::task::spawn_blocking(move || -> Result<(String, Option<String>, Option<String>), String> {
+    set_upload_progress(true, "instagram", &clip_id, "initializing", 10, total_bytes, "Creating Instagram Reels container…");
+    let res = tokio::task::spawn_blocking(move || -> Result<(String, Option<String>, Option<String>, String), String> {
         let video_bytes = std::fs::read(&file_path).map_err(|e| format!("Could not read MP4: {e}"))?;
+        let file_sha = sha256_file_hex(&file_sha_path).unwrap_or_default();
         let file_size = video_bytes.len().to_string();
 
         // Step 1: Create resumable Reels container on Graph API
@@ -2008,6 +2149,7 @@ pub(crate) async fn upload_instagram_reel(
             .ok_or_else(|| "Invalid rupload URI.".to_owned())?;
 
         // Step 2: Upload raw MP4 bytes directly to rupload.facebook.com (no cloud hosting required!)
+        set_upload_progress(true, "instagram", &clip_prog, "uploading", 38, total_bytes, &format!("Uploading {:.1} MiB to Instagram…", total_bytes as f64 / 1_048_576.0));
         let oauth_hdr = format!("OAuth {access_token}");
         let up_resp = platform::https_request(
             "rupload.facebook.com",
@@ -2038,7 +2180,9 @@ pub(crate) async fn upload_instagram_reel(
             url_encode(&access_token),
         );
         let mut finished = false;
-        for _ in 0..30 {
+        for step in 0..30 {
+            let pct = (58 + (step as u8).min(28)).min(88);
+            set_upload_progress(true, "instagram", &clip_prog, "processing", pct, total_bytes, "Waiting for Instagram video processing…");
             std::thread::sleep(std::time::Duration::from_secs(2));
             let sresp = platform::https_request("graph.facebook.com", "GET", &status_path, &[], &[], 15_000)?;
             let sval: Value = serde_json::from_slice(&sresp.body).unwrap_or_default();
@@ -2059,10 +2203,11 @@ pub(crate) async fn upload_instagram_reel(
         }
 
         if !do_publish {
-            return Ok((container_id, None, None));
+            return Ok((container_id, None, None, file_sha));
         }
 
         // Step 4: Publish finished container (only when user explicitly confirmed publish=true)
+        set_upload_progress(true, "instagram", &clip_prog, "publishing", 92, total_bytes, "Publishing Instagram Reel…");
         let pub_path = format!("/v21.0/{}/media_publish", url_encode(&ig_id));
         let pub_body = format!(
             "creation_id={}&access_token={}",
@@ -2099,13 +2244,24 @@ pub(crate) async fn upload_instagram_reel(
                 permalink = pv["permalink"].as_str().map(str::to_owned);
             }
         }
-        Ok((container_id, media_id, permalink))
+        Ok((container_id, media_id, permalink, file_sha))
     })
     .await
-    .map_err(internal)?
-    .map_err(bad)?;
+    .map_err(|e| {
+        set_upload_progress(false, "instagram", &clip_id, "error", 0, total_bytes, "Upload thread failed.");
+        internal(e)
+    })?;
 
-    let (container_id, media_id, permalink) = result;
+    let (container_id, media_id, permalink, file_sha) = match res {
+        Ok(v) => {
+            set_upload_progress(false, "instagram", &clip_id, "done", 100, total_bytes, "Instagram upload complete!");
+            v
+        }
+        Err(e) => {
+            set_upload_progress(false, "instagram", &clip_id, "error", 0, total_bytes, &e);
+            return Err(bad(e));
+        }
+    };
     if let Some(mid) = media_id.as_deref() {
         let link = permalink.as_deref().unwrap_or("");
         if let Ok(db) = app.db.lock() {
@@ -2118,9 +2274,12 @@ pub(crate) async fn upload_instagram_reel(
                 params![link, clip_id],
             );
         }
+        record_upload_receipt(&app, &clip_id, &file_sha, "instagram", mid, link, "published", "public", "");
         if !link.is_empty() {
             sync_posting_queue_url(&app, &clip_id, "instagram", link);
         }
+    } else {
+        record_upload_receipt(&app, &clip_id, &file_sha, "instagram", &container_id, "", "container_unpublished", "unpublished", "");
     }
     Ok(Json(json!({
         "container_id": container_id,
@@ -2144,9 +2303,14 @@ pub(crate) async fn upload_tiktok_inbox_draft(
         return Err(bad("TikTok draft video must be between 1 byte and 250 MiB."));
     }
 
-    let (publish_id, status_str) = tokio::task::spawn_blocking(move || -> Result<(String, String), String> {
+    let total_bytes = meta.len();
+    let clip_prog = clip_id.clone();
+    let sha_path = file_path.clone();
+    set_upload_progress(true, "tiktok", &clip_id, "initializing", 10, total_bytes, "Initializing TikTok Inbox draft upload…");
+    let res = tokio::task::spawn_blocking(move || -> Result<(String, String, String), String> {
         let (access_token, _) = refresh_tiktok_access_token()?;
         let video_bytes = std::fs::read(&file_path).map_err(|e| format!("Could not read MP4: {e}"))?;
+        let file_sha = sha256_file_hex(&sha_path).unwrap_or_default();
         let total = video_bytes.len();
         let (chunk_size, total_chunks) = if total <= 64 * 1024 * 1024 {
             (total, 1usize)
@@ -2196,6 +2360,8 @@ pub(crate) async fn upload_tiktok_inbox_draft(
         let (up_host, up_path) = parse_tiktok_upload_url(upload_url)?;
 
         for i in 0..total_chunks {
+            let pct = (20 + (((i + 1) * 55) / total_chunks.max(1))) as u8;
+            set_upload_progress(true, "tiktok", &clip_prog, "uploading", pct, total_bytes, &format!("Uploading TikTok chunk {}/{total_chunks}…", i + 1));
             let start = i * chunk_size;
             let end_excl = if i + 1 == total_chunks { total } else { start + chunk_size };
             let slice = &video_bytes[start..end_excl];
@@ -2247,11 +2413,24 @@ pub(crate) async fn upload_tiktok_inbox_draft(
                 }
             }
         }
-        Ok((publish_id, status_str))
+        Ok((publish_id, status_str, file_sha))
     })
     .await
-    .map_err(internal)?
-    .map_err(bad)?;
+    .map_err(|e| {
+        set_upload_progress(false, "tiktok", &clip_id, "error", 0, total_bytes, "Upload thread failed.");
+        internal(e)
+    })?;
+
+    let (publish_id, status_str, file_sha) = match res {
+        Ok(v) => {
+            set_upload_progress(false, "tiktok", &clip_id, "done", 100, total_bytes, "TikTok Inbox draft sent!");
+            v
+        }
+        Err(e) => {
+            set_upload_progress(false, "tiktok", &clip_id, "error", 0, total_bytes, &e);
+            return Err(bad(e));
+        }
+    };
 
     if let Ok(db) = app.db.lock() {
         let _ = db.execute(
@@ -2263,6 +2442,7 @@ pub(crate) async fn upload_tiktok_inbox_draft(
             params![publish_id, clip_id],
         );
     }
+    record_upload_receipt(&app, &clip_id, &file_sha, "tiktok", &publish_id, "", &status_str, "inbox_draft", "");
     Ok(Json(json!({
         "publish_id": publish_id,
         "status": status_str,
@@ -2296,10 +2476,15 @@ pub(crate) async fn post_x_video(
         .take(280)
         .collect();
 
-    let tweet_id = tokio::task::spawn_blocking(move || -> Result<String, String> {
+    let total_bytes = meta.len();
+    let clip_prog = clip_id.clone();
+    let sha_path = file_path.clone();
+    set_upload_progress(true, "x", &clip_id, "initializing", 10, total_bytes, "Initializing X video upload…");
+    let res = tokio::task::spawn_blocking(move || -> Result<(String, String), String> {
         let (access_token, _) = refresh_x_access_token()?;
         let auth = format!("Bearer {access_token}");
         let video_bytes = std::fs::read(&file_path).map_err(|e| format!("Could not read MP4: {e}"))?;
+        let file_sha = sha256_file_hex(&sha_path).unwrap_or_default();
         let total = video_bytes.len();
 
         // Step 1: Initialize X v2 chunked media upload
@@ -2341,6 +2526,8 @@ pub(crate) async fn post_x_video(
         let mut seg_idx = 0usize;
         let mut offset = 0usize;
         while offset < total {
+            let pct = (20 + ((offset * 55) / total.max(1))) as u8;
+            set_upload_progress(true, "x", &clip_prog, "uploading", pct, total_bytes, "Uploading video chunks to X…");
             let end = (offset + chunk_size).min(total);
             let mut body = Vec::with_capacity((end - offset) + 512);
             body.extend_from_slice(
@@ -2421,11 +2608,24 @@ pub(crate) async fn post_x_video(
             .filter(|s| !s.is_empty())
             .ok_or_else(|| "X did not return a post ID.".to_owned())?
             .to_owned();
-        Ok(tid)
+        Ok((tid, file_sha))
     })
     .await
-    .map_err(internal)?
-    .map_err(bad)?;
+    .map_err(|e| {
+        set_upload_progress(false, "x", &clip_id, "error", 0, total_bytes, "Upload thread failed.");
+        internal(e)
+    })?;
+
+    let (tweet_id, file_sha) = match res {
+        Ok(v) => {
+            set_upload_progress(false, "x", &clip_id, "done", 100, total_bytes, "X video post published!");
+            v
+        }
+        Err(e) => {
+            set_upload_progress(false, "x", &clip_id, "error", 0, total_bytes, &e);
+            return Err(bad(e));
+        }
+    };
 
     let post_url = format!("https://x.com/i/web/status/{tweet_id}");
     if let Ok(db) = app.db.lock() {
@@ -2438,6 +2638,7 @@ pub(crate) async fn post_x_video(
             params![tweet_id, clip_id],
         );
     }
+    record_upload_receipt(&app, &clip_id, &file_sha, "x", &tweet_id, &post_url, "published", "public", "");
     sync_posting_queue_url(&app, &clip_id, "x", &post_url);
     Ok(Json(json!({
         "tweet_id": tweet_id,
@@ -2902,6 +3103,106 @@ pub(crate) async fn get_calendar(State(app): State<App>) -> ApiResult<Json<Value
         items.extend(rows.flatten());
     }
     Ok(Json(json!({ "items": items })))
+}
+
+pub(crate) async fn get_receipts(State(app): State<App>) -> ApiResult<Json<Value>> {
+    let db = app.db.lock().map_err(internal)?;
+    let mut stmt = db
+        .prepare(
+            "SELECT r.id, r.clip_id, COALESCE(f.title, ''), r.content_sha256, r.provider,
+                    r.remote_id, r.remote_url, r.status, r.privacy, r.scheduled_at, r.uploaded_at
+             FROM workspace_upload_receipts r
+             LEFT JOIN workspace_film_roll f ON f.clip_id = r.clip_id
+             ORDER BY r.uploaded_at DESC, r.id DESC
+             LIMIT 200",
+        )
+        .map_err(internal)?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(json!({
+                "id": r.get::<_, i64>(0)?,
+                "clip_id": r.get::<_, String>(1)?,
+                "title": r.get::<_, String>(2)?,
+                "content_sha256": r.get::<_, String>(3)?,
+                "provider": r.get::<_, String>(4)?,
+                "remote_id": r.get::<_, String>(5)?,
+                "remote_url": r.get::<_, String>(6)?,
+                "status": r.get::<_, String>(7)?,
+                "privacy": r.get::<_, String>(8)?,
+                "scheduled_at": r.get::<_, String>(9)?,
+                "uploaded_at": r.get::<_, i64>(10)?,
+            }))
+        })
+        .map_err(internal)?;
+    let items: Vec<Value> = rows.collect::<rusqlite::Result<Vec<_>>>().map_err(internal)?;
+    Ok(Json(json!({ "items": items })))
+}
+
+pub(crate) async fn duplicate_check(
+    State(app): State<App>,
+    AxumPath(clip_id): AxumPath<String>,
+) -> ApiResult<Json<Value>> {
+    if !crate::workspace_media::hex(&clip_id) {
+        return Err(bad("Invalid clip ID."));
+    }
+    let existing_sha: Option<String> = {
+        let db = app.db.lock().map_err(internal)?;
+        db.query_row(
+            "SELECT content_sha256 FROM workspace_film_roll WHERE clip_id=?1",
+            [&clip_id],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(internal)?
+        .filter(|s| !s.is_empty())
+    };
+    let sha = if let Some(s) = existing_sha {
+        s
+    } else if let Ok((path, _)) = resolve_upload_file(&app, &clip_id, false) {
+        let computed = tokio::task::spawn_blocking(move || sha256_file_hex(&path))
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        if !computed.is_empty() && let Ok(db) = app.db.lock() {
+            let _ = db.execute(
+                "UPDATE workspace_film_roll SET content_sha256=?1 WHERE clip_id=?2",
+                params![computed, clip_id],
+            );
+        }
+        computed
+    } else {
+        String::new()
+    };
+    if sha.is_empty() {
+        return Ok(Json(json!({ "sha256": "", "matches": [] })));
+    }
+    let db = app.db.lock().map_err(internal)?;
+    let mut stmt = db
+        .prepare(
+            "SELECT provider, remote_id, remote_url, status, privacy, uploaded_at, clip_id
+             FROM workspace_upload_receipts
+             WHERE content_sha256=?1
+             ORDER BY uploaded_at DESC
+             LIMIT 20",
+        )
+        .map_err(internal)?;
+    let matches: Vec<Value> = stmt
+        .query_map([&sha], |r| {
+            Ok(json!({
+                "provider": r.get::<_, String>(0)?,
+                "remote_id": r.get::<_, String>(1)?,
+                "remote_url": r.get::<_, String>(2)?,
+                "status": r.get::<_, String>(3)?,
+                "privacy": r.get::<_, String>(4)?,
+                "uploaded_at": r.get::<_, i64>(5)?,
+                "clip_id": r.get::<_, String>(6)?,
+            }))
+        })
+        .map_err(internal)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(internal)?;
+    Ok(Json(json!({ "sha256": sha, "matches": matches })))
 }
 
 pub(crate) async fn connect_instagram_token(
