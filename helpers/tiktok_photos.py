@@ -87,6 +87,20 @@ def save_photo_post(username, post_id, destination, cache):
         count += 1
     return 'photo', count
 
+def resolve_short_url(url):
+    parsed = urlparse(url)
+    host = (parsed.hostname or '').lower()
+    if host in ('vm.tiktok.com', 'vt.tiktok.com') or (host.endswith('tiktok.com') and parsed.path.startswith('/t/')):
+        context = ssl.create_default_context()
+        if sys.platform == "darwin" and not context.get_ca_certs():
+            context.load_verify_locations(cafile="/etc/ssl/cert.pem")
+        try:
+            with urlopen(Request(url, headers={'User-Agent': UA}), timeout=20, context=context) as resp:
+                return resp.geturl() or url
+        except Exception:
+            return url
+    return url
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('url')
@@ -95,6 +109,7 @@ def main():
     parser.add_argument('--browser', default='')
     parser.add_argument('--limit', type=int, default=0, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    target_url = resolve_short_url(args.url)
     destination = Path(args.destination)
     if (destination.name.casefold() == 'photos'
             and (destination / '.photo-scan-cache.sqlite3').is_file()
@@ -105,7 +120,7 @@ def main():
     old_cache = destination / 'Photos' / '.photo-scan-cache.sqlite3'
     cache = sqlite3.connect(old_cache if old_cache.is_file() else destination / '.photo-scan-cache.sqlite3')
     cache.execute('CREATE TABLE IF NOT EXISTS videos (id TEXT PRIMARY KEY)')
-    post = POST.match(args.url)
+    post = POST.match(target_url)
     proc = None
     if post:
         entries = [{'id': post.group(2), 'uploader': post.group(1)}]
@@ -116,7 +131,7 @@ def main():
             print('Browser login is used for the profile listing; photo pages are requested without login.', flush=True)
         if args.limit:
             command += ['--playlist-items', f'1:{args.limit}']
-        command += ['--', args.url]
+        command += ['--', target_url]
         proc = subprocess.Popen(command, stdout=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
         entries = (json.loads(line) for line in proc.stdout if line.strip())
     photos = images = failed = checked = 0

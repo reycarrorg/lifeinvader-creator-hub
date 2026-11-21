@@ -310,7 +310,12 @@ pub(crate) fn account_profile(
         return Err(bad("This account is not in this section."));
     }
     if expected_role == "source" && url == crate::solo::SOLO_URL {
-        return Ok(("other".into(), url, "Solo Posts/Downloads".into()));
+        let folder = if custom.is_empty() {
+            "Solo Posts/Downloads".into()
+        } else {
+            custom
+        };
+        return Ok(("other".into(), url, folder));
     }
     let parsed: axum::http::Uri = url.parse().map_err(bad)?;
     let host = parsed.host().unwrap_or("").to_ascii_lowercase();
