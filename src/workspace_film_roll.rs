@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
 
@@ -25,7 +26,25 @@ pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
             added_at INTEGER NOT NULL DEFAULT (unixepoch()),
             review_state TEXT NOT NULL DEFAULT 'pending_review',
             exported_path TEXT NOT NULL DEFAULT '',
+            probe_json TEXT NOT NULL DEFAULT '',
             UNIQUE(source_id, path)
+        );
+        CREATE TABLE IF NOT EXISTS workspace_export_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            clip_id TEXT NOT NULL,
+            title TEXT NOT NULL DEFAULT '',
+            source_name TEXT NOT NULL DEFAULT '',
+            file_name TEXT NOT NULL,
+            caption_file TEXT NOT NULL DEFAULT '',
+            cover_file TEXT NOT NULL DEFAULT '',
+            framing TEXT NOT NULL DEFAULT 'original',
+            quality TEXT NOT NULL DEFAULT 'balanced',
+            in_ms INTEGER NOT NULL DEFAULT 0,
+            out_ms INTEGER NOT NULL DEFAULT 0,
+            muted INTEGER NOT NULL DEFAULT 0,
+            normalized_audio INTEGER NOT NULL DEFAULT 0,
+            bytes INTEGER NOT NULL DEFAULT 0,
+            exported_at INTEGER NOT NULL DEFAULT (unixepoch())
         );",
     )?;
     let cols: Vec<String> = {
@@ -42,6 +61,12 @@ pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
     if !cols.iter().any(|c| c == "exported_path") {
         db.execute(
             "ALTER TABLE workspace_film_roll ADD COLUMN exported_path TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+    }
+    if !cols.iter().any(|c| c == "probe_json") {
+        db.execute(
+            "ALTER TABLE workspace_film_roll ADD COLUMN probe_json TEXT NOT NULL DEFAULT ''",
             [],
         )?;
     }
@@ -91,6 +116,12 @@ pub(crate) struct ClearRequest {
 }
 
 #[derive(Deserialize)]
+pub(crate) struct BatchRequest {
+    clip_ids: Vec<String>,
+    action: String,
+}
+
+#[derive(Deserialize)]
 pub(crate) struct ExportRequest {
     #[serde(default)]
     in_ms: Option<u64>,
@@ -98,12 +129,26 @@ pub(crate) struct ExportRequest {
     out_ms: Option<u64>,
     #[serde(default = "default_framing")]
     framing: String,
+    #[serde(default = "default_quality")]
+    quality: String,
     #[serde(default)]
     mute: bool,
+    #[serde(default)]
+    normalize_audio: bool,
+    #[serde(default)]
+    save_caption_txt: bool,
+    #[serde(default)]
+    caption_text: Option<String>,
+    #[serde(default)]
+    cover_png_base64: Option<String>,
 }
 
 fn default_framing() -> String {
     "original".to_owned()
+}
+
+fn default_quality() -> String {
+    "balanced".to_owned()
 }
 
 fn is_video_path(p: &Path) -> bool {
@@ -112,32 +157,166 @@ fn is_video_path(p: &Path) -> bool {
         .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "mp4" | "webm" | "mov" | "mkv"))
 }
 
-pub(crate) fn find_ffmpeg() -> Option<PathBuf> {
-    if let Some(env_path) = std::env::var_os("LIFEINVADER_FFMPEG") {
+fn find_tool_binary(env_var: &str, win_name: &str, unix_name: &str) -> Option<PathBuf> {
+    let bin = if cfg!(windows) { win_name } else { unix_name };
+    if let Some(env_path) = std::env::var_os(env_var) {
         let p = PathBuf::from(env_path);
         if p.is_file() {
             return Some(p);
         }
-        let nested = p.join(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" });
+        let nested = p.join(bin);
         if nested.is_file() {
             return Some(nested);
+        }
+        if let Some(parent) = p.parent() {
+            let sibling = parent.join(bin);
+            if sibling.is_file() {
+                return Some(sibling);
+            }
         }
     }
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
     {
-        let local = dir
-            .join("tools")
-            .join(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" });
+        let local = dir.join("tools").join(bin);
         if local.is_file() {
             return Some(local);
         }
     }
-    let cwd_local = PathBuf::from("tools").join(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" });
+    let cwd_local = PathBuf::from("tools").join(bin);
     if cwd_local.is_file() {
         return Some(cwd_local);
     }
     None
+}
+
+pub(crate) fn find_ffmpeg() -> Option<PathBuf> {
+    find_tool_binary("LIFEINVADER_FFMPEG", "ffmpeg.exe", "ffmpeg")
+}
+
+pub(crate) fn find_ffprobe() -> Option<PathBuf> {
+    if let Some(p) = find_tool_binary("LIFEINVADER_FFPROBE", "ffprobe.exe", "ffprobe") {
+        return Some(p);
+    }
+    if let Some(ffmpeg) = find_ffmpeg()
+        && let Some(dir) = ffmpeg.parent()
+    {
+        let sibling = dir.join(if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" });
+        if sibling.is_file() {
+            return Some(sibling);
+        }
+    }
+    None
+}
+
+pub(crate) fn find_gallery_dl() -> Option<PathBuf> {
+    let candidates = [
+        ("tools", "gallery-dl-python", "bin", "gallery-dl.exe"),
+        ("tools", "gallery-dl-python", "bin", "gallery-dl"),
+        ("tools", "gallery-dl-python", "Scripts", "gallery-dl.exe"),
+        ("tools", "gallery-dl-python", "gallery_dl", "__main__.py"),
+    ];
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        for (a, b, c, d) in candidates {
+            let p = dir.join(a).join(b).join(c).join(d);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+        let direct = dir.join("tools").join(if cfg!(windows) { "gallery-dl.exe" } else { "gallery-dl" });
+        if direct.is_file() {
+            return Some(direct);
+        }
+    }
+    for (a, b, c, d) in candidates {
+        let p = PathBuf::from(a).join(b).join(c).join(d);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+fn run_version_line(path: &Path, flag: &str) -> Option<String> {
+    let mut cmd = std::process::Command::new(path);
+    cmd.arg(flag);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+    let out = cmd.output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.lines().next().map(|l| l.trim().chars().take(120).collect())
+}
+
+fn cached_ffmpeg_version() -> Option<String> {
+    static VER: OnceLock<Option<String>> = OnceLock::new();
+    VER.get_or_init(|| find_ffmpeg().and_then(|p| run_version_line(&p, "-version"))).clone()
+}
+
+fn cached_ytdlp_version(path: &Path) -> Option<String> {
+    static VER: OnceLock<Option<String>> = OnceLock::new();
+    VER.get_or_init(|| run_version_line(path, "--version")).clone()
+}
+
+fn dir_stats(root: &Path, max_depth: usize) -> (u64, u64) {
+    fn walk(dir: &Path, depth: usize, bytes: &mut u64, files: &mut u64) {
+        if depth == 0 {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            if meta.is_file() {
+                *bytes = bytes.saturating_add(meta.len());
+                *files = files.saturating_add(1);
+            } else if meta.is_dir() {
+                walk(&entry.path(), depth - 1, bytes, files);
+            }
+        }
+    }
+    let (mut bytes, mut files) = (0u64, 0u64);
+    if root.is_dir() {
+        walk(root, max_depth, &mut bytes, &mut files);
+    }
+    (bytes, files)
+}
+
+fn decode_base64(raw: &str) -> Option<Vec<u8>> {
+    let trimmed = raw.trim();
+    let payload = trimmed
+        .strip_prefix("data:image/png;base64,")
+        .unwrap_or(trimmed);
+    let mut out = Vec::with_capacity((payload.len() * 3) / 4);
+    let mut buf = 0u32;
+    let mut bits = 0u8;
+    for b in payload.bytes() {
+        if b.is_ascii_whitespace() || b == b'=' {
+            continue;
+        }
+        let val = match b {
+            b'A'..=b'Z' => b - b'A',
+            b'a'..=b'z' => b - b'a' + 26,
+            b'0'..=b'9' => b - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        };
+        buf = (buf << 6) | (val as u32);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((buf >> bits) & 0xff) as u8);
+        }
+    }
+    Some(out)
 }
 
 pub(crate) fn exports_dir(app: &App) -> PathBuf {
@@ -320,6 +499,149 @@ fn sanitize_stem(raw: &str) -> String {
     if short.is_empty() { "clip".to_owned() } else { short }
 }
 
+pub(crate) async fn batch_action(
+    State(app): State<App>,
+    Json(input): Json<BatchRequest>,
+) -> ApiResult<Json<Value>> {
+    if input.clip_ids.is_empty() || input.clip_ids.len() > 200 {
+        return Err(bad("Select between 1 and 200 clips for a batch action."));
+    }
+    if !matches!(
+        input.action.as_str(),
+        "approve" | "hold" | "pending_review" | "remove"
+    ) {
+        return Err(bad("Unsupported batch action."));
+    }
+    for id in &input.clip_ids {
+        if !crate::workspace_media::hex(id) {
+            return Err(bad("Invalid clip ID in batch."));
+        }
+    }
+    let mut db = app.db.lock().map_err(internal)?;
+    let tx = db.transaction().map_err(internal)?;
+    let mut affected = 0usize;
+    for id in &input.clip_ids {
+        let changed = match input.action.as_str() {
+            "remove" => tx
+                .execute("DELETE FROM workspace_film_roll WHERE clip_id=?1", [id])
+                .map_err(internal)?,
+            "approve" => tx
+                .execute(
+                    "UPDATE workspace_film_roll SET review_state='approved' WHERE clip_id=?1",
+                    [id],
+                )
+                .map_err(internal)?,
+            "hold" => tx
+                .execute(
+                    "UPDATE workspace_film_roll SET review_state='hold' WHERE clip_id=?1",
+                    [id],
+                )
+                .map_err(internal)?,
+            _ => tx
+                .execute(
+                    "UPDATE workspace_film_roll SET review_state='pending_review' WHERE clip_id=?1",
+                    [id],
+                )
+                .map_err(internal)?,
+        };
+        affected += changed;
+    }
+    tx.commit().map_err(internal)?;
+    Ok(Json(json!({ "action": input.action, "affected": affected })))
+}
+
+pub(crate) async fn probe_clip(
+    State(app): State<App>,
+    AxumPath(clip_id): AxumPath<String>,
+) -> ApiResult<Json<Value>> {
+    if !crate::workspace_media::hex(&clip_id) {
+        return Err(bad("Invalid clip ID."));
+    }
+    let Some(source_path) = resolve_video(&app, &clip_id) else {
+        return Err((StatusCode::NOT_FOUND, "Source video is unavailable.".into()));
+    };
+    let current_size = std::fs::metadata(&source_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let cached: Option<String> = {
+        let db = app.db.lock().map_err(internal)?;
+        db.query_row(
+            "SELECT probe_json FROM workspace_film_roll WHERE clip_id=?1",
+            [&clip_id],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(internal)?
+        .filter(|s| !s.is_empty())
+    };
+    if let Some(raw) = cached
+        && let Ok(val) = serde_json::from_str::<Value>(&raw)
+        && val["format"]["size"]
+            .as_str()
+            .and_then(|s| s.parse::<u64>().ok())
+            .or_else(|| val["format"]["size"].as_u64())
+            == Some(current_size)
+    {
+        return Ok(Json(json!({
+            "clip_id": clip_id,
+            "preview_sha256": clip_id,
+            "facts": val,
+            "cached": true
+        })));
+    }
+    let Some(ffprobe) = find_ffprobe() else {
+        return Err(bad("ffprobe was not found in tools/ffprobe.exe."));
+    };
+    let path_clone = source_path.clone();
+    let probed = tokio::task::spawn_blocking(move || -> Result<Value, String> {
+        let mut cmd = std::process::Command::new(&ffprobe);
+        cmd.args([
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
+            "-show_format",
+            "-show_streams",
+        ])
+        .arg(&path_clone);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        let out = cmd
+            .output()
+            .map_err(|e| format!("Failed to start ffprobe: {e}"))?;
+        if !out.status.success() {
+            return Err("ffprobe could not inspect this video.".to_owned());
+        }
+        let mut parsed: Value = serde_json::from_slice(&out.stdout)
+            .map_err(|_| "ffprobe returned unreadable JSON.".to_owned())?;
+        if let Some(fmt) = parsed.get_mut("format").and_then(|v| v.as_object_mut()) {
+            fmt.insert("size".to_owned(), json!(current_size.to_string()));
+        }
+        Ok(parsed)
+    })
+    .await
+    .map_err(internal)?
+    .map_err(bad)?;
+
+    if let Ok(serialized) = serde_json::to_string(&probed)
+        && let Ok(db) = app.db.lock()
+    {
+        let _ = db.execute(
+            "UPDATE workspace_film_roll SET probe_json=?1 WHERE clip_id=?2",
+            params![serialized, clip_id],
+        );
+    }
+    Ok(Json(json!({
+        "clip_id": clip_id,
+        "preview_sha256": clip_id,
+        "facts": probed,
+        "cached": false
+    })))
+}
+
 pub(crate) async fn export_clip(
     State(app): State<App>,
     AxumPath(clip_id): AxumPath<String>,
@@ -330,6 +652,9 @@ pub(crate) async fn export_clip(
     }
     if !matches!(input.framing.as_str(), "original" | "center_crop" | "blurred_fit") {
         return Err(bad("Choose original, center_crop, or blurred_fit framing."));
+    }
+    if !matches!(input.quality.as_str(), "fast" | "balanced" | "high") {
+        return Err(bad("Choose fast, balanced, or high quality."));
     }
     if let (Some(a), Some(b)) = (input.in_ms, input.out_ms)
         && a >= b
@@ -342,12 +667,15 @@ pub(crate) async fn export_clip(
     let Some(ffmpeg) = find_ffmpeg() else {
         return Err(bad("FFmpeg was not found in tools/ffmpeg.exe or LIFEINVADER_FFMPEG."));
     };
-    let title: String = {
+    let (title, source_name): (String, String) = {
         let db = app.db.lock().map_err(internal)?;
         db.query_row(
-            "SELECT title FROM workspace_film_roll WHERE clip_id=?1",
+            "SELECT f.title, COALESCE(p.name, '')
+             FROM workspace_film_roll f
+             LEFT JOIN profiles p ON p.id = f.source_id
+             WHERE f.clip_id=?1",
             [&clip_id],
-            |r| r.get(0),
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
         )
         .optional()
         .map_err(internal)?
@@ -360,17 +688,26 @@ pub(crate) async fn export_clip(
     } else {
         &title
     });
-    let file_name = format!("{stem}-{}.mp4", &clip_id[..8]);
+    let short_id = &clip_id[..8];
+    let file_name = format!("{stem}-{short_id}.mp4");
     let final_path = out_dir.join(&file_name);
-    let tmp_path = out_dir.join(format!("{stem}-{}.tmp.mp4", &clip_id[..8]));
+    let tmp_path = out_dir.join(format!("{stem}-{short_id}.tmp.mp4"));
 
     let framing = input.framing.clone();
+    let quality = input.quality.clone();
     let in_ms = input.in_ms;
     let out_ms = input.out_ms;
     let mute = input.mute;
+    let normalize_audio = input.normalize_audio && !mute;
     let src_clone = source_path.clone();
     let tmp_clone = tmp_path.clone();
     let final_clone = final_path.clone();
+
+    let (preset, crf) = match quality.as_str() {
+        "high" => ("medium", "16"),
+        "fast" => ("veryfast", "23"),
+        _ => ("fast", "20"),
+    };
 
     let render = tokio::task::spawn_blocking(move || -> Result<u64, String> {
         let mut cmd = std::process::Command::new(&ffmpeg);
@@ -399,10 +736,13 @@ pub(crate) async fn export_clip(
             }
             _ => {}
         }
-        cmd.args(["-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p"]);
+        cmd.args(["-c:v", "libx264", "-preset", preset, "-crf", crf, "-pix_fmt", "yuv420p"]);
         if mute {
             cmd.arg("-an");
         } else {
+            if normalize_audio {
+                cmd.args(["-af", "loudnorm=I=-14:TP=-1.5:LRA=11"]);
+            }
             cmd.args(["-c:a", "aac", "-b:a", "192k"]);
         }
         cmd.args(["-movflags", "+faststart"]).arg(&tmp_clone);
@@ -432,20 +772,202 @@ pub(crate) async fn export_clip(
     .map_err(internal)?;
 
     let bytes = render.map_err(bad)?;
+
+    let mut caption_file = String::new();
+    if input.save_caption_txt
+        && let Some(text) = input.caption_text.as_deref()
+        && !text.trim().is_empty()
     {
+        let txt_name = format!("{stem}-{short_id}.txt");
+        if std::fs::write(out_dir.join(&txt_name), text.trim()).is_ok() {
+            caption_file = txt_name;
+        }
+    }
+
+    let mut cover_file = String::new();
+    if let Some(b64) = input.cover_png_base64.as_deref()
+        && !b64.trim().is_empty()
+        && let Some(png_bytes) = decode_base64(b64)
+        && png_bytes.len() >= 8
+        && png_bytes.len() <= 9 * 1024 * 1024
+        && png_bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+    {
+        let png_name = format!("{stem}-{short_id}-cover.png");
+        if std::fs::write(out_dir.join(&png_name), &png_bytes).is_ok() {
+            cover_file = png_name;
+        }
+    }
+
+    let history_id = {
         let db = app.db.lock().map_err(internal)?;
         db.execute(
             "UPDATE workspace_film_roll SET exported_path=?1, review_state='exported' WHERE clip_id=?2",
             params![file_name, clip_id],
         )
         .map_err(internal)?;
-    }
+        db.execute(
+            "INSERT INTO workspace_export_history(
+                clip_id, title, source_name, file_name, caption_file, cover_file,
+                framing, quality, in_ms, out_ms, muted, normalized_audio, bytes, exported_at
+             ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, unixepoch())",
+            params![
+                clip_id,
+                if title.is_empty() { &file_name } else { &title },
+                source_name,
+                file_name,
+                caption_file,
+                cover_file,
+                input.framing,
+                input.quality,
+                input.in_ms.unwrap_or(0) as i64,
+                input.out_ms.unwrap_or(0) as i64,
+                i64::from(input.mute),
+                i64::from(normalize_audio),
+                bytes as i64,
+            ],
+        )
+        .map_err(internal)?;
+        db.last_insert_rowid()
+    };
     Ok(Json(json!({
         "clip_id": clip_id,
+        "history_id": history_id,
         "file_name": file_name,
+        "caption_file": if caption_file.is_empty() { None } else { Some(caption_file) },
+        "cover_file": if cover_file.is_empty() { None } else { Some(cover_file) },
         "bytes": bytes,
         "export_url": format!("/api/workspace/film-roll/{clip_id}/export"),
         "state": "exported",
+    })))
+}
+
+pub(crate) async fn export_history(State(app): State<App>) -> ApiResult<Json<Value>> {
+    let dir = exports_dir(&app);
+    let rows = {
+        let db = app.db.lock().map_err(internal)?;
+        let mut stmt = db
+            .prepare(
+                "SELECT id, clip_id, title, source_name, file_name, caption_file, cover_file,
+                        framing, quality, in_ms, out_ms, muted, normalized_audio, bytes, exported_at
+                 FROM workspace_export_history
+                 ORDER BY exported_at DESC, id DESC
+                 LIMIT 200",
+            )
+            .map_err(internal)?;
+        let mapped = stmt
+            .query_map([], |r| {
+                let file_name: String = r.get(4)?;
+                let caption_file: String = r.get(5)?;
+                let cover_file: String = r.get(6)?;
+                Ok(json!({
+                    "id": r.get::<_, i64>(0)?,
+                    "clip_id": r.get::<_, String>(1)?,
+                    "title": r.get::<_, String>(2)?,
+                    "source_name": r.get::<_, String>(3)?,
+                    "file_name": file_name,
+                    "exists": dir.join(&file_name).is_file(),
+                    "caption_file": if caption_file.is_empty() { None } else { Some(caption_file) },
+                    "cover_file": if cover_file.is_empty() { None } else { Some(cover_file) },
+                    "framing": r.get::<_, String>(7)?,
+                    "quality": r.get::<_, String>(8)?,
+                    "in_ms": r.get::<_, i64>(9)?,
+                    "out_ms": r.get::<_, i64>(10)?,
+                    "muted": r.get::<_, i64>(11)? != 0,
+                    "normalized_audio": r.get::<_, i64>(12)? != 0,
+                    "bytes": r.get::<_, i64>(13)?,
+                    "exported_at": r.get::<_, i64>(14)?,
+                }))
+            })
+            .map_err(internal)?;
+        mapped
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(internal)?
+    };
+    Ok(Json(json!({
+        "exports_dir": dir.to_string_lossy(),
+        "items": rows
+    })))
+}
+
+pub(crate) async fn reveal_export(
+    State(app): State<App>,
+    AxumPath(history_id): AxumPath<i64>,
+) -> ApiResult<StatusCode> {
+    let file_name: Option<String> = {
+        let db = app.db.lock().map_err(internal)?;
+        db.query_row(
+            "SELECT file_name FROM workspace_export_history WHERE id=?1",
+            [history_id],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(internal)?
+    };
+    let Some(name) = file_name
+        .filter(|s| !s.is_empty() && !s.contains(['/', '\\', ':', '\0']) && !s.starts_with('.'))
+    else {
+        return Err((StatusCode::NOT_FOUND, "Export entry not found.".into()));
+    };
+    let target = exports_dir(&app).join(&name);
+    if !target.is_file() {
+        return Err((StatusCode::NOT_FOUND, "Exported file is no longer on disk.".into()));
+    }
+    #[cfg(windows)]
+    {
+        std::process::Command::new("explorer.exe")
+            .arg(format!("/select,{}", target.display()))
+            .spawn()
+            .map_err(internal)?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-R"])
+            .arg(&target)
+            .spawn()
+            .map_err(internal)?;
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(exports_dir(&app))
+            .spawn()
+            .map_err(internal)?;
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(crate) async fn clear_thumbnail_cache(State(app): State<App>) -> ApiResult<Json<Value>> {
+    let cache_dir = app.media.join("thumbnail-cache");
+    let (removed, freed) = tokio::task::spawn_blocking(move || -> (u64, u64) {
+        let mut removed = 0u64;
+        let mut freed = 0u64;
+        let Ok(entries) = std::fs::read_dir(&cache_dir) else {
+            return (0, 0);
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let is_jpg = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("jpg"));
+            if !is_jpg {
+                continue;
+            }
+            let len = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            if std::fs::remove_file(&path).is_ok() {
+                removed += 1;
+                freed = freed.saturating_add(len);
+            }
+        }
+        (removed, freed)
+    })
+    .await
+    .map_err(internal)?;
+    Ok(Json(json!({
+        "removed_files": removed,
+        "freed_bytes": freed,
+        "media_untouched": true
     })))
 }
 
@@ -500,11 +1022,9 @@ pub(crate) async fn open_exports(State(app): State<App>) -> ApiResult<StatusCode
 }
 
 pub(crate) async fn local_status(State(app): State<App>) -> ApiResult<Json<Value>> {
-    let ffmpeg_ready = find_ffmpeg().is_some();
-    let (source_root, ytdlp_ready, total, pending, approved, hold, exported) = {
+    let (source_root, downloader, total, pending, approved, hold, exported, history_count) = {
         let db = app.db.lock().map_err(internal)?;
         let cfg = source::config(&db).map_err(internal)?;
-        let ytdlp_ready = !cfg.downloader.is_empty() && Path::new(&cfg.downloader).is_file();
         let mut counts = (0i64, 0i64, 0i64, 0i64, 0i64);
         if let Ok(mut stmt) = db.prepare(
             "SELECT f.review_state, f.exported_path
@@ -523,19 +1043,71 @@ pub(crate) async fn local_status(State(app): State<App>) -> ApiResult<Json<Value
                 }
             }
         }
-        (cfg.root, ytdlp_ready, counts.0, counts.1, counts.2, counts.3, counts.4)
+        let history_count: i64 = db
+            .query_row("SELECT COUNT(*) FROM workspace_export_history", [], |r| r.get(0))
+            .unwrap_or(0);
+        (cfg.root, cfg.downloader, counts.0, counts.1, counts.2, counts.3, counts.4, history_count)
     };
-    let exports = exports_dir(&app).to_string_lossy().into_owned();
+    let exports_path = exports_dir(&app);
+    let thumb_path = app.media.join("thumbnail-cache");
+    let src_root_clone = source_root.clone();
+    let dl_clone = downloader.clone();
+    let exp_clone = exports_path.clone();
+
+    let probed = tokio::task::spawn_blocking(move || {
+        let ffmpeg_path = find_ffmpeg();
+        let ffprobe_path = find_ffprobe();
+        let gallery_dl_path = find_gallery_dl();
+        let ytdlp_path = (!dl_clone.is_empty() && Path::new(&dl_clone).is_file())
+            .then(|| PathBuf::from(&dl_clone));
+        let ffmpeg_ver = cached_ffmpeg_version();
+        let ytdlp_ver = ytdlp_path.as_deref().and_then(cached_ytdlp_version);
+        let (exports_bytes, exports_files) = dir_stats(&exp_clone, 2);
+        let (thumb_bytes, thumb_files) = dir_stats(&thumb_path, 2);
+        let (sources_bytes, sources_files) = if !src_root_clone.is_empty() {
+            dir_stats(Path::new(&src_root_clone), 4)
+        } else {
+            (0, 0)
+        };
+        json!({
+            "ffmpeg_ready": ffmpeg_path.is_some(),
+            "ffprobe_ready": ffprobe_path.is_some(),
+            "ytdlp_ready": ytdlp_path.is_some(),
+            "gallery_dl_ready": gallery_dl_path.is_some(),
+            "tools": {
+                "ffmpeg": { "ready": ffmpeg_path.is_some(), "path": ffmpeg_path.map(|p| p.to_string_lossy().into_owned()), "version": ffmpeg_ver },
+                "ffprobe": { "ready": ffprobe_path.is_some(), "path": ffprobe_path.map(|p| p.to_string_lossy().into_owned()) },
+                "ytdlp": { "ready": ytdlp_path.is_some(), "path": ytdlp_path.map(|p| p.to_string_lossy().into_owned()), "version": ytdlp_ver },
+                "gallery_dl": { "ready": gallery_dl_path.is_some(), "path": gallery_dl_path.map(|p| p.to_string_lossy().into_owned()) },
+            },
+            "storage": {
+                "sources_bytes": sources_bytes,
+                "sources_files": sources_files,
+                "exports_bytes": exports_bytes,
+                "exports_files": exports_files,
+                "thumb_cache_bytes": thumb_bytes,
+                "thumb_cache_files": thumb_files,
+            }
+        })
+    })
+    .await
+    .map_err(internal)?;
+
     Ok(Json(json!({
-        "ffmpeg_ready": ffmpeg_ready,
-        "ytdlp_ready": ytdlp_ready,
+        "ffmpeg_ready": probed["ffmpeg_ready"],
+        "ffprobe_ready": probed["ffprobe_ready"],
+        "ytdlp_ready": probed["ytdlp_ready"],
+        "gallery_dl_ready": probed["gallery_dl_ready"],
+        "tools": probed["tools"],
+        "storage": probed["storage"],
         "source_root": source_root,
-        "exports_dir": exports,
+        "exports_dir": exports_path.to_string_lossy(),
         "film_roll_total": total,
         "pending_count": pending,
         "approved_count": approved,
         "hold_count": hold,
         "exported_count": exported,
+        "export_history_count": history_count,
     })))
 }
 
@@ -560,6 +1132,9 @@ pub(crate) async fn channel_profiles(State(app): State<App>) -> Response {
         for (id, name, platform) in rows.flatten() {
             out.push(json!({
                 "profile_id": format!("profile-{id}"),
+                "db_id": id,
+                "name": name,
+                "platform": platform,
                 "channel_alias": format!("@{name} ({platform})"),
                 "configured": true
             }));

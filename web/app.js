@@ -6,8 +6,10 @@ function updateFilmRollButtons(){document.querySelectorAll('.film-roll-toggle[da
 refreshFilmRoll();
 function formatDuration(s){if(!Number.isFinite(s)||s<0)return '';const n=Math.round(s),h=Math.floor(n/3600),m=Math.floor((n%3600)/60),sec=n%60;return h?`${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`:`${m}:${String(sec).padStart(2,'0')}`;}
 function applyTheme(mode){const dark=mode==='dark';document.documentElement.dataset.theme=dark?'dark':'light';localStorage.setItem('lv-theme',dark?'dark':'light');const btn=$('theme-toggle');if(btn){btn.innerHTML=dark?'☀ <span>Light</span>':'☾ <span>Dark</span>';btn.setAttribute('aria-pressed',String(dark));}}
-applyTheme(localStorage.getItem('lv-theme')||'light');
+applyTheme(localStorage.getItem('lv-theme')||'dark');
 if($('theme-toggle'))$('theme-toggle').onclick=()=>applyTheme(document.documentElement.dataset.theme==='dark'?'light':'dark');
+window.addEventListener('message',e=>{if(e.origin===location.origin&&e.data?.type==='snapmatic:theme'&&(e.data.mode==='dark'||e.data.mode==='light'))applyTheme(e.data.mode);});
+window.addEventListener('storage',e=>{if(e.key==='lv-theme'&&(e.newValue==='dark'||e.newValue==='light'))applyTheme(e.newValue);});
 let autoQueueRules=[], timerInfo={schedules:[],batch:null}, sourceCounts=new Map(), selectedSchedule=null, selectedScheduleRole='source', previewUrls=[], activeVideo=null;
 let categoryRole='destination', editingCategory=null, sourceCountGeneration=0;
 let navigationHistory=[{type:'home',value:null,categoryRole}], navigationIndex=0;

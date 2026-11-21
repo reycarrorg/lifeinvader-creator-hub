@@ -1,35 +1,35 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
-mod controller;
-mod controller_store;
-mod controller_ops;
-mod controller_worker;
+#[allow(dead_code)] mod controller;
+#[allow(dead_code)] mod controller_store;
+#[allow(dead_code)] mod controller_ops;
+#[allow(dead_code)] mod controller_worker;
 #[cfg(feature="snapmatic-hud")] mod workspace;
 #[cfg(feature="snapmatic-hud")] mod workspace_media;
 #[cfg(feature="snapmatic-hud")] mod workspace_events;
 #[cfg(feature="snapmatic-hud")] mod workspace_ledger;
 #[cfg(feature="snapmatic-hud")] mod workspace_drafts;
-#[cfg(feature="snapmatic-hud")] mod workspace_phase1;
+#[cfg(feature="snapmatic-hud")] #[allow(dead_code)] mod workspace_phase1;
 #[cfg(feature="snapmatic-hud")] mod workspace_platform_drafts;
-#[cfg(feature="snapmatic-hud")] mod workspace_nvenc;
-#[cfg(feature="snapmatic-hud")] mod workspace_phase4;
+#[cfg(feature="snapmatic-hud")] #[allow(dead_code)] mod workspace_nvenc;
+#[cfg(feature="snapmatic-hud")] #[allow(dead_code)] mod workspace_phase4;
 #[cfg(feature="snapmatic-hud")] mod workspace_triage;
 #[cfg(feature="snapmatic-hud")] mod workspace_film_roll;
 #[cfg(feature="snapmatic-hud")] mod workspace_tiktok_export;
 #[cfg(feature="snapmatic-hud")] mod controller_tiktok_inbox;
-#[cfg(windows)] mod controller_youtube;
-#[cfg(windows)] mod controller_instagram;
-mod controller_registry;
-mod controller_source;
-mod controller_proof;
-mod controller_receipt;
-mod controller_clip;
-mod controller_admission;
-mod controller_supervisor;
-mod controller_manual;
-mod controller_ui_lifetime;
-mod controller_candidate;
-#[cfg(windows)] mod controller_native_process;
-#[cfg(windows)] mod controller_native_launcher;
+#[cfg(windows)] #[allow(dead_code)] mod controller_youtube;
+#[cfg(windows)] #[allow(dead_code)] mod controller_instagram;
+#[allow(dead_code)] mod controller_registry;
+#[allow(dead_code)] mod controller_source;
+#[allow(dead_code)] mod controller_proof;
+#[allow(dead_code)] mod controller_receipt;
+#[allow(dead_code)] mod controller_clip;
+#[allow(dead_code)] mod controller_admission;
+#[allow(dead_code)] mod controller_supervisor;
+#[allow(dead_code)] mod controller_manual;
+#[allow(dead_code)] mod controller_ui_lifetime;
+#[allow(dead_code)] mod controller_candidate;
+#[cfg(windows)] #[allow(dead_code)] mod controller_native_process;
+#[cfg(windows)] #[allow(dead_code)] mod controller_native_launcher;
 
 use axum::{
     Json, Router,
@@ -62,7 +62,7 @@ mod queue;
 mod scheduler;
 mod source;
 mod tools;
-mod thumbnail_cache;
+#[allow(dead_code)] mod thumbnail_cache;
 
 type Db = Arc<Mutex<Connection>>;
 #[derive(Clone)]
@@ -70,6 +70,7 @@ struct App {
     db: Db,
     media: PathBuf,
     log_dir: PathBuf,
+    #[allow(dead_code)]
     cache_scope: String,
     controller_ui: Arc<controller_ui_lifetime::Lifetime>,
     controller_catalog: Option<Arc<controller_source::Catalog>>,
@@ -796,6 +797,7 @@ async fn owner_review_policy(request: axum::extract::Request,next:axum::middlewa
         ||target.starts_with("/api/bridge/");
     let workspace_local=lifeinvader_local||target=="/api/workspace/publish"
         ||target=="/api/workspace/film-roll"||target.starts_with("/api/workspace/film-roll/")
+        ||target=="/api/workspace/thumbnail-cache/clear"
         ||target=="/api/workspace/triage"||target=="/api/controller/ui-lifetime"
         ||(target.starts_with("/api/clips/")&&(target.ends_with("/draft")||target.ends_with("/platform-draft")));
     if target.starts_with("/api/")&&((request.method()!=axum::http::Method::GET&&request.method()!=axum::http::Method::HEAD&&!workspace_local)
@@ -913,11 +915,11 @@ async fn update(
     Ok(StatusCode::NO_CONTENT)
 }
 async fn index() -> Html<String> {
-    let source=include_str!("../web/index.html");
+    let _source=include_str!("../web/index.html");
     #[cfg(feature="snapmatic-hud")]
     return Html(r#"<meta http-equiv="refresh" content="0;url=/workspace?view=studio"><a href="/workspace?view=studio">Open Snapmatic Studio</a>"#.to_owned());
     #[cfg(not(feature="snapmatic-hud"))]
-    Html(source.replace(r#"<a href="/workspace">Film Roll</a>"#,""))
+    Html(_source.replace(r#"<a href="/workspace">Film Roll</a>"#,""))
 }
 async fn css() -> impl IntoResponse {
     (
