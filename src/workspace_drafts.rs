@@ -16,7 +16,7 @@ fn ok(d:Option<Draft>)->Response{
     ([(axum::http::header::CACHE_CONTROL,"no-store")],Json(json!({"draft":d}))).into_response()
 }
 fn origin(h:&HeaderMap)->bool{
-    h.get("origin").and_then(|x|x.to_str().ok())==Some("http://127.0.0.1:3847")
+    h.get("origin").and_then(|x|x.to_str().ok()).is_some_and(|o|o=="http://127.0.0.1"||o.starts_with("http://127.0.0.1:"))
 }
 impl Draft {
     fn valid(&self)->bool {
@@ -30,7 +30,8 @@ impl Draft {
 fn access(app:&App,id:&str,write:Option<Draft>)->Result<Option<Draft>,StatusCode>{
     let indexed=media::hex(id);
     if indexed {
-        if !media::index(app).map_err(|_|StatusCode::SERVICE_UNAVAILABLE)?.iter().any(|r|
+        let in_film_roll=crate::workspace_film_roll::exists(app,id);
+        if !in_film_roll && !media::index(app).map_err(|_|StatusCode::SERVICE_UNAVAILABLE)?.iter().any(|r|
             r["clip_id"].as_str()==Some(id) && r["preview_available"]==true){return Err(StatusCode::NOT_FOUND);}
     }else if !uuid::Uuid::parse_str(id).is_ok_and(|u|u.to_string()==id){return Err(StatusCode::NOT_FOUND);}
     let db=app.db.lock().map_err(|_|StatusCode::SERVICE_UNAVAILABLE)?;

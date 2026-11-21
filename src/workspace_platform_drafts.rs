@@ -44,9 +44,12 @@ fn cover_allowed_with_facts(c:&Cover,media_hash:&str,facts:&Value)->bool{
 }
 fn access(app:&App,id:&str,mut draft:Option<PlatformDraft>)->Result<Option<PlatformDraft>,StatusCode>{
     let unavailable=StatusCode::SERVICE_UNAVAILABLE;let missing=StatusCode::NOT_FOUND;
-    if !active_scope(app){return Err(missing);}
+    let in_film_roll=media::hex(id)&&crate::workspace_film_roll::exists(app,id);
+    if !in_film_roll && !active_scope(app){return Err(missing);}
     let original=media::hex(id);
-    let source=if original {
+    let source=if in_film_roll {
+        Some(id.to_owned())
+    } else if original {
         Some(media::index(app).map_err(|_|unavailable)?.into_iter().find(|r|
             r["clip_id"]==id&&r["state"]=="pending_review"&&r["preview_available"]==true)
             .and_then(|r|r["preview_sha256"].as_str().filter(|s|media::hex(s)).map(str::to_owned)).ok_or(missing)?)
@@ -59,7 +62,12 @@ fn access(app:&App,id:&str,mut draft:Option<PlatformDraft>)->Result<Option<Platf
         j.preview_sha256.filter(|v|media::hex(v)).ok_or(missing)?
     };
     if let Some(d)=draft.take(){
-        if !valid(&d)||d.media_sha256!=hash||d.cover.as_ref().is_some_and(|c|!cover_allowed(c,&hash)){
+        let cover_ok=match &d.cover {
+            None=>true,
+            Some(c) if in_film_roll=>c.trim_start_ms<c.trim_end_ms&&c.trim_end_ms<=86_400_000&&c.frame_ms<=c.trim_end_ms&&c.frame_ms.checked_sub(c.trim_start_ms)==Some(c.thumb_offset_ms),
+            Some(c)=>cover_allowed(c,&hash),
+        };
+        if !valid(&d)||d.media_sha256!=hash||!cover_ok{
             return Err(StatusCode::UNPROCESSABLE_ENTITY);
         }
         let raw=serde_json::to_string(&d).map_err(|_|unavailable)?;
@@ -86,7 +94,7 @@ async fn run(app:App,id:String,draft:Option<PlatformDraft>)->Response{
 }
 pub(crate) async fn read(State(app):State<App>,Path(id):Path<String>)->Response{run(app,id,None).await}
 pub(crate) async fn save(State(app):State<App>,Path(id):Path<String>,h:HeaderMap,Json(d):Json<PlatformDraft>)->Response{
-    if h.get("origin").and_then(|v|v.to_str().ok())!=Some("http://127.0.0.1:3847"){
+    if !h.get("origin").and_then(|v|v.to_str().ok()).is_some_and(|o|o=="http://127.0.0.1"||o.starts_with("http://127.0.0.1:")){
         return (StatusCode::FORBIDDEN,Json(json!({"reason":"local_origin_required"}))).into_response();
     }
     run(app,id,Some(d)).await

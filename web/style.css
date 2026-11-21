@@ -99,6 +99,9 @@
 .film-roll-toggle{border:1px solid #d9d3df;background:#f7f4fa;color:#2e2836;border-radius:6px;padding:3px 8px;font-size:10px;font-weight:700}
 .film-roll-toggle:hover{border-color:#ee386e;color:#ee386e}
 .film-roll-toggle.in-roll{background:#e7f6ee;border-color:#5eb984;color:#1b6d3f}
+.open-studio-btn{border:1px solid #d5e6f5;background:#eef6fd;color:#1a6396;border-radius:6px;padding:3px 8px;font-size:10px;font-weight:700}
+.open-studio-btn:hover{border-color:#29B6F6;color:#0e4f7d}
+html[data-theme="dark"] .open-studio-btn{background:#122536;border-color:#29B6F6;color:#78daff}
 html[data-theme="dark"] .film-roll-toggle{background:#1A202A;border-color:#303B4A;color:#EAF4FD}
 html[data-theme="dark"] .film-roll-toggle:hover{border-color:#29B6F6;color:#29B6F6}
 html[data-theme="dark"] .film-roll-toggle.in-roll{background:#113328;border-color:#34c77b;color:#7ef2b3}

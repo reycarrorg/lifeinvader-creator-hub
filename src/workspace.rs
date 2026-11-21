@@ -16,8 +16,13 @@ pub fn routes(app:App)->Router<App>{
         .route("/workspace-preflight.js",get(||async{([(header::CONTENT_TYPE,"text/javascript; charset=utf-8")],include_str!("../web/workspace-preflight.js"))}))
         .route("/api/workspace/media-facts",get(||async{([(header::CONTENT_TYPE,"application/json"),(header::CACHE_CONTROL,"no-store")],include_str!("../web/workspace-media-facts.json"))}))
         .route("/api/workspace",get(data))
+        .route("/api/workspace/local-status",get(crate::workspace_film_roll::local_status))
         .route("/api/workspace/film-roll",get(crate::workspace_film_roll::list).post(crate::workspace_film_roll::add))
+        .route("/api/workspace/film-roll/clear",post(crate::workspace_film_roll::clear))
+        .route("/api/workspace/film-roll/open-exports",post(crate::workspace_film_roll::open_exports))
         .route("/api/workspace/film-roll/{id}",axum::routing::delete(crate::workspace_film_roll::remove))
+        .route("/api/workspace/film-roll/{id}/state",post(crate::workspace_film_roll::set_state))
+        .route("/api/workspace/film-roll/{id}/export",get(crate::workspace_film_roll::stream_export).head(crate::workspace_film_roll::stream_export).post(crate::workspace_film_roll::export_clip))
         .route("/api/workspace/intake",get(phase4_state))
         .route("/api/workspace/tiktok/export/{id}",get(crate::workspace_tiktok_export::status).post(crate::workspace_tiktok_export::export).layer(axum::extract::DefaultBodyLimit::max(5*1024*1024)))
         .route("/api/workspace/tiktok/export-folder",post(crate::workspace_tiktok_export::open_folder))
@@ -29,7 +34,7 @@ pub fn routes(app:App)->Router<App>{
         .route("/api/workspace/open-backup",post(crate::workspace_drafts::open_backup))
         .route("/api/workspace/triage",get(crate::workspace_triage::read).post(crate::workspace_triage::write)
             .layer(axum::extract::DefaultBodyLimit::max(8192)))
-        .route("/api/workspace/channel-profiles",get(crate::workspace_phase1::channel_profiles))
+        .route("/api/workspace/channel-profiles",get(crate::workspace_film_roll::channel_profiles))
         .route("/api/workspace/restore/{kind}",post(crate::workspace_phase1::restore_open))
         .route("/api/workspace/diagnostics",post(crate::workspace_phase1::export))
         .route("/api/workspace/ledger",get(ledger)).route("/api/workspace/system",get(system))
@@ -65,11 +70,12 @@ async fn ledger(State(app):State<App>)->Response{
 async fn system(State(app):State<App>)->Response{
     let db=match app.db.lock(){Ok(v)=>v,Err(_)=>return safe_error(store::Error("storage_unavailable"))};
     let cfg=crate::source::config(&db).ok();
-    let drive=cfg.as_ref().is_some_and(|v|v.root==crate::source::DRIVE_SOURCE_ROOT);
+    let root=cfg.as_ref().map(|v|v.root.clone()).filter(|s|!s.is_empty());
+    let exports=crate::workspace_film_roll::exports_dir(&app).to_string_lossy().into_owned();
     no_store(json!({"schema":"snapmatic-system-v1","loopback_only":true,"publishing_enabled":false,"cleanup_enabled":false,
-        "preview_mode":"strict SQLite clip ID / pinned media","workers_in_eta_mode":false,
-        "source_path":if drive{Some(crate::source::DRIVE_SOURCE_ROOT)}else{None},
-        "backup_path":if drive{Some(r"Z:\SnapmaticReview\Local Media\Posted Clips Backup")}else{None}}))
+        "preview_mode":"local source & Film Roll references","workers_in_eta_mode":false,
+        "source_path":root,
+        "backup_path":Some(exports)}))
 }
 fn safe_error(e:store::Error)->Response{
     (StatusCode::SERVICE_UNAVAILABLE,Json(json!({"reason":e.0}))).into_response()
