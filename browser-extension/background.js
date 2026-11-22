@@ -67,15 +67,53 @@ async function ensurePinnedGroupDmTab(activate = false) {
   return await chrome.tabs.create({ url: GROUP_DM_URL, pinned: true, active: activate });
 }
 
+async function submitDiscoveredLinks(links, groupName, manual = false) {
+  const cfg = await chrome.storage.local.get(['dm_seen_links']);
+  const seen = new Set(Array.isArray(cfg.dm_seen_links) ? cfg.dm_seen_links : []);
+  const unique = Array.from(new Set(links || []));
+  const fresh = unique.filter(u => !seen.has(u));
+  if (!fresh.length) {
+    const msg = `Synced ${groupName} (${unique.length} post${unique.length === 1 ? '' : 's'} visible · up to date).`;
+    await chrome.storage.local.set({ dm_last_status: msg });
+    return { status: msg, sent: 0 };
+  }
+  try {
+    const resp = await fetch(BASE_BRIDGE + '/group-dm', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ links: fresh, mode: 'both' }),
+    });
+    if (resp.status === 409) {
+      const msg = 'Snapmatic is busy syncing another source — retrying shortly.';
+      await chrome.storage.local.set({ dm_last_status: msg });
+      return { status: msg };
+    }
+    if (!resp.ok) {
+      const txt = (await resp.text()).slice(0, 140);
+      const msg = `Snapmatic returned HTTP ${resp.status}: ${txt}`;
+      await chrome.storage.local.set({ dm_last_status: msg });
+      return { status: msg };
+    }
+    for (const u of fresh) seen.add(u);
+    const trimmedSeen = Array.from(seen).slice(-2000);
+    const msg = `Downloading ${fresh.length} new post${fresh.length === 1 ? '' : 's'} → Film Roll!`;
+    await chrome.storage.local.set({ dm_seen_links: trimmedSeen, dm_last_status: msg });
+    return { status: msg, sent: fresh.length };
+  } catch {
+    const msg = 'Open Snapmatic app (127.0.0.1:3847) to download.';
+    await chrome.storage.local.set({ dm_last_status: msg });
+    return { status: msg };
+  }
+}
+
 async function runGroupDmSync(manual = false) {
   if (dmWorking) return { status: 'Already syncing Group DM…' };
   dmWorking = true;
   try {
-    const cfg = await chrome.storage.local.get(['dm_enabled', 'dm_group_name', 'dm_seen_links']);
+    const cfg = await chrome.storage.local.get(['dm_enabled', 'dm_group_name']);
     const enabled = cfg.dm_enabled !== false;
     if (!enabled && !manual) return { status: 'Group DM Auto-Sync is paused.' };
     const groupName = (cfg.dm_group_name || DEFAULT_GROUP_NAME).trim() || DEFAULT_GROUP_NAME;
-    const seen = new Set(Array.isArray(cfg.dm_seen_links) ? cfg.dm_seen_links : []);
 
     const tabs = await findMessageTabs();
     if (!tabs.length) {
@@ -90,7 +128,7 @@ async function runGroupDmSync(manual = false) {
     const results = await chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: true },
       func: scanGroupDmLinks,
-      args: [groupName],
+      args: [groupName, manual],
     });
 
     const allLinks = new Set();
@@ -118,37 +156,8 @@ async function runGroupDmSync(manual = false) {
       return { status: msg };
     }
 
-    const links = Array.from(allLinks);
-    const fresh = links.filter(u => !seen.has(u));
-    if (!fresh.length) {
-      const msg = `Synced ${groupName} (${links.length} post${links.length === 1 ? '' : 's'} visible · up to date).`;
-      await chrome.storage.local.set({ dm_last_status: msg });
-      return { status: msg };
-    }
-
-    const resp = await fetch(BASE_BRIDGE + '/group-dm', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ links: fresh, mode: 'both' }),
-    });
-    if (resp.status === 409) {
-      const msg = 'Snapmatic is busy syncing another source — will retry in 1 min.';
-      await chrome.storage.local.set({ dm_last_status: msg });
-      return { status: msg };
-    }
-    if (!resp.ok) {
-      const txt = (await resp.text()).slice(0, 140);
-      const msg = `Snapmatic returned HTTP ${resp.status}: ${txt}`;
-      await chrome.storage.local.set({ dm_last_status: msg });
-      return { status: msg };
-    }
-
-    for (const u of fresh) seen.add(u);
-    const trimmedSeen = Array.from(seen).slice(-2000);
-    const msg = `Sent ${fresh.length} new post${fresh.length === 1 ? '' : 's'} from ${groupName} to Snapmatic → Film Roll!`;
-    await chrome.storage.local.set({ dm_seen_links: trimmedSeen, dm_last_status: msg });
-    return { status: msg, sent: fresh.length };
-  } catch (e) {
+    return await submitDiscoveredLinks(Array.from(allLinks), groupName, manual);
+  } catch {
     const msg = 'Snapmatic app not running on 127.0.0.1:3847 (open Snapmatic to sync).';
     await chrome.storage.local.set({ dm_last_status: msg });
     return { status: msg };
@@ -181,4 +190,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === 'poll') { runProfileBridge(); sendResponse({ ok: true }); }
   if (msg?.type === 'sync_dm') { runGroupDmSync(true).then(sendResponse); return true; }
   if (msg?.type === 'pin_dm') { ensurePinnedGroupDmTab(true).then(() => sendResponse({ ok: true })); return true; }
+  if (msg?.type === 'dm_links_found') {
+    submitDiscoveredLinks(msg.links || [], msg.group || DEFAULT_GROUP_NAME, Boolean(msg.manual)).then(sendResponse);
+    return true;
+  }
 });
