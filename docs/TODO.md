@@ -27,6 +27,9 @@ Evidence so far includes isolated unit/smoke tests, a bounded live YouTube test-
 
 ### 1. Make the existing experience dependable
 
+- [x] Fix Snapmatic's new local-file import path and collision handling; validate importing, probing and export with synthetic clips on Windows. Existing broken import records need separate migration consideration.
+- [ ] Validate Snapmatic's local captions through the actual editor, real source media workflows and additional machines; confirm platform connections separately. The owner-review build keeps publishing disabled.
+
 - [x] Include Solo Posts in the source picker and library with original account/platform where available, and make quick-edit controls optional. Verify remaining missing metadata and carousel behavior separately.
 
 - [x] Resolve the bundled or configured FFmpeg executable for yt-dlp calls, including Instagram individual posts and source sync; test discovery and arguments using disposable data. Live platform retry remains to be confirmed.

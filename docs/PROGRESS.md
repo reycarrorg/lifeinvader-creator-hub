@@ -1,5 +1,14 @@
 # Project progress
 
+## 2026-11-21 — Snapmatic Windows setup and local imports
+
+Review: https://github.com/reycarrorg/lifeinvader-creator-hub/pull/17.
+
+- Built Andre's Snapmatic owner-review branch on Windows in a separate worktree. A local copy of an existing database and media cache was pointed to the owner's existing Drive source folder; copied automatic sync, queue and analytics schedules were disabled. The original installation was retained. The two databases do not coordinate queue or posting history.
+- Fixed Snapmatic local-file imports so their stored path resolves from the source root, the synthetic local source is accepted by the existing resolver, and importing the same filename does not overwrite an earlier file. Existing rows created by the broken importer may need a separate migration.
+- A disposable-database Windows smoke test imported two same-name synthetic videos, probed and exported them with FFmpeg, and confirmed publishing is disabled. The GUI opened and displayed existing local source files. FFmpeg, FFprobe, yt-dlp, gallery-dl and local Whisper were configured; the app's local transcription endpoint returned words for a synthetic spoken clip. No live sync or social post was performed.
+- This owner-review build has publishing locked off. Live social connections, full editor workflows including caption editing and rendering, and other machines remain unverified.
+
 ## 2026-11-19 — Shared source integration
 
 - Prepared the Mac source changes alongside the auto-queue handoff for shared review. Local macOS Rust tests passed serially (40); the default parallel run failed seven tests, tracked in ISSUES. The source-folder scan can remain busy when a Drive operation stalls; Windows validation for this revision remains outstanding. Local builds, runtime data, account records, and credentials are not included.

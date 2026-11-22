@@ -309,6 +309,9 @@ pub(crate) fn account_profile(
     if role != expected_role {
         return Err(bad("This account is not in this section."));
     }
+    if expected_role == "source" && platform == "other" && url == "https://local.snapmatic/drops" && custom == "Snapmatic Drops" {
+        return Ok((platform, url, custom));
+    }
     if expected_role == "source" && url == crate::solo::SOLO_URL {
         let folder = if custom.is_empty() {
             "Solo Posts/Downloads".into()

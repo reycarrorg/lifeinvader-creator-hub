@@ -3669,21 +3669,27 @@ pub(crate) async fn import_file(
         (sid, root)
     };
 
+    let root_dir = root_dir.canonicalize().map_err(internal)?;
     let drops_dir = root_dir.join("Snapmatic Drops");
     std::fs::create_dir_all(&drops_dir).map_err(internal)?;
+    let drops_dir = drops_dir.canonicalize().map_err(internal)?;
+    if !drops_dir.starts_with(&root_dir) { return Err((StatusCode::FORBIDDEN, "Local drop folder is outside the configured source root.".into())); }
     let stamp = chrono::Utc::now().timestamp();
-    let file_name = format!("{safe_stem}-{stamp}.{ext}");
+    let file_name = format!("{safe_stem}-{stamp}-{}.{ext}", uuid::Uuid::new_v4().simple());
     let dest = drops_dir.join(&file_name);
     let written_bytes = data.len() as u64;
-    std::fs::write(&dest, &data).map_err(internal)?;
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&dest).map_err(internal)?;
+    file.write_all(&data).map_err(internal)?;
 
-    let clip_id = stable_id(source_id, &file_name);
+    let relative_path = format!("Snapmatic Drops/{file_name}");
+    let clip_id = stable_id(source_id, &relative_path);
     {
         let db = app.db.lock().map_err(internal)?;
         db.execute(
             "INSERT OR REPLACE INTO workspace_film_roll(clip_id, source_id, path, title, description, bytes, added_at, review_state)
              VALUES(?1, ?2, ?3, ?4, '', ?5, unixepoch(), 'pending_review')",
-            params![clip_id, source_id, file_name, clean_title, written_bytes as i64],
+            params![clip_id, source_id, relative_path, clean_title, written_bytes as i64],
         )
         .map_err(internal)?;
     }
