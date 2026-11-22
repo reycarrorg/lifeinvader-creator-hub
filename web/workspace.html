@@ -11,6 +11,7 @@
   <script src="/workspace-platform-draft.js" defer></script>
   <script src="/workspace-edit.js" defer></script>
   <script src="/workspace-phase5.js" defer></script>
+  <script src="/workspace-tiktok-direct.js" defer></script>
   <script src="/workspace.js" defer></script>
   <script src="/workspace-pro.js" defer></script>
   <script src="/workspace-studio.js" defer></script>
@@ -231,7 +232,7 @@
         <div class="trim-track" id="trim-track" title="Click anywhere to seek · drag handles to trim">
           <div class="trim-filmstrip" id="trim-filmstrip"></div>
           <div class="trim-range" id="trim-range"></div>
-          <button type="button" class="trim-limit trim-limit-59" id="trim-limit-59" hidden title="Click to snap Out to 59s (Guaranteed YouTube Short)"><span>59s YT</span></button>
+          <button type="button" class="trim-limit trim-limit-59" id="trim-limit-59" hidden title="Set the end of the selected cut to 59 seconds"><span>59s YT</span></button>
           <button type="button" class="trim-limit trim-limit-89" id="trim-limit-89" hidden title="Click to snap Out to 89s (Instagram Reels Sweet Spot)"><span>89s IG</span></button>
           <div class="trim-markers" id="trim-markers"></div>
           <div class="trim-playhead" id="trim-playhead"></div>
@@ -282,7 +283,7 @@
           <section aria-labelledby="draft-head" class="space-y-3">
             <div>
               <h3 id="draft-head" class="font-display">Caption Desk</h3>
-              <p class="muted">Title, caption &amp; hashtags synced across your exports and uploads.</p>
+              <p class="muted">Choose the title, caption and hashtags to include in your exports and direct posts.</p>
             </div>
             <label>Title<input id="title" type="text" maxlength="200" placeholder="Clip title"></label>
             <label>Caption<textarea id="caption" maxlength="10000" rows="4" placeholder="Write a caption…"></textarea></label>
@@ -447,17 +448,60 @@
               <output id="ship-recipe-status" class="muted" role="status"></output>
             </div>
 
+            <section id="tt-direct" class="queue-handoff multi-ship-card" aria-labelledby="tt-direct-heading">
+              <h4 id="tt-direct-heading">TikTok Direct Post</h4>
+              <p class="muted">Review your video, caption and audience, then publish to your TikTok profile.</p>
+              <button type="button" id="tt-direct-connect" hidden>Authorize TikTok publishing</button>
+              <a id="tt-direct-auth-link" class="oauth-link" target="_blank" rel="noopener noreferrer" hidden>Open TikTok authorization</a>
+              <button type="button" id="tt-direct-review" disabled>Review TikTok post</button>
+              <div id="tt-direct-form" hidden>
+                <p id="tt-direct-account"></p>
+                <video id="tt-direct-preview" controls preload="metadata" playsinline aria-label="Video selected for TikTok"></video>
+                <p id="tt-direct-media" class="muted"></p>
+                <fieldset id="tt-direct-fields">
+                  <label>Post caption<textarea id="tt-direct-title" rows="5" aria-describedby="tt-direct-count"></textarea></label>
+                  <output id="tt-direct-count" class="muted"></output>
+                  <label>Who can view this post?
+                    <select id="tt-direct-privacy"><option value="">Choose an audience</option></select>
+                  </label>
+                  <div class="export-checks">
+                    <label class="inline-check"><input type="checkbox" id="tt-direct-comment"> Allow comments</label>
+                    <label class="inline-check"><input type="checkbox" id="tt-direct-duet"> Allow Duet</label>
+                    <label class="inline-check"><input type="checkbox" id="tt-direct-stitch"> Allow Stitch</label>
+                  </div>
+                  <label class="inline-check"><input type="checkbox" id="tt-direct-ai"> Label as AI-generated content</label>
+                  <label class="inline-check"><input type="checkbox" id="tt-direct-commercial"> Disclose commercial content</label>
+                  <div id="tt-direct-brands" hidden>
+                    <label class="inline-check"><input type="checkbox" id="tt-direct-own-brand"> Your brand</label>
+                    <label class="inline-check"><input type="checkbox" id="tt-direct-paid-brand"> Branded content for a third party</label>
+                    <p id="tt-direct-disclosure" class="muted" aria-live="polite"></p>
+                  </div>
+                  <p class="muted">By posting, you agree to TikTok’s <span id="tt-direct-paid-policy" hidden><a class="oauth-link" href="https://www.tiktok.com/legal/page/global/bc-policy/en" target="_blank" rel="noopener noreferrer">Branded Content Policy</a> and </span><a class="oauth-link" href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noopener noreferrer">Music Usage Confirmation</a>.</p>
+                  <label class="inline-check"><input type="checkbox" id="tt-direct-consent"> I agree and authorize publishing this video with these settings.</label>
+                </fieldset>
+                <button type="button" id="tt-direct-publish" class="vice-btn-primary" disabled>Publish to TikTok</button>
+                <button type="button" id="tt-direct-check" hidden>Check post status</button>
+                <a id="tt-direct-post-link" class="oauth-link" target="_blank" rel="noopener noreferrer" hidden>Open TikTok post</a>
+              </div>
+              <p id="tt-direct-status" class="muted" role="status"></p>
+              <details>
+                <summary>Finish a draft in the TikTok mobile app</summary>
+                <p class="muted">Inbox uploads send the video only. Add the post caption on your phone.</p>
+                <button type="button" id="tt-upload-draft" disabled>Send to TikTok Inbox</button>
+                <output id="tt-upload-result" class="muted" role="status"></output>
+              </details>
+            </section>
+
             <div class="queue-handoff multi-ship-card" id="multi-ship-card">
-              <h4>One-Click Ship to Multiple Platforms</h4>
+              <h4>Publish to connected accounts</h4>
               <div class="multi-ship-checks">
-                <label class="inline-check"><input type="checkbox" id="ship-chk-yt"> YouTube Shorts (<select id="yt-draft-privacy" aria-label="YouTube privacy"><option value="private" selected>Private</option><option value="unlisted">Unlisted</option></select>)</label>
-                <label class="inline-check"><input type="checkbox" id="ship-chk-ig"> Instagram (<select id="ship-ig-mode" aria-label="Instagram ship mode"><option value="container">Test Container</option><option value="publish">Publish Live</option></select>)</label>
-                <label class="inline-check"><input type="checkbox" id="ship-chk-tt"> TikTok Inbox Draft</label>
+                <label class="inline-check"><input type="checkbox" id="ship-chk-yt"> YouTube Shorts (Public)</label>
+                <label class="inline-check"><input type="checkbox" id="ship-chk-ig" disabled> Instagram Reel</label>
+                <label class="inline-check"><input type="checkbox" id="ship-chk-tt" disabled> TikTok Direct Post <small id="ship-tt-access"></small></label>
                 <label class="inline-check"><input type="checkbox" id="ship-chk-x"> X Video Post (Live)</label>
               </div>
               <div class="export-btn-row">
-                <button type="button" id="multi-ship-go" class="vice-btn-primary" disabled>Ship Selected Platforms</button>
-                <button type="button" id="multi-ship-retry" hidden>↻ Retry Failed</button>
+                <button type="button" id="multi-ship-go" class="vice-btn-primary" disabled>Publish to selected accounts</button>
               </div>
               <ul id="multi-ship-log" class="multi-ship-log" hidden></ul>
             </div>
@@ -531,7 +575,7 @@
       </div>
       <div class="eyebrow">04 / EXPORTS &amp; RECEIPTS</div>
       <h1 class="font-display vice-heading">Exports &amp; Receipts</h1>
-      <p>Every local MP4 export rendered from Viewfinder Studio, plus verified provider receipts. Public auto-posting remains disabled.</p>
+      <p>Local MP4 exports from Viewfinder Studio and receipts for submitted uploads.</p>
     </div>
     <div class="searchbar panel p-4">
       <label>Filter exports &amp; receipts <input id="ledger-search" type="search" placeholder="Clip, source, framing, filename, or SHA"></label>
@@ -589,7 +633,7 @@
 
     <section class="panel oauth-section" aria-label="Connect social accounts">
       <h2 class="font-display">Connect Accounts</h2>
-      <p class="muted">OAuth tokens and client secrets are stored natively in Windows Credential Manager — never sent anywhere except Google, Meta, TikTok, or X directly from your PC. Public auto-posting stays locked off.</p>
+      <p class="muted">OAuth tokens and client secrets are stored natively in Windows Credential Manager — never sent anywhere except Google, Meta, TikTok, or X directly from your PC. You choose the destination accounts before publishing.</p>
       <div class="oauth-grid">
         <div class="oauth-card platform-card-yt" id="oauth-card-yt">
           <header><strong class="oauth-title" id="yt-oauth-title">YouTube</strong><span id="yt-oauth-badge" class="flag warn">CHECKING…</span></header>
@@ -658,12 +702,12 @@
           </div>
           <a id="tt-auth-link" class="oauth-link" target="_blank" rel="noopener noreferrer" hidden>Open TikTok sign-in link manually ↗</a>
           <details id="tt-oauth-setup">
-            <summary>TikTok Developer Setup (Desktop Sandbox)</summary>
+            <summary>TikTok developer setup</summary>
             <ol class="oauth-steps">
-              <li>Open <a class="oauth-link" href="https://developers.tiktok.com/" target="_blank" rel="noopener noreferrer">TikTok for Developers ↗</a> → <strong>Manage apps</strong> → create an app and switch it to <strong>Sandbox</strong> mode (no public audit needed for your own account).</li>
-              <li>Add products: <strong>Login Kit</strong> (Desktop), <strong>Display API</strong>, and <strong>Content Posting API</strong> (enable Inbox / Share draft upload).</li>
-              <li>Under <strong>Login Kit → Desktop → Redirect URI</strong>, add the exact URI below, and add your TikTok account under <strong>Sandbox → Target Users</strong>.</li>
-              <li>Paste your Sandbox <strong>Client Key</strong> and <strong>Client Secret</strong> below, save, then click <strong>Connect TikTok</strong>.</li>
+              <li>In <a class="oauth-link" href="https://developers.tiktok.com/" target="_blank" rel="noopener noreferrer">TikTok for Developers</a>, enable Login Kit for desktop and the Content Posting API for your app.</li>
+              <li>Enable Direct Post and request <code>video.publish</code> for publishing. Keep <code>video.upload</code> for Inbox drafts. Register the exact redirect URI below.</li>
+              <li>For sandbox testing, add your test account as a target user. Public posting requires TikTok’s Direct Post audit.</li>
+              <li>Save the app credentials, then use <strong>Upload → TikTok Direct Post → Authorize TikTok publishing</strong> to grant publishing access.</li>
             </ol>
             <div class="oauth-uri-row"><code id="tt-redirect-uri">http://127.0.0.1:3847/api/oauth/tiktok/callback</code><button type="button" id="tt-copy-uri">Copy URI</button></div>
             <div class="export-grid">
@@ -744,7 +788,7 @@
       <section class="panel system-panel">
         <h2 class="font-display">Safety lock</h2>
         <p class="posting-lock">AUTO-POSTING: OFF</p>
-        <p>Public publishing and automatic posting are disabled at the server. YouTube draft uploads are strictly <strong>Private</strong>.</p>
+        <p>Ship requests <strong>Public</strong> visibility for YouTube Shorts after you confirm the selected channel and video. YouTube reports the final visibility and determines Shorts placement.</p>
         <p>Loopback only (127.0.0.1) · credentials stay in Windows Credential Manager.</p>
       </section>
       <section class="panel system-panel">

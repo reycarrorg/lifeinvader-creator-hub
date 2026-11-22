@@ -102,10 +102,18 @@ function renderUploadReadiness() {
  const h264Ok = row.exported || !vCodec || vCodec === 'h264';
  const sizeMiB = (row.preview_bytes || 0) / 1048576;
 
+ const previewDuration = Number(v?.duration);
+ const previewKnown = Number.isFinite(previewDuration) && previewDuration > 0 && w > 0 && h > 0 && sizeMiB > 0;
+ const ytEligible = !row.exported && previewKnown && previewDuration <= 180 && h >= w && sizeMiB <= 250;
+ const ytHint = row.exported ? 'The selected export is verified before upload.' :
+  !previewKnown ? 'Duration and dimensions will be verified before upload.' :
+  previewDuration > 180 ? 'Trim to 3 minutes or less and export.' :
+  h < w ? 'Export a square or vertical MP4.' : sizeMiB > 250 ? 'Export an MP4 of 250 MiB or less.' :
+  'Preview fits Shorts requirements (' + previewDuration.toFixed(1) + 's).';
  const checks = [
-  { id: 'youtube', name: 'YouTube Shorts', ok: durS <= 60 && vertical && sizeMiB <= 250, warn: durS > 60 && durS <= 180 && vertical && sizeMiB <= 250, msg: durS > 180 ? 'Over 180s (regular video)' : !vertical ? 'Landscape — Export MP4 auto-crops 9:16' : durS > 60 ? '3-min Short (' + durS.toFixed(0) + 's) — trim ≤59s for guaranteed Shorts' : 'Guaranteed Short (' + durS.toFixed(1) + 's · 9:16)' },
+  { id: 'youtube', name: 'YouTube Shorts', ok: ytEligible, warn: row.exported || !previewKnown, msg: ytHint },
   { id: 'instagram', name: 'Instagram Reels', ok: durS <= 90 && vertical && h264Ok, warn: durS > 90 && durS <= 180, msg: !h264Ok ? 'Codec ' + vCodec + ' — auto-optimized on export' : durS > 90 ? 'Over 90s (' + durS.toFixed(0) + 's) — recommend ≤89s' : !vertical ? 'Export MP4 auto-crops 9:16' : 'Ready (' + durS.toFixed(1) + 's · H.264)' },
-  { id: 'tiktok', name: 'TikTok Inbox', ok: durS <= 600 && h264Ok, msg: !h264Ok ? 'Export H.264 MP4 recommended' : 'Ready (' + durS.toFixed(1) + 's)' },
+  { id: 'tiktok', name: 'TikTok Direct Post', ok: h264Ok, msg: !h264Ok ? 'Export H.264 MP4 recommended' : 'Review account limits and audience before posting' },
   { id: 'x', name: 'X Video', ok: durS <= 140 && h264Ok, msg: durS > 140 ? 'Over 140s X free-tier limit (' + durS.toFixed(0) + 's)' : 'Ready (' + durS.toFixed(1) + 's · ' + app().xPostText().length + '/280 chars)' },
  ];
  grid.replaceChildren(...checks.map(c => {
@@ -127,7 +135,7 @@ if ($('upload-shorts-cut-btn')) $('upload-shorts-cut-btn').onclick = () => {
  const row = app().getSelected(), es = app().getEditState();
  if (!row?.from_sources || !es) return;
  app().setTrim('out', Math.min(es.duration_ms, (es.in_ms || 0) + 59000));
- app().note('Trimmed clip to guaranteed ≤59s YouTube Short and starting export…');
+ app().note('Trimmed the selection to 59 seconds for export.');
  $('edit-transcode')?.click();
 };
 if ($('upload-reels-cut-btn')) $('upload-reels-cut-btn').onclick = () => {
@@ -294,7 +302,7 @@ function bindTrimLimitSnap(id, secs, label) {
   app().note('Snapped Out handle to ' + label + ' (' + app().time(targetOut / 1000) + ').');
  });
 }
-bindTrimLimitSnap('trim-limit-59', 59, '59s YouTube Short sweet-spot');
+bindTrimLimitSnap('trim-limit-59', 59, '59-second cut');
 bindTrimLimitSnap('trim-limit-89', 89, '89s Instagram Reels sweet-spot');
 
 // 8. Drag-and-Drop Local Video Intake Into Viewfinder (+ Drop MP4 button)
@@ -350,7 +358,8 @@ if (dropZone) {
 if ($('ship-recipe-go')) $('ship-recipe-go').onclick = async () => {
  const row = app().getSelected(), btn = $('ship-recipe-go'), st = $('ship-recipe-status');
  if (!row?.from_sources || btn.disabled) return;
- btn.disabled = true;
+ const intent = app().shipIntent();
+ app().setRecipePreparing(true);
  try {
   if ($('recipe-autoformat')?.checked) {
    if (st) st.textContent = '1/3 Auto-formatting title & hashtags…';
@@ -380,16 +389,15 @@ if ($('ship-recipe-go')) $('ship-recipe-go').onclick = async () => {
     return;
    }
   }
-  if (st) st.textContent = '3/3 Shipping to selected platforms…';
-  startUploadPoll();
-  const res = await app().runMultiShip();
-  if (st) {
-   if (res?.cancelled) st.textContent = 'Ship cancelled before live publish.';
-   else st.textContent = '✓ Ship Recipe done: ' + (res?.okCount || 0) + '/' + (res?.total || 0) + ' platform(s) succeeded.';
+  if (app().getSelected()?.clip_id !== row.clip_id || app().shipIntent() !== intent) {
+   if (st) st.textContent = 'The clip or destination accounts changed. Review your selection again.';
+   return;
   }
+  if (st) st.textContent = 'Reviewing the video and selected accounts.';
+  const result = await app().runMultiShip({fromRecipe:true, expectedIntent:intent});
+  if (st) st.textContent = result.summary;
  } finally {
-  stopUploadPoll();
-  app().syncYoutubeDraftButton();
+  app().setRecipePreparing(false);
  }
 };
 

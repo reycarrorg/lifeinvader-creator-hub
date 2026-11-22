@@ -1,5 +1,11 @@
 # Known issues and planned work
 
+## Open — Verify live publication on creator accounts
+
+Native Direct Post requires TikTok's `video.publish` approval and a creator grant. Unaudited apps are limited to private tests. A processing receipt can precede a publicly available post ID. When an upload has an uncertain outcome, check the destination before trying to post again. [TikTok sharing guidelines](https://developers.tiktok.com/docs/en/content-sharing-guidelines)
+
+The YouTube upload API returns video visibility. The app verifies Shorts eligibility using the submitted file. YouTube makes the final format classification. Verify the first authorized public upload in Studio’s Shorts tab. [YouTube Shorts eligibility](https://support.google.com/youtube/answer/15424877)
+
 ## Open — Solo Post metadata and picker coverage
 
 The picker and library hide an image only when its filename stem and post ID match a Solo video; other image files remain selectable, including possible unmatched thumbnails. Original account, platform and dates depend on the saved metadata; missing fields can remain unknown. Solo downloads use a separate archive and can duplicate downloads from other source archives. Multi-asset carousels are not yet represented as one post. The quick-editor visibility setting is stored in browser-local storage, so it may differ between browsers.

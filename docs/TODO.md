@@ -1,5 +1,10 @@
 # Shared to-do and project agenda
 
+## Snapmatic public publishing
+
+- Configure the hosted token exchange for creator installations, complete TikTok's Direct Post audit, and verify the first approved public post with its creator.
+- Verify a public YouTube upload in the channel's Shorts tab and confirm that the Reel and X receipts link to the intended accounts.
+
 Last reviewed: 2026-11-18. This is a working agenda for both collaborators and their AI assistants. It records the owner's current direction, not a requirement that every fork look or work the same way. Your own ideas, channels, platforms and design changes are welcome. Agree on shared behavior before merging changes that affect both installations.
 
 Use the boxes for **future work**, not as a claim that a feature is finished. Priorities are a suggested order and can change. Check the code, `PROGRESS.md`, `ISSUES.md` and recent pull requests before starting: this list is a handoff, not a substitute for the current repository.

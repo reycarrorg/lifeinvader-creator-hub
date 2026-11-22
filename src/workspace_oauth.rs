@@ -11,10 +11,18 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
+mod tiktok_login;
+use tiktok_login::{config as tiktok_client_config, exchange as tiktok_token_exchange,
+    identity as tiktok_client_identity, publish_scope as tiktok_publish_scope};
+
+pub(crate) mod tiktok_direct;
+mod tiktok_direct_receipts;
+mod reviewed_posts;
 
 #[derive(Clone)]
 struct PendingOAuth {
     provider: String,
+    tiktok_client: Option<(String, String)>,
     code_verifier: String,
     redirect_uri: String,
     created_at: i64,
@@ -148,6 +156,8 @@ fn pending_map() -> &'static Mutex<HashMap<String, PendingOAuth>> {
 }
 
 pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
+    reviewed_posts::init(db)?;
+    tiktok_direct_receipts::init(db)?;
     db.execute_batch(
         "CREATE TABLE IF NOT EXISTS workspace_oauth_accounts (
             provider TEXT PRIMARY KEY,
@@ -190,7 +200,15 @@ pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
             scheduled_at TEXT NOT NULL DEFAULT '',
             uploaded_at INTEGER NOT NULL DEFAULT (unixepoch())
         );
-        CREATE INDEX IF NOT EXISTS idx_upload_receipts_sha ON workspace_upload_receipts(content_sha256);",
+        CREATE INDEX IF NOT EXISTS idx_upload_receipts_sha ON workspace_upload_receipts(content_sha256);
+        CREATE TABLE IF NOT EXISTS workspace_youtube_transfers (
+            channel TEXT NOT NULL,
+            file_sha TEXT NOT NULL,
+            requested TEXT NOT NULL,
+            video_id TEXT NOT NULL DEFAULT '',
+            visibility TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY(channel,file_sha)
+        );",
     )?;
     let cols: Vec<String> = {
         let mut stmt = db.prepare("PRAGMA table_info(workspace_export_history)")?;
@@ -701,6 +719,12 @@ pub(crate) struct YoutubeDraftUploadInput {
     #[serde(default)]
     privacy: Option<String>,
     #[serde(default)]
+    confirm_publish: bool,
+    #[serde(default)]
+    expected_account_id: Option<String>,
+    #[serde(default)]
+    expected_export: Option<String>,
+    #[serde(default)]
     publish_at: Option<String>,
     #[serde(default)]
     thumbnail_png_base64: Option<String>,
@@ -721,6 +745,10 @@ pub(crate) struct InstagramTokenInput {
 
 #[derive(Deserialize)]
 pub(crate) struct InstagramReelUploadInput {
+    #[serde(default)]
+    expected_account_id: Option<String>,
+    #[serde(default)]
+    expected_export: Option<String>,
     #[serde(default)]
     caption: Option<String>,
     #[serde(default = "default_true")]
@@ -743,6 +771,10 @@ pub(crate) struct TikTokDraftUploadInput {
 
 #[derive(Deserialize)]
 pub(crate) struct XVideoPostInput {
+    #[serde(default)]
+    expected_account_id: Option<String>,
+    #[serde(default)]
+    expected_export: Option<String>,
     #[serde(default)]
     text: Option<String>,
     #[serde(default)]
@@ -798,7 +830,7 @@ pub(crate) async fn status(State(app): State<App>, headers: HeaderMap) -> ApiRes
     let yt_tokens = platform::vault_read(token_target("youtube").unwrap());
     let ig_client = platform::vault_read(client_target("instagram").unwrap());
     let ig_tokens = platform::vault_read(token_target("instagram").unwrap());
-    let tt_client = platform::vault_read(client_target("tiktok").unwrap());
+    let tt_client = tiktok_client_config().ok();
     let tt_tokens = platform::vault_read(token_target("tiktok").unwrap());
     let x_client = platform::vault_read(client_target("x").unwrap());
     let x_tokens = platform::vault_read(token_target("x").unwrap());
@@ -840,12 +872,22 @@ pub(crate) async fn status(State(app): State<App>, headers: HeaderMap) -> ApiRes
         })
     };
 
+    let publish_granted = tt_tokens.as_ref().is_some_and(tiktok_publish_scope);
+    let managed_login = tt_client.as_ref().and_then(|c| c["broker_host"].as_str()).is_some();
+    let mut tiktok = build_provider("tiktok", tt_client, tt_tokens);
+    tiktok["direct_post_granted"] = json!(publish_granted && tiktok["connected"] == true);
+    tiktok["operator_managed_login"] = json!(managed_login);
+    let youtube = build_provider("youtube", yt_client, yt_tokens);
+    let instagram = build_provider("instagram", ig_client, ig_tokens);
+    let x = build_provider("x", x_client, x_tokens);
+    let posting_connected = tiktok["direct_post_granted"] == true ||
+        [&youtube, &instagram, &x].iter().any(|account| account["connected"] == true);
     Ok(Json(json!({
-        "youtube": build_provider("youtube", yt_client, yt_tokens),
-        "instagram": build_provider("instagram", ig_client, ig_tokens),
-        "tiktok": build_provider("tiktok", tt_client, tt_tokens),
-        "x": build_provider("x", x_client, x_tokens),
-        "public_posting_enabled": false
+        "youtube": youtube,
+        "instagram": instagram,
+        "tiktok": tiktok,
+        "x": x,
+        "public_posting_enabled": posting_connected
     })))
 }
 
@@ -922,15 +964,28 @@ pub(crate) async fn save_config(
     })))
 }
 
+#[derive(Deserialize)]
+pub(crate) struct OAuthStartQuery {
+    mode: Option<String>,
+}
+
 pub(crate) async fn start_oauth(
     AxumPath(provider): AxumPath<String>,
+    Query(query): Query<OAuthStartQuery>,
     headers: HeaderMap,
 ) -> ApiResult<Json<Value>> {
     let Some(target) = client_target(&provider) else {
         return Err(bad("Choose youtube, instagram, tiktok, or x."));
     };
-    let client = platform::vault_read(target)
-        .ok_or_else(|| bad("Save your OAuth Client ID and Secret first."))?;
+    let direct = provider == "tiktok" && query.mode.as_deref() == Some("direct");
+    if query.mode.is_some() && !direct {
+        return Err(bad("Unknown OAuth authorization mode."));
+    }
+    let direct = direct || (provider == "tiktok" && platform::vault_read(token_target("tiktok").unwrap())
+        .as_ref().is_some_and(tiktok_publish_scope));
+    let client = if provider == "tiktok" { tiktok_client_config().map_err(bad)? } else {
+        platform::vault_read(target).ok_or_else(|| bad("Save your OAuth Client ID and Secret first."))?
+    };
     let client_id = client["client_id"]
         .as_str()
         .ok_or_else(|| bad("Saved OAuth client is incomplete."))?;
@@ -949,6 +1004,7 @@ pub(crate) async fn start_oauth(
             state.clone(),
             PendingOAuth {
                 provider: provider.clone(),
+                tiktok_client: (provider == "tiktok").then(|| tiktok_client_identity(&client)),
                 code_verifier: verifier,
                 redirect_uri: redirect_uri.clone(),
                 created_at: now_unix(),
@@ -976,7 +1032,11 @@ pub(crate) async fn start_oauth(
             "https://www.tiktok.com/v2/auth/authorize/?client_key={}&redirect_uri={}&response_type=code&scope={}&state={}&code_challenge={}&code_challenge_method=S256",
             url_encode(client_id),
             url_encode(&redirect_uri),
-            url_encode("user.info.basic,user.info.profile,user.info.stats,video.list,video.upload"),
+            url_encode(if direct {
+                "user.info.basic,user.info.profile,user.info.stats,video.list,video.upload,video.publish"
+            } else {
+                "user.info.basic,user.info.profile,user.info.stats,video.list,video.upload"
+            }),
             url_encode(&state),
             url_encode(&challenge_hex),
         ),
@@ -1162,64 +1222,55 @@ fn fetch_tiktok_user(access_token: &str) -> Result<(String, String, String, Stri
 }
 
 fn refresh_tiktok_access_token() -> Result<(String, i64), String> {
-    let client = platform::vault_read(client_target("tiktok").unwrap())
-        .ok_or_else(|| "TikTok OAuth client not configured.".to_owned())?;
+    let tokens = tiktok_session()?;
+    Ok((tokens["access_token"].as_str().unwrap_or("").to_owned(), tokens["expires_at"].as_i64().unwrap_or(0)))
+}
+
+fn direct_tiktok_identity() -> Result<(String, String), String> {
+    let tokens = tiktok_session()?;
+    if !tiktok_publish_scope(&tokens) {
+        return Err("Authorize Direct Post to grant the video.publish permission.".into());
+    }
+    let open_id = tokens["open_id"].as_str().filter(|s| !s.is_empty())
+        .ok_or("Reconnect TikTok to verify the publishing account.")?;
+    Ok((tokens["access_token"].as_str().unwrap_or("").to_owned(), open_id.to_owned()))
+}
+
+static TIKTOK_SESSION_LOCK: Mutex<()> = Mutex::new(());
+
+fn tiktok_session() -> Result<Value, String> {
+    let _guard = TIKTOK_SESSION_LOCK.lock().map_err(|_| "TikTok login is temporarily unavailable.")?;
+    let client = tiktok_client_config()?;
     let tokens = platform::vault_read(token_target("tiktok").unwrap())
         .ok_or_else(|| "TikTok is not connected.".to_owned())?;
-    let expires_at = tokens["expires_at"].as_i64().unwrap_or(0);
-    if expires_at > now_unix() + 120
-        && let Some(tok) = tokens["access_token"].as_str().filter(|s| !s.is_empty())
-    {
-        return Ok((tok.to_owned(), expires_at));
+    let (key, broker) = tiktok_client_identity(&client);
+    if tokens["broker_host"].as_str().unwrap_or("") != broker
+        || tokens["client_id"].as_str().is_some_and(|id| id != key) {
+        return Err("Reconnect TikTok to authorize the configured publishing app.".into());
     }
-    let refresh = tokens["refresh_token"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| "Missing TikTok refresh token. Please reconnect TikTok.".to_owned())?;
-    let ckey = client["client_id"].as_str().unwrap_or("");
-    let csec = client["client_secret"].as_str().unwrap_or("");
-    let body = format!(
-        "client_key={}&client_secret={}&grant_type=refresh_token&refresh_token={}",
-        url_encode(ckey),
-        url_encode(csec),
-        url_encode(refresh),
-    );
-    let resp = platform::https_request(
-        "open.tiktokapis.com",
-        "POST",
-        "/v2/oauth/token/",
-        &[("Content-Type", "application/x-www-form-urlencoded")],
-        body.as_bytes(),
-        15_000,
-    )?;
-    let parsed: Value = serde_json::from_slice(&resp.body)
-        .map_err(|_| "Unreadable response from TikTok token refresh.".to_owned())?;
-    if resp.status != 200 || parsed["access_token"].as_str().unwrap_or("").is_empty() {
-        let msg = parsed["error_description"]
-            .as_str()
-            .or_else(|| parsed["error"].as_str())
-            .unwrap_or("TikTok rejected the token refresh.");
-        return Err(msg.to_owned());
+    if tokens["expires_at"].as_i64().unwrap_or(0) > now_unix() + 120
+        && tokens["access_token"].as_str().is_some_and(|s| !s.is_empty()) {
+        return Ok(tokens);
     }
-    let new_access = parsed["access_token"].as_str().unwrap_or("").to_owned();
-    let new_refresh = parsed["refresh_token"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .unwrap_or(refresh)
-        .to_owned();
-    let new_exp = now_unix() + parsed["expires_in"].as_i64().unwrap_or(86_400);
-    let refresh_exp = now_unix() + parsed["refresh_expires_in"].as_i64().unwrap_or(31_536_000);
-    platform::vault_write(
-        token_target("tiktok").unwrap(),
-        &json!({
-            "access_token": new_access,
-            "refresh_token": new_refresh,
-            "expires_at": new_exp,
-            "refresh_expires_at": refresh_exp,
-            "open_id": parsed["open_id"].as_str().or_else(|| tokens["open_id"].as_str()).unwrap_or(""),
-        }),
-    )?;
-    Ok((new_access, new_exp))
+    let refresh = tokens["refresh_token"].as_str().filter(|s| !s.is_empty())
+        .ok_or("Missing TikTok refresh token. Reconnect TikTok.")?;
+    let parsed = tiktok_token_exchange(&client, &[("grant_type","refresh_token"),("refresh_token",refresh)])?;
+    let now = now_unix();
+    let updated = json!({
+        "access_token": parsed["access_token"],
+        "refresh_token": parsed["refresh_token"].as_str().filter(|s| !s.is_empty()).unwrap_or(refresh),
+        "expires_at": now + parsed["expires_in"].as_i64().unwrap_or(86_400),
+        "refresh_expires_at": now + parsed["refresh_expires_in"].as_i64().unwrap_or(31_536_000),
+        "open_id": parsed["open_id"].as_str().or_else(|| tokens["open_id"].as_str()).unwrap_or(""),
+        "scope": parsed["scope"].as_str().or_else(||tokens["scope"].as_str()).unwrap_or(""),
+        "client_id": key,
+        "broker_host": broker,
+    });
+    if tokens["open_id"].as_str().is_some_and(|s| !s.is_empty() && Some(s) != updated["open_id"].as_str()) {
+        return Err("TikTok returned a different account. Reconnect to continue.".into());
+    }
+    platform::vault_write(token_target("tiktok").unwrap(), &updated)?;
+    Ok(updated)
 }
 
 fn parse_tiktok_upload_url(url: &str) -> Result<(String, String), String> {
@@ -1465,9 +1516,13 @@ pub(crate) async fn callback(
     let Some(t_target) = token_target(&provider) else {
         return callback_html(false, "Unsupported Provider", "Unknown provider.");
     };
-    let Some(client) = platform::vault_read(c_target) else {
+    let client = if provider == "tiktok" { tiktok_client_config().ok() } else { platform::vault_read(c_target) };
+    let Some(client) = client else {
         return callback_html(false, "Missing Client Config", "Save your OAuth Client ID and Secret first.");
     };
+    if provider == "tiktok" && pending.tiktok_client.as_ref() != Some(&tiktok_client_identity(&client)) {
+        return callback_html(false, "TikTok configuration changed", "Reconnect to TikTok to use the current application.");
+    }
     let client_id = client["client_id"].as_str().unwrap_or("").to_owned();
     let client_secret = client["client_secret"].as_str().unwrap_or("").to_owned();
 
@@ -1540,24 +1595,10 @@ pub(crate) async fn callback(
             ensure_destination_profile(&app_clone, "youtube", &ch_name, &ch_url);
             Ok(format!("Connected YouTube channel {ch_name} ({ch_handle})."))
         } else if provider_clone == "tiktok" {
-            let body = format!(
-                "client_key={}&client_secret={}&code={}&grant_type=authorization_code&redirect_uri={}&code_verifier={}",
-                url_encode(&client_id),
-                url_encode(&client_secret),
-                url_encode(&code),
-                url_encode(&pending.redirect_uri),
-                url_encode(&pending.code_verifier),
-            );
-            let resp = platform::https_request(
-                "open.tiktokapis.com",
-                "POST",
-                "/v2/oauth/token/",
-                &[("Content-Type", "application/x-www-form-urlencoded")],
-                body.as_bytes(),
-                15_000,
-            )?;
-            let parsed: Value = serde_json::from_slice(&resp.body)
-                .map_err(|_| "Unreadable response from TikTok OAuth.".to_owned())?;
+            let parsed = tiktok_token_exchange(&client, &[
+                ("grant_type", "authorization_code"), ("code", &code),
+                ("redirect_uri", &pending.redirect_uri), ("code_verifier", &pending.code_verifier),
+            ])?;
             let access = parsed["access_token"]
                 .as_str()
                 .filter(|s| !s.is_empty())
@@ -1573,6 +1614,7 @@ pub(crate) async fn callback(
             let open_id = parsed["open_id"].as_str().unwrap_or("").to_owned();
             let exp_at = now_unix() + parsed["expires_in"].as_i64().unwrap_or(86_400);
             let refresh_exp = now_unix() + parsed["refresh_expires_in"].as_i64().unwrap_or(31_536_000);
+            let guard = TIKTOK_SESSION_LOCK.lock().map_err(|_| "TikTok login is temporarily unavailable.")?;
             platform::vault_write(
                 t_target,
                 &json!({
@@ -1581,8 +1623,12 @@ pub(crate) async fn callback(
                     "expires_at": exp_at,
                     "refresh_expires_at": refresh_exp,
                     "open_id": open_id,
+                    "scope": parsed["scope"].as_str().unwrap_or(""),
+                    "client_id": client_id,
+                    "broker_host": client["broker_host"].as_str().unwrap_or(""),
                 }),
             )?;
+            drop(guard);
             let (uid, display, handle, avatar, followers, vids) = fetch_tiktok_user(&access)
                 .unwrap_or_else(|_| (open_id.clone(), "TikTok Account".to_owned(), String::new(), String::new(), None, None));
             let acct_id = if uid.is_empty() { open_id } else { uid };
@@ -1783,7 +1829,12 @@ pub(crate) async fn disconnect(
     let Some(t_target) = token_target(&provider) else {
         return Err(bad("Choose youtube, instagram, tiktok, or x."));
     };
-    platform::vault_delete(t_target);
+    {
+        let _guard = if provider == "tiktok" {
+            Some(TIKTOK_SESSION_LOCK.lock().map_err(internal)?)
+        } else { None };
+        platform::vault_delete(t_target);
+    }
     if input.clear_config
         && let Some(c_target) = client_target(&provider)
     {
@@ -1845,6 +1896,10 @@ fn record_analytics_snapshot(
 }
 
 fn resolve_upload_file(app: &App, clip_id: &str, use_source: bool) -> ApiResult<(std::path::PathBuf, String)> {
+    resolve_selected_upload(app, clip_id, use_source, false, None)
+}
+
+fn resolve_selected_upload(app: &App, clip_id: &str, use_source: bool, require_export: bool, expected_export: Option<&str>) -> ApiResult<(std::path::PathBuf, String)> {
     let db = app.db.lock().map_err(internal)?;
     let row: Option<(String, String)> = db
         .query_row(
@@ -1864,12 +1919,19 @@ fn resolve_upload_file(app: &App, clip_id: &str, use_source: bool) -> ApiResult<
         && !exported_path.starts_with('.')
     {
         let p = crate::workspace_film_roll::exports_dir(app).join(&exported_path);
+        if expected_export.is_some_and(|name| name != exported_path) {
+            return Err(bad("The selected export changed. Select the MP4 again."));
+        }
         if p.is_file() {
             p
+        } else if require_export {
+            return Err(bad("The selected export is missing. Export the MP4 again."));
         } else {
             crate::workspace_film_roll::resolve_video(app, clip_id)
                 .ok_or_else(|| (StatusCode::NOT_FOUND, "Video file unavailable.".into()))?
         }
+    } else if require_export && !use_source {
+        return Err(bad("Select an available exported MP4 before uploading."));
     } else {
         crate::workspace_film_roll::resolve_video(app, clip_id)
             .ok_or_else(|| (StatusCode::NOT_FOUND, "Video file unavailable.".into()))?
@@ -1895,6 +1957,129 @@ fn ensure_youtube_shorts_metadata(title: &str, description: &str, as_short: bool
     (final_title, final_desc)
 }
 
+fn youtube_upload_privacy(input: &YoutubeDraftUploadInput, scheduled: bool) -> Result<&'static str, &'static str> {
+    if input.privacy.as_deref() == Some("public") && input.made_for_kids {
+        return Err("This channel's public Shorts use the audience setting 'not made for kids'.");
+    }
+    match (input.privacy.as_deref(), scheduled, input.confirm_publish) {
+        (Some("public"), true, _) => Err("Scheduled YouTube uploads must start private. Clear the schedule to publish now."),
+        (Some("public"), false, true) => Ok("public"),
+        (Some("public"), false, false) => Err("Confirm the public YouTube upload before publishing."),
+        (None | Some("private" | "unlisted"), true, _) | (None | Some("private"), false, _) => Ok("private"),
+        (Some("unlisted"), false, _) => Ok("unlisted"),
+        _ => Err("Unsupported YouTube visibility."),
+    }
+}
+
+fn youtube_returned_privacy(video: &Value) -> &str {
+    match video["status"]["privacyStatus"].as_str() {
+        Some(mode @ ("public" | "private" | "unlisted")) => mode,
+        _ => "unknown",
+    }
+}
+
+const YOUTUBE_UNCONFIRMED: &str = "YouTube upload outcome is unconfirmed. Check the connected channel in YouTube Studio before uploading this file again.";
+
+const YOUTUBE_SHORT_REQUIRED: &str = "YouTube Shorts require a square or portrait video up to 3 minutes long. Choose an eligible MP4 or export a vertical edit.";
+
+fn verify_youtube_short_facts(facts: &Value) -> Result<(), String> {
+    let duration = facts["format"]["duration"].as_str().and_then(|s| s.parse::<f64>().ok())
+        .or_else(|| facts["format"]["duration"].as_f64()).unwrap_or(0.0);
+    let video = facts["streams"].as_array().filter(|s| s.len() == 1).and_then(|s| s.first())
+        .ok_or(YOUTUBE_SHORT_REQUIRED)?;
+    let ratio = match video["sample_aspect_ratio"].as_str() {
+        None | Some("N/A") => (1, 1),
+        Some(s) => s.split_once(':').and_then(|(w,h)| Some((w.parse::<u64>().ok()?, h.parse::<u64>().ok()?)))
+            .filter(|(w,h)| *w > 0 && *h > 0).ok_or(YOUTUBE_SHORT_REQUIRED)?,
+    };
+    let w = video["width"].as_u64().and_then(|w| w.checked_mul(ratio.0)).unwrap_or(0);
+    let h = video["height"].as_u64().and_then(|h| h.checked_mul(ratio.1)).unwrap_or(0);
+    let rotation = video["side_data_list"].as_array().and_then(|s| s.iter().find_map(|x| x.get("rotation")))
+        .or_else(|| video["tags"].get("rotate"));
+    let angle = match rotation {
+        None => 0,
+        Some(val) => val.as_i64().or_else(|| val.as_str().and_then(|s| s.parse().ok())).ok_or(YOUTUBE_SHORT_REQUIRED)?,
+    }.rem_euclid(360);
+    let portrait = match angle { 0 | 180 => h >= w, 90 | 270 => w >= h, _ => false };
+    if duration <= 0.0 || !duration.is_finite() || duration > 180.0 || w == 0 || h == 0 || !portrait {
+        return Err(YOUTUBE_SHORT_REQUIRED.into());
+    }
+    Ok(())
+}
+
+fn verify_youtube_short_bytes(bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    let probe = crate::workspace_film_roll::find_ffprobe().ok_or("FFprobe is required to verify YouTube Shorts eligibility.")?;
+    // Probe the exact immutable bytes used for the PUT, even if the selected export is replaced.
+    let path = std::env::temp_dir().join(format!("snapmatic-yt-{}.mp4", uuid::Uuid::new_v4()));
+    let mut copy = std::fs::OpenOptions::new().create_new(true).write(true).open(&path).map_err(|e| e.to_string())?;
+    let result = (|| {
+        copy.write_all(bytes).map_err(|e| e.to_string())?;
+        drop(copy);
+        let mut cmd = std::process::Command::new(probe);
+        #[cfg(windows)] {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        let out = cmd.args(["-v","error","-f","mov","-protocol_whitelist","file","-select_streams","V","-show_entries",
+            "format=duration:stream=width,height,sample_aspect_ratio:stream_tags=rotate:stream_side_data=rotation",
+            "-of","json"]).arg(&path).output().map_err(|e| format!("Could not inspect the selected MP4: {e}"))?;
+        if !out.status.success() { return Err(YOUTUBE_SHORT_REQUIRED.to_owned()); }
+        let facts = serde_json::from_slice(&out.stdout).map_err(|_| YOUTUBE_SHORT_REQUIRED)?;
+        verify_youtube_short_facts(&facts)
+    })();
+    let _ = std::fs::remove_file(path);
+    result
+}
+
+struct YoutubeUploadResult {
+    id: String,
+    thumb_uploaded: bool,
+    thumb_note: Option<String>,
+    sha: String,
+    visibility: String,
+    upload_status: String,
+    reused: bool,
+    schedule: Option<String>,
+}
+
+fn prior_youtube_transfer(db: &Connection, channel: &str, sha: &str, privacy: &str) -> Result<Option<(String, String)>, String> {
+    let prior = db.query_row(
+        "SELECT video_id,visibility,requested FROM workspace_youtube_transfers WHERE channel=?1 AND file_sha=?2",
+        params![channel,sha],
+        |r| Ok((r.get::<_,String>(0)?, r.get::<_,String>(1)?, r.get::<_,String>(2)?)),
+    ).optional().map_err(|e| e.to_string())?;
+    if let Some((id, actual, requested)) = prior {
+        if id.is_empty() { return Err(YOUTUBE_UNCONFIRMED.into()); }
+        if privacy == "public" && requested == "public" { return Ok(Some((id, actual))); }
+    }
+    Ok(None)
+}
+
+// Reserve before transmitting any video bytes. An interrupted PUT can succeed remotely.
+fn reserve_youtube_transfer(db: &mut Connection, channel: &str, sha: &str, privacy: &str) -> Result<Option<(String, String)>, String> {
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
+    if let Some(already) = prior_youtube_transfer(&tx,channel,sha,privacy)? { return Ok(Some(already)); }
+    tx.execute("INSERT INTO workspace_youtube_transfers(channel,file_sha,requested) VALUES(?1,?2,?3)
+        ON CONFLICT(channel,file_sha) DO UPDATE SET requested=excluded.requested,video_id='',visibility=''",
+        params![channel,sha,privacy]).map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(None)
+}
+
+fn refresh_existing_youtube_upload(id: String, sha: String, auth: &str) -> YoutubeUploadResult {
+    let info = platform::https_request("www.googleapis.com", "GET",
+        &format!("/youtube/v3/videos?part=status&id={}",url_encode(&id)),
+        &[("Authorization",auth)], &[], 20_000).ok().filter(|r| r.status == 200)
+        .and_then(|r| serde_json::from_slice::<Value>(&r.body).ok());
+    let video = info.as_ref().and_then(|v| v["items"].as_array()).and_then(|a| a.first()).unwrap_or(&Value::Null);
+    YoutubeUploadResult {
+        id, sha, thumb_uploaded: false, thumb_note: None, visibility: youtube_returned_privacy(video).to_owned(),
+        upload_status: video["status"]["uploadStatus"].as_str().unwrap_or("unknown").to_owned(),
+        schedule: video["status"]["publishAt"].as_str().map(str::to_owned), reused: true,
+    }
+}
+
 pub(crate) async fn upload_youtube_private_draft(
     State(app): State<App>,
     AxumPath(clip_id): AxumPath<String>,
@@ -1903,10 +2088,11 @@ pub(crate) async fn upload_youtube_private_draft(
     if !crate::workspace_media::hex(&clip_id) {
         return Err(bad("Invalid clip ID."));
     }
-    let (file_path, fallback_title) = resolve_upload_file(&app, &clip_id, input.use_source)?;
+    if !input.as_short { return Err(bad("Choose YouTube Shorts to upload this clip.")); }
+    let (file_path, fallback_title) = resolve_selected_upload(&app, &clip_id, input.use_source, true, input.expected_export.as_deref())?;
     let meta = std::fs::metadata(&file_path).map_err(internal)?;
     if meta.len() == 0 || meta.len() > 250 * 1024 * 1024 {
-        return Err(bad("Video must be between 1 byte and 250 MiB for draft upload."));
+        return Err(bad("YouTube video must be between 1 byte and 250 MiB."));
     }
 
     let publish_at = input
@@ -1915,21 +2101,19 @@ pub(crate) async fn upload_youtube_private_draft(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| {
-            chrono::DateTime::parse_from_rfc3339(s)
-                .map(|dt| dt.to_rfc3339())
-                .map_err(|_| bad("Scheduled publish time must be a valid ISO timestamp."))
+            let time = chrono::DateTime::parse_from_rfc3339(s)
+                .map_err(|_| bad("Scheduled publish time must be a valid ISO timestamp."))?;
+            if time <= chrono::Utc::now() { return Err(bad("Choose a future time to schedule a YouTube upload.")); }
+            Ok(time.to_rfc3339())
         })
         .transpose()?;
 
-    // Server-enforced PRIVATE or UNLISTED only. Scheduled publish requires privacyStatus="private".
-    let privacy = if publish_at.is_some() {
-        "private".to_owned()
-    } else {
-        match input.privacy.as_deref() {
-            Some("unlisted") => "unlisted".to_owned(),
-            _ => "private".to_owned(),
-        }
-    };
+    let privacy = youtube_upload_privacy(&input, publish_at.is_some()).map_err(bad)?.to_owned();
+    let expected_account = input.expected_account_id.as_deref().unwrap_or("").trim().to_owned();
+    if privacy == "public" && expected_account.is_empty() { return Err(bad("Select and confirm the destination YouTube channel.")); }
+    if privacy == "public" && !input.use_source && input.expected_export.as_deref().unwrap_or("").is_empty() {
+        return Err(bad("Review the exported MP4 before publishing."));
+    }
 
     let thumb_bytes = input
         .thumbnail_png_base64
@@ -1943,7 +2127,7 @@ pub(crate) async fn upload_youtube_private_draft(
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .unwrap_or(if fallback_title.is_empty() { "Snapmatic Draft" } else { &fallback_title });
+        .unwrap_or(if fallback_title.is_empty() { "Snapmatic video" } else { &fallback_title });
     let raw_desc = input.description.as_deref().unwrap_or("");
     let as_short = input.as_short;
     let (title, description) = ensure_youtube_shorts_metadata(raw_title, raw_desc, as_short);
@@ -1968,38 +2152,27 @@ pub(crate) async fn upload_youtube_private_draft(
     let made_for_kids = input.made_for_kids;
     let total_bytes = meta.len();
     let clip_for_prog = clip_id.clone();
-    let file_path_sha = file_path.clone();
+    let upload_app = app.clone();
 
     set_upload_progress(true, "youtube", &clip_id, "initializing", 12, total_bytes, "Initializing YouTube resumable upload…");
-    let res = tokio::task::spawn_blocking(move || -> Result<(String, bool, Option<String>, String, Option<String>), String> {
-        let shorts_note = if as_short {
-            crate::workspace_film_roll::probe_mp4_summary(&file_path).and_then(|s| {
-                if s.width > 0 && s.height > 0 && s.width > s.height {
-                    Some(format!(
-                        "Video is landscape ({}×{}). YouTube only puts vertical (9:16) or square videos in the Shorts shelf.",
-                        s.width, s.height
-                    ))
-                } else if s.duration_s > 180.5 {
-                    Some(format!(
-                        "Video is {:.0}s (over YouTube's 3-minute Shorts cap), so YouTube will classify it as a regular video.",
-                        s.duration_s
-                    ))
-                } else if s.duration_s > 60.5 {
-                    Some(format!(
-                        "Uploaded with #Shorts ({:.0}s, 9:16). Note: YouTube treats 61–180s videos with Content ID music claims as regular videos — use \"Export ≤59s Guaranteed Short\" if YouTube places it under Videos.",
-                        s.duration_s
-                    ))
-                } else {
-                    None
-                }
-            })
-        } else {
-            None
-        };
-        let (access_token, _) = refresh_youtube_access_token()?;
+    let res = tokio::task::spawn_blocking(move || -> Result<YoutubeUploadResult, String> {
         let video_bytes = std::fs::read(&file_path).map_err(|e| format!("Could not read MP4: {e}"))?;
-        let file_sha = sha256_file_hex(&file_path_sha).unwrap_or_default();
+        if video_bytes.is_empty() || video_bytes.len() > 250 * 1024 * 1024 {
+            return Err("YouTube video must be between 1 byte and 250 MiB.".into());
+        }
+        verify_youtube_short_bytes(&video_bytes)?;
+        let file_sha = format!("{:x}", Sha256::digest(&video_bytes));
+        let (access_token, _) = refresh_youtube_access_token()?;
+        let (channel, _, _, _, _, _) = fetch_youtube_channel(&access_token)?;
+        if channel.is_empty() || (!expected_account.is_empty() && channel != expected_account) {
+            return Err("The connected YouTube channel changed. Review the destination channel again.".into());
+        }
         let auth = format!("Bearer {access_token}");
+        let previous = {
+            let db = upload_app.db.lock().map_err(|e| e.to_string())?;
+            prior_youtube_transfer(&db,&channel,&file_sha,&privacy_clone)?
+        };
+        if let Some((id,_)) = previous { return Ok(refresh_existing_youtube_upload(id,file_sha,&auth)); }
         let len_str = video_bytes.len().to_string();
         let mut status_obj = json!({
             "privacyStatus": privacy_clone,
@@ -2035,29 +2208,47 @@ pub(crate) async fn upload_youtube_private_draft(
             let err_val: Value = serde_json::from_slice(&init_resp.body).unwrap_or_default();
             let msg = err_val["error"]["message"]
                 .as_str()
-                .unwrap_or("YouTube rejected the draft upload initialization.");
+                .unwrap_or("YouTube rejected the upload initialization.");
             return Err(msg.to_owned());
         }
         let loc = init_resp
             .location
             .ok_or_else(|| "YouTube did not return an upload session URL.".to_owned())?;
-        let upload_path = loc
-            .strip_prefix("https://www.googleapis.com")
+        let (upload_host, path) = loc.strip_prefix("https://").and_then(|s| s.split_once('/'))
+            .filter(|(host, _)| matches!(*host, "www.googleapis.com" | "youtube.googleapis.com"))
             .ok_or_else(|| "Unexpected YouTube upload host.".to_owned())?;
+        let upload_path = format!("/{path}");
+        let previous = {
+            let mut db = upload_app.db.lock().map_err(|e| e.to_string())?;
+            reserve_youtube_transfer(&mut db, &channel, &file_sha, &privacy_clone)?
+        };
+        if let Some((id,_)) = previous { return Ok(refresh_existing_youtube_upload(id,file_sha,&auth)); }
         set_upload_progress(true, "youtube", &clip_for_prog, "uploading", 45, total_bytes, &format!("Uploading {:.1} MiB to YouTube…", total_bytes as f64 / 1_048_576.0));
-        let put_resp = platform::https_request(
-            "www.googleapis.com",
+        let transfer = platform::https_request(
+            upload_host,
             "PUT",
-            upload_path,
+            &upload_path,
             &[
                 ("Authorization", &auth),
                 ("Content-Type", "video/mp4"),
             ],
             &video_bytes,
             180_000,
-        )?;
+        );
+        // On a lost or transient response, query the same resumable session without resending media.
+        let (put_resp, checked_session) = match transfer {
+            Ok(r) if r.status < 500 && !matches!(r.status, 408 | 429) => (r, false),
+            _ => (platform::https_request(upload_host, "PUT", &upload_path,
+                &[("Authorization", &auth), ("Content-Range", &format!("bytes */{len_str}"))], &[], 20_000)
+                .map_err(|_| YOUTUBE_UNCONFIRMED.to_owned())?, true),
+        };
         let body_val: Value = serde_json::from_slice(&put_resp.body).unwrap_or_default();
         if put_resp.status != 200 && put_resp.status != 201 {
+            if !checked_session && matches!(put_resp.status, 400 | 401 | 403 | 413 | 415 | 422) {
+                let db = upload_app.db.lock().map_err(|e| e.to_string())?;
+                db.execute("DELETE FROM workspace_youtube_transfers WHERE channel=?1 AND file_sha=?2 AND video_id=''",
+                    params![channel,file_sha]).map_err(|e| e.to_string())?;
+            } else { return Err(YOUTUBE_UNCONFIRMED.into()); }
             let msg = body_val["error"]["message"]
                 .as_str()
                 .unwrap_or("YouTube failed to receive the video upload.");
@@ -2066,8 +2257,16 @@ pub(crate) async fn upload_youtube_private_draft(
         let video_id = body_val["id"]
             .as_str()
             .filter(|s| !s.is_empty())
-            .ok_or_else(|| "YouTube upload succeeded but returned no video ID.".to_owned())?
+            .ok_or_else(|| YOUTUBE_UNCONFIRMED.to_owned())?
             .to_owned();
+        let actual_privacy = youtube_returned_privacy(&body_val).to_owned();
+        let upload_status = body_val["status"]["uploadStatus"].as_str().unwrap_or("unknown").to_owned();
+        let actual_schedule = body_val["status"]["publishAt"].as_str().map(str::to_owned);
+        {
+            let db = upload_app.db.lock().map_err(|_| YOUTUBE_UNCONFIRMED.to_owned())?;
+            db.execute("UPDATE workspace_youtube_transfers SET video_id=?3,visibility=?4 WHERE channel=?1 AND file_sha=?2",
+                params![channel,file_sha,video_id,actual_privacy]).map_err(|_| YOUTUBE_UNCONFIRMED.to_owned())?;
+        }
 
         let mut thumb_ok = false;
         let mut thumb_err = None;
@@ -2095,16 +2294,16 @@ pub(crate) async fn upload_youtube_private_draft(
                 Err(e) => thumb_err = Some(e),
             }
         }
-        Ok((video_id, thumb_ok, thumb_err, file_sha, shorts_note))
+        Ok(YoutubeUploadResult { id: video_id, thumb_uploaded: thumb_ok, thumb_note: thumb_err, sha: file_sha, visibility: actual_privacy, upload_status, reused: false, schedule: actual_schedule })
     })
     .await
     .map_err(|e| {
         set_upload_progress(false, "youtube", &clip_id, "error", 0, total_bytes, "Upload thread failed.");
         internal(e)
     })?;
-    let (video_id, thumb_uploaded, thumb_note, file_sha, shorts_note) = match res {
+    let YoutubeUploadResult { id: video_id, thumb_uploaded, thumb_note, sha: file_sha, visibility: actual_privacy, upload_status, reused, schedule: actual_schedule } = match res {
         Ok(v) => {
-            set_upload_progress(false, "youtube", &clip_id, "done", 100, total_bytes, "YouTube draft upload complete!");
+            set_upload_progress(false, "youtube", &clip_id, "done", 100, total_bytes, "YouTube upload confirmed.");
             v
         }
         Err(e) => {
@@ -2114,7 +2313,10 @@ pub(crate) async fn upload_youtube_private_draft(
     };
 
     let studio_url = format!("https://studio.youtube.com/video/{video_id}/edit");
-    let sched_str = publish_at.as_deref().unwrap_or("");
+    let sched_str = actual_schedule.as_deref().unwrap_or("");
+    let receipt_status = if !sched_str.is_empty() { "scheduled" }
+        else if actual_privacy == "public" && upload_status == "processed" { "published" }
+        else { upload_status.as_str() };
     if let Ok(db) = app.db.lock() {
         let _ = db.execute(
             "UPDATE workspace_film_roll SET yt_video_id=?1, yt_publish_at=?2 WHERE clip_id=?3",
@@ -2124,29 +2326,79 @@ pub(crate) async fn upload_youtube_private_draft(
             "UPDATE workspace_export_history SET youtube_video_id=?1 WHERE id=(SELECT id FROM workspace_export_history WHERE clip_id=?2 ORDER BY id DESC LIMIT 1)",
             params![video_id, clip_id],
         );
+        if reused && actual_privacy != "unknown" {
+            let _ = db.execute("UPDATE workspace_upload_receipts SET privacy=?2,status=?3,scheduled_at=?4 WHERE provider='youtube' AND remote_id=?1",
+                params![video_id,actual_privacy,receipt_status,sched_str]);
+        }
     }
-    record_upload_receipt(
+    if !reused { record_upload_receipt(
         &app,
         &clip_id,
         &file_sha,
         "youtube",
         &video_id,
         &studio_url,
-        if sched_str.is_empty() { "uploaded" } else { "scheduled" },
-        &privacy,
+        receipt_status,
+        &actual_privacy,
         sched_str,
-    );
+    ); }
     sync_posting_queue_url(&app, &clip_id, "youtube", &studio_url);
     Ok(Json(json!({
         "video_id": video_id,
-        "privacy": privacy,
-        "publish_at": publish_at,
+        "privacy": actual_privacy,
+        "upload_status": upload_status,
+        "requested_privacy": privacy,
+        "already_uploaded": reused,
+        "publish_at": actual_schedule,
         "as_short": as_short,
-        "shorts_note": shorts_note,
+        "shorts_eligible": true,
         "thumbnail_uploaded": thumb_uploaded,
         "thumbnail_note": thumb_note,
         "studio_url": studio_url
     })))
+}
+
+fn resolve_reviewed_upload(
+    app: &App, clip_id: &str, use_source: bool, expected_account: Option<&str>, expected_export: Option<&str>,
+) -> ApiResult<(std::path::PathBuf, String)> {
+    let reviewed = expected_account.is_some() || expected_export.is_some();
+    if reviewed && (use_source == expected_export.is_some()) {
+        return Err(bad("Select the source video or review the exported MP4 again."));
+    }
+    resolve_selected_upload(app, clip_id, use_source, reviewed, expected_export)
+}
+
+fn verify_reviewed_account(provider: &str, expected: &str, actual: &str) -> Result<(), String> {
+    if expected.trim().is_empty() || actual != expected {
+        return Err(format!("The {provider} account does not match the reviewed destination. Refresh Connections and review the post again."));
+    }
+    Ok(())
+}
+
+struct InstagramUpload {
+    container_id: String,
+    media_id: Option<String>,
+    permalink: Option<String>,
+    source_sha: String,
+    upload_sha: Option<String>,
+    reused: bool,
+}
+
+fn verify_instagram_upload_account(token: &str, destination: &str, expected: &str) -> Result<(), String> {
+    verify_reviewed_account("Instagram", expected, destination)?;
+    // One Facebook token may manage multiple Instagram accounts. Verify the
+    // exact node that will receive both /media and /media_publish.
+    let path = format!("/v21.0/{}?fields=id", url_encode(destination));
+    let authorization = format!("Bearer {token}");
+    let response = platform::https_request(
+        "graph.facebook.com", "GET", &path, &[("Authorization", &authorization)], &[], 15_000,
+    )?;
+    if response.status != 200 {
+        return Err("Instagram could not verify the reviewed account with this connection.".to_owned());
+    }
+    let node: Value = serde_json::from_slice(&response.body)
+        .map_err(|_| "Instagram returned an unreadable account response.".to_owned())?;
+    verify_reviewed_account("Instagram", expected, node["id"].as_str().unwrap_or(""))
 }
 
 pub(crate) async fn upload_instagram_reel(
@@ -2157,7 +2409,9 @@ pub(crate) async fn upload_instagram_reel(
     if !crate::workspace_media::hex(&clip_id) {
         return Err(bad("Invalid clip ID."));
     }
-    let (file_path, _) = resolve_upload_file(&app, &clip_id, input.use_source)?;
+    let (file_path, _) = resolve_reviewed_upload(
+        &app, &clip_id, input.use_source, input.expected_account_id.as_deref(), input.expected_export.as_deref(),
+    )?;
     let meta = std::fs::metadata(&file_path).map_err(internal)?;
     if meta.len() == 0 || meta.len() > 250 * 1024 * 1024 {
         return Err(bad("Reel video must be between 1 byte and 250 MiB."));
@@ -2205,14 +2459,21 @@ pub(crate) async fn upload_instagram_reel(
         })
         .transpose()?;
     let do_publish = input.publish;
+    if do_publish && input.expected_account_id.is_some() && public_video_url.is_some() {
+        return Err(bad("Use the reviewed local MP4 for direct Instagram publishing."));
+    }
     let total_bytes = meta.len();
     let clip_prog = clip_id.clone();
     let file_sha_path = file_path.clone();
+    let receipts = app.db.clone();
 
     set_upload_progress(true, "instagram", &clip_id, "initializing", 8, total_bytes, "Checking MP4 compatibility for Instagram Reels…");
-    let res = tokio::task::spawn_blocking(move || -> Result<(String, Option<String>, Option<String>, String), String> {
+    let res = tokio::task::spawn_blocking(move || -> Result<InstagramUpload, String> {
+        if let Some(expected) = input.expected_account_id.as_deref() {
+            verify_instagram_upload_account(&access_token, &ig_id, expected)?;
+        }
         let file_sha = sha256_file_hex(&file_sha_path).unwrap_or_default();
-        let (container_id, upload_bytes_len) = if let Some(ref pub_url) = public_video_url {
+        let (container_id, upload_bytes_len, upload_sha) = if let Some(ref pub_url) = public_video_url {
             // Optional full-1080p60 async pull path via public HTTPS URL (e.g. Cloudflare R2 / S3 presigned link)
             set_upload_progress(true, "instagram", &clip_prog, "initializing", 30, total_bytes, "Submitting public HTTPS 1080p video URL to Meta…");
             let mut form = format!(
@@ -2251,7 +2512,7 @@ pub(crate) async fn upload_instagram_reel(
                 .filter(|s| !s.is_empty())
                 .ok_or_else(|| "Instagram did not return a container ID.".to_owned())?
                 .to_owned();
-            (cid, total_bytes)
+            (cid, total_bytes, None)
         } else {
         let probe = crate::workspace_film_roll::probe_mp4_summary(&file_path);
         let dur_s = probe.as_ref().map(|p| p.duration_s).unwrap_or(0.0);
@@ -2300,7 +2561,7 @@ pub(crate) async fn upload_instagram_reel(
             bytes
         };
 
-        let attempt_upload = |video_bytes: &[u8]| -> Result<(String, u64), (String, bool)> {
+        let attempt_upload = |video_bytes: &[u8]| -> Result<(String, u64, Option<String>), (String, bool)> {
             let upload_bytes_len = video_bytes.len() as u64;
             let file_size = video_bytes.len().to_string();
 
@@ -2425,7 +2686,7 @@ pub(crate) async fn upload_instagram_reel(
                 }
                 offset = end;
             }
-            Ok((container_id, upload_bytes_len))
+            Ok((container_id, upload_bytes_len, Some(format!("{:x}", Sha256::digest(video_bytes)))))
         };
 
         let first_bytes = load_bytes(initial_needs_opt, false)?;
@@ -2473,7 +2734,9 @@ pub(crate) async fn upload_instagram_reel(
         }
 
         if !do_publish {
-            return Ok((container_id, None, None, file_sha));
+            return Ok(InstagramUpload {
+                container_id, media_id: None, permalink: None, source_sha: file_sha, upload_sha, reused: false,
+            });
         }
 
         // Step 4: Publish finished container (only when user explicitly confirmed publish=true)
@@ -2484,27 +2747,31 @@ pub(crate) async fn upload_instagram_reel(
             url_encode(&container_id),
             url_encode(&access_token),
         );
-        let pub_resp = platform::https_request(
-            "graph.facebook.com",
-            "POST",
-            &pub_path,
-            &[("Content-Type", "application/x-www-form-urlencoded")],
-            pub_body.as_bytes(),
-            30_000,
-        )?;
-        let pub_val: Value = serde_json::from_slice(&pub_resp.body).unwrap_or_default();
-        if pub_resp.status != 200 {
-            let msg = pub_val["error"]["message"]
-                .as_str()
-                .unwrap_or("Instagram rejected Reel publish.");
-            return Err(msg.to_owned());
-        }
-        let media_id = pub_val["id"].as_str().map(str::to_owned);
+        let target = if input.expected_account_id.is_some() {
+            Some(reviewed_posts::Target {
+                provider: "instagram", account: &ig_id, media_reference: &container_id,
+                digest: upload_sha.as_deref().ok_or("Could not verify the uploaded Reel bytes.")?,
+            })
+        } else { None };
+        let (media_id, reused) = reviewed_posts::publish(&receipts, target, || {
+            let response = platform::https_request(
+                "graph.facebook.com", "POST", &pub_path, &[("Content-Type", "application/x-www-form-urlencoded")],
+                pub_body.as_bytes(), 30_000,
+            ).map_err(reviewed_posts::Failure::Unconfirmed)?;
+            let body: Value = serde_json::from_slice(&response.body).unwrap_or_default();
+            if response.status != 200 {
+                let msg = body["error"]["message"].as_str();
+                let invalid_request = matches!(body["error"]["code"].as_i64(), Some(10 | 100 | 190));
+                return Err(reviewed_posts::Failure::http(response.status, msg, invalid_request));
+            }
+            body["id"].as_str().filter(|id| !id.is_empty()).map(str::to_owned)
+                .ok_or_else(|| reviewed_posts::Failure::Unconfirmed("Instagram did not return a post ID.".into()))
+        })?;
         let mut permalink = None;
-        if let Some(mid) = media_id.as_deref() {
+        {
             let p_path = format!(
                 "/v21.0/{}?fields=permalink&access_token={}",
-                url_encode(mid),
+                url_encode(&media_id),
                 url_encode(&access_token),
             );
             if let Ok(pr) = platform::https_request("graph.facebook.com", "GET", &p_path, &[], &[], 10_000)
@@ -2514,7 +2781,9 @@ pub(crate) async fn upload_instagram_reel(
                 permalink = pv["permalink"].as_str().map(str::to_owned);
             }
         }
-        Ok((container_id, media_id, permalink, file_sha))
+        Ok(InstagramUpload {
+            container_id, media_id: Some(media_id), permalink, source_sha: file_sha, upload_sha, reused,
+        })
     })
     .await
     .map_err(|e| {
@@ -2522,7 +2791,7 @@ pub(crate) async fn upload_instagram_reel(
         internal(e)
     })?;
 
-    let (container_id, media_id, permalink, file_sha) = match res {
+    let InstagramUpload { container_id, media_id, permalink, source_sha: file_sha, upload_sha, reused } = match res {
         Ok(v) => {
             set_upload_progress(false, "instagram", &clip_id, "done", 100, total_bytes, "Instagram upload complete!");
             v
@@ -2544,7 +2813,9 @@ pub(crate) async fn upload_instagram_reel(
                 params![link, clip_id],
             );
         }
-        record_upload_receipt(&app, &clip_id, &file_sha, "instagram", mid, link, "published", "public", "");
+        if !reused {
+            record_upload_receipt(&app, &clip_id, &file_sha, "instagram", mid, link, "published", "public", "");
+        }
         if !link.is_empty() {
             sync_posting_queue_url(&app, &clip_id, "instagram", link);
         }
@@ -2554,6 +2825,8 @@ pub(crate) async fn upload_instagram_reel(
     Ok(Json(json!({
         "container_id": container_id,
         "published": media_id.is_some(),
+        "content_sha256": upload_sha,
+        "already_published": reused,
         "media_id": media_id,
         "permalink": permalink
     })))
@@ -2740,7 +3013,9 @@ pub(crate) async fn post_x_video(
     if !crate::workspace_media::hex(&clip_id) {
         return Err(bad("Invalid clip ID."));
     }
-    let (file_path, fallback_title) = resolve_upload_file(&app, &clip_id, input.use_source)?;
+    let (file_path, fallback_title) = resolve_reviewed_upload(
+        &app, &clip_id, input.use_source, input.expected_account_id.as_deref(), input.expected_export.as_deref(),
+    )?;
     let meta = std::fs::metadata(&file_path).map_err(internal)?;
     if meta.len() == 0 || meta.len() > 250 * 1024 * 1024 {
         return Err(bad("X video must be between 1 byte and 250 MiB."));
@@ -2757,13 +3032,17 @@ pub(crate) async fn post_x_video(
 
     let total_bytes = meta.len();
     let clip_prog = clip_id.clone();
-    let sha_path = file_path.clone();
+    let receipts = app.db.clone();
     set_upload_progress(true, "x", &clip_id, "initializing", 10, total_bytes, "Initializing X video upload…");
-    let res = tokio::task::spawn_blocking(move || -> Result<(String, String), String> {
+    let res = tokio::task::spawn_blocking(move || -> Result<(String, String, bool), String> {
         let (access_token, _) = refresh_x_access_token()?;
+        if let Some(expected) = input.expected_account_id.as_deref() {
+            let (actual, ..) = fetch_x_user(&access_token)?;
+            verify_reviewed_account("X", expected, &actual)?;
+        }
         let auth = format!("Bearer {access_token}");
         let video_bytes = std::fs::read(&file_path).map_err(|e| format!("Could not read MP4: {e}"))?;
-        let file_sha = sha256_file_hex(&sha_path).unwrap_or_default();
+        let file_sha = format!("{:x}", Sha256::digest(&video_bytes));
         let total = video_bytes.len();
 
         // Step 1: Initialize X v2 chunked media upload
@@ -2866,28 +3145,24 @@ pub(crate) async fn post_x_video(
             "media": { "media_ids": [media_id] }
         }))
         .map_err(|e| e.to_string())?;
-        let post_resp = platform::https_request(
-            "api.x.com",
-            "POST",
-            "/2/tweets",
-            &[("Authorization", &auth), ("Content-Type", "application/json")],
-            &post_body,
-            20_000,
-        )?;
-        let post_val: Value = serde_json::from_slice(&post_resp.body).unwrap_or_default();
-        if !matches!(post_resp.status, 200 | 201) {
-            let msg = post_val["detail"]
-                .as_str()
-                .or_else(|| post_val["title"].as_str())
-                .unwrap_or("X rejected post creation.");
-            return Err(msg.to_owned());
-        }
-        let tid = post_val["data"]["id"]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| "X did not return a post ID.".to_owned())?
-            .to_owned();
-        Ok((tid, file_sha))
+        let target = input.expected_account_id.as_deref().map(|account| reviewed_posts::Target {
+            provider: "x", account, digest: &file_sha, media_reference: &media_id,
+        });
+        let (tid, reused) = reviewed_posts::publish(&receipts, target, || {
+            let response = platform::https_request(
+                "api.x.com", "POST", "/2/tweets", &[("Authorization", &auth), ("Content-Type", "application/json")],
+                &post_body, 20_000,
+            ).map_err(reviewed_posts::Failure::Unconfirmed)?;
+            let body: Value = serde_json::from_slice(&response.body).unwrap_or_default();
+            if !matches!(response.status, 200 | 201) {
+                let msg = body["detail"].as_str().or_else(|| body["title"].as_str());
+                let invalid_request = body["type"].as_str().is_some_and(|kind| kind.ends_with("/invalid-request"));
+                return Err(reviewed_posts::Failure::http(response.status, msg, invalid_request));
+            }
+            body["data"]["id"].as_str().filter(|id| !id.is_empty()).map(str::to_owned)
+                .ok_or_else(|| reviewed_posts::Failure::Unconfirmed("X did not return a post ID.".into()))
+        })?;
+        Ok((tid, file_sha, reused))
     })
     .await
     .map_err(|e| {
@@ -2895,7 +3170,7 @@ pub(crate) async fn post_x_video(
         internal(e)
     })?;
 
-    let (tweet_id, file_sha) = match res {
+    let (tweet_id, file_sha, reused) = match res {
         Ok(v) => {
             set_upload_progress(false, "x", &clip_id, "done", 100, total_bytes, "X video post published!");
             v
@@ -2917,10 +3192,14 @@ pub(crate) async fn post_x_video(
             params![tweet_id, clip_id],
         );
     }
-    record_upload_receipt(&app, &clip_id, &file_sha, "x", &tweet_id, &post_url, "published", "public", "");
+    if !reused {
+        record_upload_receipt(&app, &clip_id, &file_sha, "x", &tweet_id, &post_url, "published", "public", "");
+    }
     sync_posting_queue_url(&app, &clip_id, "x", &post_url);
     Ok(Json(json!({
         "tweet_id": tweet_id,
+        "content_sha256": file_sha,
+        "already_published": reused,
         "post_url": post_url
     })))
 }
@@ -3563,6 +3842,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reviewed_instagram_and_x_destinations_are_optional_but_must_match_when_present() {
+        let legacy_ig: InstagramReelUploadInput = serde_json::from_value(json!({"publish": true})).unwrap();
+        let reviewed_x: XVideoPostInput = serde_json::from_value(json!({
+            "confirm_publish": true, "expected_account_id": "123"
+        })).unwrap();
+        assert!(legacy_ig.expected_account_id.is_none());
+        assert_eq!(reviewed_x.expected_account_id.as_deref(), Some("123"));
+        assert!(verify_reviewed_account("Instagram", "123", "123").is_ok());
+        assert!(verify_reviewed_account("Instagram", "123", "456").is_err());
+        assert!(verify_reviewed_account("X", "123", "").is_err());
+        assert!(verify_reviewed_account("X", "", "").is_err());
+    }
+
+    #[test]
     fn tiktok_upload_url_accepts_us_and_global_hosts() {
         assert_eq!(
             parse_tiktok_upload_url("https://open-upload.tiktokapis.us/upload/?upload_id=abc&upload_token=xyz").unwrap(),
@@ -3585,5 +3878,64 @@ mod tests {
         let (t3, d3) = ensure_youtube_shorts_metadata("Normal video", "Regular upload", false);
         assert_eq!(t3, "Normal video");
         assert_eq!(d3, "Regular upload");
+    }
+
+    #[test]
+    fn youtube_short_upload_requires_confirmed_public_intent_and_reports_remote_visibility() {
+        let input = |v| serde_json::from_value::<YoutubeDraftUploadInput>(v).unwrap();
+        let legacy = input(json!({}));
+        assert!(legacy.as_short && !legacy.made_for_kids);
+        assert_eq!(youtube_upload_privacy(&legacy, false), Ok("private"));
+        assert_eq!(youtube_upload_privacy(&input(json!({"privacy":"unlisted"})),false), Ok("unlisted"));
+        assert_eq!(youtube_upload_privacy(&input(json!({"privacy":"unlisted"})),true), Ok("private"));
+        assert!(youtube_upload_privacy(&input(json!({"privacy":"public"})), false).is_err());
+        let confirmed = input(json!({"privacy":"public","confirm_publish":true}));
+        assert_eq!(youtube_upload_privacy(&confirmed, false), Ok("public"));
+        assert!(youtube_upload_privacy(&confirmed, true).is_err());
+        assert!(youtube_upload_privacy(&input(json!({"privacy":"public","confirm_publish":true,"made_for_kids":true})),false).is_err());
+        assert_eq!(youtube_returned_privacy(&json!({"status":{"privacyStatus":"private"}})), "private");
+        assert_eq!(youtube_returned_privacy(&json!({"id":"a"})), "unknown");
+    }
+
+    #[test]
+    fn youtube_short_checks_duration_and_display_geometry() {
+        let facts = |w, h, seconds| json!({"format":{"duration":seconds},"streams":[{"width":w,"height":h,"sample_aspect_ratio":"1:1"}]});
+        for s in [facts(1080,1920,30.0), facts(720,720,180.0)] {
+            assert!(verify_youtube_short_facts(&s).is_ok());
+        }
+        for s in [facts(1920,1080,15.0),facts(720,1280,180.01),facts(720,1280,0.0),facts(0,0,10.0),json!({})] {
+            assert!(verify_youtube_short_facts(&s).is_err());
+        }
+        let mut rot = facts(1920,1080,60.0);
+        rot["streams"][0]["side_data_list"] = json!([{"rotation":-90}]);
+        assert!(verify_youtube_short_facts(&rot).is_ok());
+        let mut wide = facts(1080,1080,30.0);
+        wide["streams"][0]["sample_aspect_ratio"] = json!("2:1");
+        assert!(verify_youtube_short_facts(&wide).is_err());
+    }
+
+    #[test]
+    fn youtube_short_upload_blocks_ambiguous_resubmissions_and_reuses_confirmed_public_requests() {
+        let mut db = Connection::open_in_memory().unwrap();
+        init(&db).unwrap();
+        assert!(reserve_youtube_transfer(&mut db,"channel","abc","public").unwrap().is_none());
+        assert!(reserve_youtube_transfer(&mut db,"channel","abc","private").is_err());
+        db.execute("UPDATE workspace_youtube_transfers SET video_id='existing', visibility='private'",[]).unwrap();
+        assert_eq!(reserve_youtube_transfer(&mut db,"channel","abc","public").unwrap(),Some(("existing".into(),"private".into())));
+        assert!(reserve_youtube_transfer(&mut db,"different-channel","abc","public").unwrap().is_none());
+    }
+
+    #[test]
+    #[ignore = "requires local FFmpeg and FFprobe"]
+    fn youtube_short_probes_the_actual_mp4_before_upload() {
+        let ffmpeg = crate::workspace_film_roll::find_ffmpeg().expect("set LIFEINVADER_FFMPEG");
+        for (size, eligible) in [("32x48",true),("32x32",true),("48x32",false)] {
+            let frames = format!("color=size={size}:duration=1:rate=4");
+            let out = std::process::Command::new(&ffmpeg).args(["-v","error","-f","lavfi","-i",&frames,
+                "-c:v","mpeg4","-f","mp4","-movflags","frag_keyframe+empty_moov","pipe:1"]).output().unwrap();
+            assert!(out.status.success());
+            assert_eq!(verify_youtube_short_bytes(&out.stdout).is_ok(),eligible,"{size}");
+        }
+        assert!(verify_youtube_short_bytes(b"invalid video data").is_err());
     }
 }

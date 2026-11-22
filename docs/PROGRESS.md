@@ -1,5 +1,13 @@
 # Project progress
 
+## 2026-11-21 — Public publishing from Snapmatic
+
+- The Upload tab selects connected publishing destinations and remembers opt-outs by account. The confirmation names the destinations. Results show each platform's reported outcome, including pending and restricted posts.
+- YouTube Ship requests public visibility and sets the audience to “No, it’s not made for kids.” It probes the bytes being uploaded and blocks files outside the square-or-vertical, three-minute Shorts limits. YouTube classifies the upload. Instagram sends a Reel and X sends a video post.
+- TikTok Direct Post carries the reviewed title, caption and hashtags in one editable field. The creator previews the selected file, chooses an audience from current account settings and gives consent. Public Ship requires Everyone. Inbox remains available separately for finishing a draft on a phone.
+- The [TikTok operator setup](../integrations/tiktok-oauth/README.md) covers outside creators signing in through a hosted token exchange. Before public rollout, the operator must configure Login Kit, enable Direct Post, and complete TikTok's audit.
+- Offline checks covered caption fidelity in Chromium, audience selection, partial batch outcomes, repeated submissions, and actual square, vertical and landscape MP4s. Live provider publication requires a separate authorized creator test.
+
 ## 2026-11-19 — Shared source integration
 
 - Prepared the Mac source changes alongside the auto-queue handoff for shared review. Local macOS Rust tests passed serially (40); the default parallel run failed seven tests, tracked in ISSUES. The source-folder scan can remain busy when a Drive operation stalls; Windows validation for this revision remains outstanding. Local builds, runtime data, account records, and credentials are not included.

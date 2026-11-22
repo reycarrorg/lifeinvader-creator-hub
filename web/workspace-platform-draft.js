@@ -9,15 +9,26 @@ function tags(raw){
 }
 function hashtagCount(s){return (s.match(/#[\p{L}\p{N}_]+/gu)||[]).length;}
 function mergeTags(raw,next){const parts=tags(raw);return tags([...parts,...next].join(' ')).join(' ');}
+function appendMissingTags(text, list) {
+ const embedded = new Set(tags(text).map(tag => tag.toLowerCase()));
+ const missing = list.filter(tag => !embedded.has(tag.toLowerCase())).join(' ');
+ return [text, missing].filter(Boolean).join('\n\n');
+}
+function tiktokPostText(core, overrides = {}) {
+ const title = (core.title ?? '').trim();
+ const caption = (overrides.tiktok ?? core.caption ?? '').trim();
+ const firstLine = caption.split(/\r\n?|\n/, 1)[0].trim();
+ const hasTitle = caption === title || firstLine === title;
+ const text = hasTitle ? caption : [title, caption].filter(Boolean).join('\n\n');
+ return appendMissingTags(text, tags(core.tags ?? ''));
+}
 function materialize(core,overrides,options){
  const rows={};
  for(const key of keys){
   const cap=overrides[key]??core.caption;
   let list=tags(core.tags);
   if(key==='youtube'&&options.shorts&&!list.some(x=>x.toLowerCase()==='#shorts'))list.push('#Shorts');
-  const embedded=new Set(tags(cap).map(x=>x.toLowerCase()));
-  const add=list.filter(x=>!embedded.has(x.toLowerCase())).join(' ');
-  rows[key]=[cap,add].filter(Boolean).join('\n\n');
+  rows[key]=appendMissingTags(cap,list);
  }
  return rows;
 }
@@ -39,6 +50,6 @@ function youtubeShorts(duration,width,height){
  if(duration<1)return 'Under the local 1-second preflight floor';
  return 'Shorts candidate: square or vertical, up to 180 s';
 }
-const api={youtubeTagCount,youtubeShorts,keys,preset,byteCount,charCount,tags,hashtagCount,mergeTags,materialize,mapCover};
+const api={youtubeTagCount,youtubeShorts,keys,preset,byteCount,charCount,tags,hashtagCount,mergeTags,materialize,tiktokPostText,mapCover};
 if(typeof module!=='undefined'&&module.exports){module.exports=api;}else{window.snapmaticDraft=api;}
 })();
