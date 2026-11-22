@@ -42,13 +42,17 @@ pub(crate) struct Post {
 
 #[derive(Deserialize, Serialize)]
 struct Creator {
+    #[serde(default)]
     creator_username: String,
     creator_nickname: String,
     #[serde(default)]
     creator_avatar_url: String,
     privacy_level_options: Vec<String>,
+    #[serde(default)]
     comment_disabled: bool,
+    #[serde(default)]
     duet_disabled: bool,
+    #[serde(default)]
     stitch_disabled: bool,
     max_video_post_duration_sec: u32,
 }

@@ -1492,12 +1492,13 @@ async fn render_clip_internal(
         if let Some(gain) = input.audio_gain_db.filter(|g| g.is_finite() && g.abs() >= 0.25) {
             audio_filters.push(format!("volume={:.1}dB", gain.clamp(-12.0, 12.0)));
         }
-        if input.studio.studio_voice_enhance
-            && input.studio.voiceover_path.as_deref().map(str::trim).unwrap_or("").is_empty()
-        {
+        let studio_voice_applied = input.studio.studio_voice_enhance
+            && input.studio.voiceover_path.as_deref().map(str::trim).unwrap_or("").is_empty();
+        if studio_voice_applied {
             audio_filters.push(crate::workspace_studio::studio_voice_enhance_filter().to_owned());
         }
-        if normalize_audio {
+        // studio_voice_enhance_filter() already includes loudnorm=I=-14:TP=-1.5:LRA=11; avoid double-normalizing.
+        if normalize_audio && !studio_voice_applied {
             audio_filters.push("loudnorm=I=-14:TP=-1.5:LRA=11".to_owned());
         }
         if input.fade_io && out_dur_s > 1.2 {

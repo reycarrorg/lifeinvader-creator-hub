@@ -1819,7 +1819,13 @@ pub(crate) fn apply_studio_post_passes(
                 if dur_s > cursor + 0.18 {
                     kept.push((cursor, dur_s));
                 }
-                if !kept.is_empty() && kept.len() <= 60 && (kept.len() > 1 || (kept[0].1 - kept[0].0) < dur_s - 0.35) {
+                let kept_total_s: f64 = kept.iter().map(|(a, b)| (b - a).max(0.0)).sum();
+                let safe_floor_s = (dur_s * 0.45).max(2.0).min(dur_s);
+                if !kept.is_empty()
+                    && kept.len() <= 60
+                    && kept_total_s >= safe_floor_s
+                    && (kept.len() > 1 || (kept[0].1 - kept[0].0) < dur_s - 0.35)
+                {
                     let mut fc = String::new();
                     let mut concat_in = String::new();
                     for (idx, (ks, ke)) in kept.iter().enumerate() {
@@ -1855,9 +1861,10 @@ pub(crate) fn apply_studio_post_passes(
                 }
             }
         }
+    }
 
-        // If captions were provided AND remove_mid_silences was ON, remap caption timestamps to the jump-cut timeline and burn .ass now!
-        if !opts.caption_words.is_empty() {
+    // If captions were provided AND remove_mid_silences was ON, remap caption timestamps to the jump-cut timeline (or keep original if jump-cut was skipped/no audio) and burn .ass now!
+    if opts.remove_mid_silences && !opts.caption_words.is_empty() {
             let remapped: Vec<CaptionWord> = if let Some(ref segs) = kept_segments_ms {
                 let mut out_words = Vec::new();
                 for w in &opts.caption_words {
@@ -1903,7 +1910,6 @@ pub(crate) fn apply_studio_post_passes(
                 }
             }
         }
-    }
 
     // PASS B: Clean Mic Voiceover + Auto-Ducking
     if let Some(vp) = opts

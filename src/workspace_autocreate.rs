@@ -739,7 +739,7 @@ pub(crate) async fn tiktok_audit(
                 "pre_crop": suggested_crop,
                 "detail_restore": !is_1080p || !good_bitrate,
                 "dynamic_zoom": true,
-                "remove_mid_silences": has_audio && silence_ratio > 0.12,
+                "remove_mid_silences": has_audio && silence_ratio > 0.12 && silence_ratio < 0.65 && mean_db.unwrap_or(-40.0) > -34.0,
                 "studio_voice_enhance": has_audio,
                 "color_grade": "crisp_rec709",
                 "add_captions": has_audio,
@@ -858,6 +858,31 @@ fn download_cloud_mp4(url: &str, dest: &Path, auth_header: Option<&str>) -> Resu
     let _ = std::fs::remove_file(dest);
     std::fs::rename(&tmp, dest).map_err(|e| format!("Could not finalize MP4: {e}"))?;
     Ok(())
+}
+
+fn pick_opus_export_url(v: &Value) -> Option<String> {
+    let arr = v
+        .as_array()
+        .or_else(|| v["data"].as_array())
+        .or_else(|| v["clips"].as_array())
+        .or_else(|| v["items"].as_array())?;
+    let mut best: Option<(f64, String)> = None;
+    for item in arr {
+        let url = ["uriForExport", "downloadUrl", "mp4Url", "videoUrl", "url"]
+            .iter()
+            .find_map(|k| item.get(*k).and_then(Value::as_str))
+            .filter(|s| s.starts_with("https://") || s.starts_with("http://"));
+        if let Some(u) = url {
+            let score = item["score"]
+                .as_f64()
+                .or_else(|| item["viralityScore"].as_f64())
+                .unwrap_or(0.0);
+            if best.as_ref().is_none_or(|(bs, _)| score > *bs) {
+                best = Some((score, u.to_owned()));
+            }
+        }
+    }
+    best.map(|(_, u)| u)
 }
 
 fn find_first_http_url(v: &Value) -> Option<String> {
@@ -999,7 +1024,9 @@ pub(crate) async fn run_opus(
             set_job_progress(20, "uploading", "Uploading clip to Opus.pro…");
             let staged_guard = stage_clean_upload(&app_bg, &src_path)?;
             let staged_str = plain_win_path(&staged_guard.0);
-            let hdr_file = exports_dir(&app_bg).join(format!("opus-hdr-{}.txt", uuid::Uuid::new_v4().simple()));
+            let hdr_guard = TempFileGuard(
+                exports_dir(&app_bg).join(format!("opus-hdr-{}.txt", uuid::Uuid::new_v4().simple())),
+            );
             let mut init_cmd = Command::new("curl.exe");
             init_cmd
                 .args([
@@ -1015,26 +1042,25 @@ pub(crate) async fn run_opus(
                     "Content-Length: 0",
                     "-D",
                 ])
-                .arg(&hdr_file)
+                .arg(&hdr_guard.0)
                 .arg("-o")
                 .arg(if cfg!(windows) { "NUL" } else { "/dev/null" })
                 .arg(&gcs_url)
                 .stdin(Stdio::null());
             hide_window(&mut init_cmd);
             let _ = init_cmd.status();
-            let location = std::fs::read_to_string(&hdr_file)
+            let location = std::fs::read_to_string(&hdr_guard.0)
                 .ok()
                 .and_then(|h| {
                     h.lines().find_map(|l| {
                         let lower = l.to_ascii_lowercase();
                         lower
                             .strip_prefix("location:")
-                            .map(|_| l.split_once(':').map(|(_, v)| v.trim().to_owned()))
-                            .flatten()
+                            .and_then(|_| l.split_once(':').map(|(_, v)| v.trim().to_owned()))
                     })
                 })
                 .unwrap_or_else(|| gcs_url.clone());
-            let _ = std::fs::remove_file(&hdr_file);
+            drop(hdr_guard);
 
             // Step 3: Upload file bytes from clean ASCII staging path (--globoff prevents [id] glob errors)
             let mut put_cmd = Command::new("curl.exe");
@@ -1116,7 +1142,7 @@ pub(crate) async fn run_opus(
                     format!("Opus.pro AI processing ({}s)…", attempt * 5),
                 );
 
-                // Check project status
+                // Check project status for failure (never pull input videoUrl from project metadata)
                 if let Ok((pcode, pdata, _)) = curl_json(&[
                     format!("https://api.opus.pro/api/clip-projects/{project_id}"),
                     "-H".into(),
@@ -1133,15 +1159,9 @@ pub(crate) async fn run_opus(
                     if st.contains("fail") || st.contains("error") {
                         return Err(format!("Opus.pro processing failed: {pdata}"));
                     }
-                    if let Some(u) = find_first_http_url(&pdata)
-                        && (st.contains("done") || st.contains("complet") || st.contains("ready"))
-                    {
-                        download_url = Some(u);
-                        break;
-                    }
                 }
 
-                // Query exportable clips
+                // Query exportable clips and pick the highest-scoring rendered clip
                 if let Ok((ccode, cdata, _)) = curl_json(&[
                     format!("https://api.opus.pro/api/exportable-clips?q=findByProjectId&projectId={project_id}"),
                     "-H".into(),
@@ -1149,7 +1169,7 @@ pub(crate) async fn run_opus(
                     "-H".into(),
                     auth.clone(),
                 ]) && ccode < 400
-                    && let Some(u) = find_first_http_url(&cdata)
+                    && let Some(u) = pick_opus_export_url(&cdata)
                 {
                     download_url = Some(u);
                     break;
@@ -1352,6 +1372,19 @@ mod tests {
         assert_eq!(
             find_first_http_url(&sub_resp).as_deref(),
             Some("https://cdn.example.com/out.mp4")
+        );
+        // OpusClip: pick_opus_export_url ignores project metadata object and selects highest-scoring clip
+        let opus_project_meta = json!({"status": "DONE", "videoUrl": "https://input.example.com/raw.mp4"});
+        assert_eq!(pick_opus_export_url(&opus_project_meta), None);
+        let opus_clips = json!({
+            "data": [
+                {"score": 72, "uriForExport": "https://cdn.opus.pro/clip-low.mp4"},
+                {"score": 96, "uriForExport": "https://cdn.opus.pro/clip-best.mp4"}
+            ]
+        });
+        assert_eq!(
+            pick_opus_export_url(&opus_clips).as_deref(),
+            Some("https://cdn.opus.pro/clip-best.mp4")
         );
     }
 }

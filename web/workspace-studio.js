@@ -277,6 +277,7 @@ function stopExportPoll() {
 async function runSnapmaticAutoCreate() {
  const row = app()?.getSelected?.();
  if (!row?.from_sources || state.busy) return;
+ const clipId = row.clip_id;
  state.busy = true;
  syncButtons();
  if ($('studio-active-summary')) $('studio-active-summary').textContent = '';
@@ -284,24 +285,24 @@ async function runSnapmaticAutoCreate() {
  try {
   // Step 1: Study raw source clip against TikTok Original Content Guidelines
   setProgress(true, 10, 'Step 1/4: Studying clip against TikTok Original Content Guidelines…');
-  const audit = await runTikTokAudit(row.clip_id, 'source');
+  const audit = await runTikTokAudit(clipId, 'source');
   const plan = audit?.auto_fix_plan || {
    pre_crop: null,
    detail_restore: true,
    dynamic_zoom: true,
-   remove_mid_silences: true,
+   remove_mid_silences: false,
    studio_voice_enhance: true,
    color_grade: 'crisp_rec709',
    add_captions: true,
   };
 
   // Step 2: Generate Pro Word-by-Word Karaoke Captions via Whisper AI
-  let words = loadClipCaptions(row.clip_id);
+  let words = loadClipCaptions(clipId);
   if (plan.add_captions !== false && !words.length) {
    setProgress(true, 28, 'Step 2/4: Generating Pro Word-by-Word Karaoke Captions (Whisper AI)…');
    try {
     const es = app()?.getEditState?.();
-    const tr = await app().get('/api/workspace/studio/transcribe/' + encodeURIComponent(row.clip_id), {
+    const tr = await app().get('/api/workspace/studio/transcribe/' + encodeURIComponent(clipId), {
      method: 'POST',
      headers: { 'Content-Type': 'application/json' },
      body: JSON.stringify({
@@ -312,22 +313,23 @@ async function runSnapmaticAutoCreate() {
     });
     if (Array.isArray(tr.words) && tr.words.length) {
      words = tr.words;
-     saveClipCaptions(row.clip_id, words);
+     saveClipCaptions(clipId, words);
     }
    } catch (e) {
     // Continue gracefully even if clip has no clear speech
     console.warn('Auto-Create captions skipped:', e.message);
    }
   }
-  state.words = words;
-  renderLiveCaptions(true);
-
-  // Auto-seed a punchy title if empty
-  if (words.length && $('title') && !$('title').value.trim()) {
-   const hookSnippet = words.slice(0, 7).map(w => w.text).join(' ').replace(/[.!?]+$/, '');
-   if (hookSnippet.length >= 6) {
-    $('title').value = hookSnippet.slice(0, 80);
-    app()?.refreshDraftEditor?.();
+  const sameClip = () => app()?.getSelected?.()?.clip_id === clipId;
+  if (sameClip()) {
+   state.words = words;
+   renderLiveCaptions(true);
+   if (words.length && $('title') && !$('title').value.trim()) {
+    const hookSnippet = words.slice(0, 7).map(w => w.text).join(' ').replace(/[.!?]+$/, '');
+    if (hookSnippet.length >= 6) {
+     $('title').value = hookSnippet.slice(0, 80);
+     app()?.refreshDraftEditor?.();
+    }
    }
   }
 
@@ -344,11 +346,11 @@ async function runSnapmaticAutoCreate() {
    studio_voice_enhance: Boolean(plan.studio_voice_enhance),
    color_grade: plan.color_grade || 'crisp_rec709',
   };
-  state.autoPlan = studioPlan;
+  if (sameClip()) state.autoPlan = studioPlan;
 
   // Step 3: Render transformed 1080x1920 High-Bitrate MP4 with scrubbed metadata
   setProgress(true, 45, 'Step 3/4: Rendering transformed 1080p MP4 (reframe + polish + pacing + captions)…');
-  const es = app()?.getEditState?.();
+  const es = sameClip() ? app()?.getEditState?.() : null;
   stopExportPoll();
   exportPollTimer = setInterval(async () => {
    try {
@@ -367,14 +369,13 @@ async function runSnapmaticAutoCreate() {
    out_ms: es?.out_ms || null,
    mute: false,
    normalize_audio: true,
-   use_hw_encoder: true,
+   use_hw_encode: true,
    save_caption_txt: false,
-   title: ($('title')?.value || row.name || '').trim(),
-   caption_text: ($('caption')?.value || '').trim(),
+   caption_text: sameClip() ? ($('caption')?.value || '').trim() : '',
    ...studioPlan,
   };
 
-  const res = await app().get('/api/workspace/film-roll/' + encodeURIComponent(row.clip_id) + '/export', {
+  const res = await app().get('/api/workspace/film-roll/' + encodeURIComponent(clipId) + '/export', {
    method: 'POST',
    headers: { 'Content-Type': 'application/json' },
    body: JSON.stringify(exportBody),
@@ -388,16 +389,16 @@ async function runSnapmaticAutoCreate() {
 
   // Step 4: Automatically verify the finished MP4 against TikTok Guidelines!
   setProgress(true, 95, 'Step 4/4: Verifying finished MP4 against TikTok Original Content Guidelines…');
-  const finalAudit = await runTikTokAudit(row.clip_id, 'export');
+  const finalAudit = await runTikTokAudit(clipId, 'export');
   setProgress(false, 100, '');
 
   const scoreTxt = finalAudit ? ` · TikTok Score: ${finalAudit.score}/100` : '';
   const summary = `✓ Snapmatic Auto-Create exported ${res.file_name}${scoreTxt}`;
+
+  window.dispatchEvent(new CustomEvent('snapmatic:exported', { detail: { clip_id: clipId } }));
+  await app()?.reload?.();
   if ($('studio-active-summary')) $('studio-active-summary').textContent = summary;
   if ($('edit-state')) $('edit-state').textContent = summary;
-
-  window.dispatchEvent(new CustomEvent('snapmatic:exported', { detail: { clip_id: row.clip_id } }));
-  await app()?.reload?.();
   app()?.note?.(summary, [
    { label: 'Upload →', onClick: () => document.querySelector('[data-itab="upload"]')?.click() },
   ]);
@@ -717,11 +718,13 @@ window.addEventListener('snapmatic:clip-selected', e => {
  state.words = row?.clip_id ? loadClipCaptions(row.clip_id) : [];
  state.autoPlan = null;
  if ($('hook-gen-topic')) $('hook-gen-topic').value = '';
- if ($('studio-active-summary')) $('studio-active-summary').textContent = '';
+ if (!state.busy && $('studio-active-summary')) $('studio-active-summary').textContent = '';
  syncButtons();
  renderGeneratedHooks();
- if (row?.from_sources) runTikTokAudit(row.clip_id, 'auto');
- else renderAudit(null);
+ if (!state.busy) {
+  if (row?.from_sources) runTikTokAudit(row.clip_id, 'auto');
+  else renderAudit(null);
+ }
 });
 
 window.addEventListener('snapmatic:exported', e => {

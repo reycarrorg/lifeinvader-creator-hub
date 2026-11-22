@@ -28,7 +28,7 @@ impl Drop for OverviewPermit {
 
 async fn bounded_overview(app: App, id: i64, role: &'static str, interactive: bool) -> ApiResult<Json<serde_json::Value>> {
     let scans = if interactive { &ACTIVE_INTERACTIVE_SCANS } else { &ACTIVE_BACKGROUND_SCANS };
-    scans.fetch_update(Ordering::Acquire, Ordering::Relaxed, |n| {
+    scans.try_update(Ordering::Acquire, Ordering::Relaxed, |n| {
         (n < 1).then_some(n + 1)
     }).map_err(|_| (StatusCode::SERVICE_UNAVAILABLE, "Source folders are busy. Try again after the current scans finish.".into()))?;
     let permit = OverviewPermit(scans);
