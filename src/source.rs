@@ -317,6 +317,14 @@ pub(crate) fn account_profile(
         };
         return Ok(("other".into(), url, folder));
     }
+    if expected_role == "source" && url == crate::solo::GROUP_DM_URL {
+        let folder = if custom.is_empty() {
+            crate::solo::GROUP_DM_FOLDER.into()
+        } else {
+            custom
+        };
+        return Ok(("tiktok".into(), url, folder));
+    }
     let parsed: axum::http::Uri = url.parse().map_err(bad)?;
     let host = parsed.host().unwrap_or("").to_ascii_lowercase();
     let host_ok = match platform.as_str() {
@@ -1987,6 +1995,10 @@ pub(crate) fn start_sync_for(app: App, id: i64, input: SyncInput, role: &str) ->
                         continue;
                     }
                     let _=db.execute("INSERT INTO source_new_files(profile_id,root,path,downloaded_at,seen) VALUES(?,?,?,unixepoch(),0) ON CONFLICT(profile_id,root,path) DO UPDATE SET downloaded_at=excluded.downloaded_at,seen=0",params![id,root.to_string_lossy().as_ref(),f.path]);
+                    #[cfg(feature = "snapmatic-hud")]
+                    if !is_profile {
+                        crate::workspace_film_roll::auto_add_source_video(&db, id, &f.path, &root.join(&f.path));
+                    }
                 }
             }
             if code == 0 && selection_pending {

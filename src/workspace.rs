@@ -70,6 +70,7 @@ pub fn routes(app:App)->Router<App>{
         .route("/api/workspace/film-roll/import-file",post(crate::workspace_film_roll::import_file).layer(axum::extract::DefaultBodyLimit::max(255*1024*1024)))
         .route("/api/workspace/film-roll/exports/{id}/reveal",post(crate::workspace_film_roll::reveal_export))
         .route("/api/workspace/film-roll/{id}",axum::routing::delete(crate::workspace_film_roll::remove))
+        .route("/api/workspace/film-roll/{id}/cleanup-uploaded",post(crate::workspace_film_roll::cleanup_uploaded))
         .route("/api/workspace/film-roll/{id}/meta",post(crate::workspace_film_roll::update_meta))
         .route("/api/workspace/film-roll/{id}/probe",get(crate::workspace_film_roll::probe_clip))
         .route("/api/workspace/film-roll/{id}/filmstrip",get(crate::workspace_film_roll::filmstrip))

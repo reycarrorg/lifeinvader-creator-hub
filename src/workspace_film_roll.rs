@@ -837,6 +837,164 @@ pub(crate) async fn clear(
     Ok(Json(json!({ "removed": removed })))
 }
 
+pub(crate) fn auto_add_source_video(
+    db: &rusqlite::Connection,
+    source_id: i64,
+    rel_path: &str,
+    full_path: &Path,
+) -> bool {
+    if !is_video_path(full_path) {
+        return false;
+    }
+    let Ok(meta) = std::fs::metadata(full_path) else {
+        return false;
+    };
+    if !meta.is_file() || meta.len() == 0 {
+        return false;
+    }
+    let title = full_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .or_else(|| full_path.file_name().and_then(|s| s.to_str()))
+        .unwrap_or(rel_path)
+        .trim()
+        .to_owned();
+    let description = std::fs::read_to_string(full_path.with_extension("description"))
+        .ok()
+        .map(|s| s.trim().chars().take(2000).collect::<String>())
+        .unwrap_or_default();
+    let clip_id = stable_id(source_id, rel_path);
+    db.execute(
+        "INSERT INTO workspace_film_roll(clip_id, source_id, path, title, description, bytes, added_at)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, unixepoch())
+         ON CONFLICT(source_id, path) DO NOTHING",
+        params![clip_id, source_id, rel_path, title, description, meta.len() as i64],
+    )
+    .map(|n| n > 0)
+    .unwrap_or(false)
+}
+
+fn remove_video_and_sidecars(video_path: &Path) -> usize {
+    let mut removed = 0usize;
+    if video_path.is_file() && std::fs::remove_file(video_path).is_ok() {
+        removed += 1;
+    }
+    for ext in ["description", "info.json", "jpg", "jpeg", "webp", "png"] {
+        let side = video_path.with_extension(ext);
+        if side.is_file() && std::fs::remove_file(&side).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+pub(crate) async fn cleanup_uploaded(
+    State(app): State<App>,
+    AxumPath(clip_id): AxumPath<String>,
+) -> ApiResult<Json<Value>> {
+    if !crate::workspace_media::hex(&clip_id) {
+        return Err(bad("Invalid clip ID."));
+    }
+    let (source_id, rel_path, exported_path, has_receipt) = {
+        let db = app.db.lock().map_err(internal)?;
+        let row: Option<(i64, String, String)> = db
+            .query_row(
+                "SELECT source_id, path, COALESCE(exported_path, '') FROM workspace_film_roll WHERE clip_id=?1",
+                [&clip_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()
+            .map_err(internal)?;
+        let Some((sid, path, exp)) = row else {
+            return Ok(Json(json!({ "deleted": false, "deleted_files": 0 })));
+        };
+        let r1: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM workspace_upload_receipts WHERE clip_id=?1)",
+                [&clip_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(false);
+        let r2: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM workspace_tiktok_direct_receipts WHERE clip_id=?1 AND status IN ('PUBLISH_COMPLETE','PROCESSING','UPLOADING'))",
+                [&clip_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(false);
+        let r3: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM workspace_reviewed_public_posts WHERE post_id!='' AND media_reference LIKE '%' || ?1 || '%')",
+                [&clip_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(false);
+        (sid, path, exp, r1 || r2 || r3)
+    };
+
+    if !has_receipt {
+        return Err(bad(
+            "Clip has no recorded upload receipt yet — refusing to delete un-uploaded video.",
+        ));
+    }
+
+    let mut deleted_files = 0usize;
+    if let Some(src_file) = resolve_video(&app, &clip_id) {
+        let safe_in_imports = src_file.starts_with(app.media.join("film-roll-imports"));
+        let safe_in_sources = {
+            let db = app.db.lock().map_err(internal)?;
+            source::config(&db)
+                .ok()
+                .and_then(|c| source::checked_root(&c).ok())
+                .is_some_and(|root| {
+                    let c_src = src_file.canonicalize().unwrap_or_else(|_| src_file.clone());
+                    let c_root = root.canonicalize().unwrap_or(root);
+                    c_src.starts_with(c_root)
+                })
+        };
+        if safe_in_imports || safe_in_sources {
+            deleted_files += remove_video_and_sidecars(&src_file);
+        }
+    }
+
+    if !exported_path.trim().is_empty()
+        && !exported_path.contains(['/', '\\', ':', '\0'])
+        && !exported_path.starts_with('.')
+    {
+        let exp_file = exports_dir(&app).join(&exported_path);
+        if exp_file.is_file() && std::fs::remove_file(&exp_file).is_ok() {
+            deleted_files += 1;
+        }
+        let txt_side = exp_file.with_extension("txt");
+        if txt_side.is_file() && std::fs::remove_file(&txt_side).is_ok() {
+            deleted_files += 1;
+        }
+        if let Some(stem) = exp_file.file_stem().and_then(|s| s.to_str()) {
+            let cov_side = exports_dir(&app).join(format!("{stem}-cover.png"));
+            if cov_side.is_file() && std::fs::remove_file(&cov_side).is_ok() {
+                deleted_files += 1;
+            }
+        }
+    }
+
+    {
+        let db = app.db.lock().map_err(internal)?;
+        let _ = db.execute("DELETE FROM workspace_film_roll WHERE clip_id=?1", [&clip_id]);
+        if source_id > 0 && !rel_path.is_empty() {
+            let _ = db.execute(
+                "DELETE FROM source_new_files WHERE profile_id=?1 AND path=?2",
+                params![source_id, rel_path],
+            );
+        }
+    }
+
+    Ok(Json(json!({
+        "deleted": true,
+        "clip_id": clip_id,
+        "deleted_files": deleted_files,
+    })))
+}
+
 pub(crate) async fn remove(
     State(app): State<App>,
     AxumPath(clip_id): AxumPath<String>,

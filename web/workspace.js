@@ -281,6 +281,22 @@ for(const [provider,{id}] of Object.entries(shipDestinations)){
   syncYoutubeDraftButton();
  };
 }
+const AUTO_DEL_KEY='snapmatic-auto-delete-v1';
+if($('ship-auto-delete')){
+ try{const saved=localStorage.getItem(AUTO_DEL_KEY);if(saved!==null)$('ship-auto-delete').checked=saved!=='off';}catch{}
+ $('ship-auto-delete').onchange=()=>{try{localStorage.setItem(AUTO_DEL_KEY,$('ship-auto-delete').checked?'on':'off');}catch{}};
+}
+async function cleanupUploadedClip(clipId){
+ if(!clipId||!$('ship-auto-delete')?.checked)return false;
+ try{
+  const r=await get('/api/workspace/film-roll/'+encodeURIComponent(clipId)+'/cleanup-uploaded',{method:'POST'});
+  if(r?.deleted){
+   if(selected?.clip_id===clipId){selected=null;stopVideo();}
+   return true;
+  }
+ }catch{}
+ return false;
+}
 if ($('tt-upload-draft')) $('tt-upload-draft').onclick = async () => {
  const row = selected;
  if ($('tt-upload-draft').disabled || !row?.from_sources || inboxUploads.has(row.clip_id)) return;
@@ -294,7 +310,8 @@ if ($('tt-upload-draft')) $('tt-upload-draft').onclick = async () => {
    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({use_source: !row.exported})
   });
   row.tt_publish_id = response.publish_id;
-  result = 'TikTok Inbox draft status: ' + response.status + '.';
+  const cleaned = await cleanupUploadedClip(row.clip_id);
+  result = 'TikTok Inbox draft status: ' + response.status + '.' + (cleaned ? ' Local video deleted.' : '');
  } catch (e) { result = e.message; }
  finally {
   inboxUploads.delete(row.clip_id);
@@ -555,10 +572,14 @@ async function runMultiShip({fromRecipe=false, expectedIntent=null}={}) {
   if(restrictedCount)parts.push(restrictedCount+' with restricted visibility');
   if(failedTargets.length)parts.push(failedTargets.length+' failed or unconfirmed');
   if(attempted<targets.length)parts.push((targets.length-attempted)+' skipped');
-  const summary=parts.join(', ')+'.'+(failedTargets.length?' Check the destination account before another attempt.':'');
+  let deletedAfter=false;
+  if(!failedTargets.length&&attempted===targets.length&&(okCount>0||pendingCount>0)){
+   deletedAfter=await cleanupUploadedClip(expectedClip);
+  }
+  const summary=parts.join(', ')+'.'+(deletedAfter?' Local video deleted after upload.':failedTargets.length?' Check the destination account before another attempt.':'');
   note(summary);
-  if(selected?.clip_id===expectedClip){
-   renderClipShippedBanner(selected);
+  if(deletedAfter||selected?.clip_id===expectedClip){
+   if(selected?.clip_id===expectedClip)renderClipShippedBanner(selected);
    try { await reload();loadExportHistory(); } catch { note(summary+' Refresh the workspace to see updated receipts.'); }
   }
   return {okCount,pendingCount,restrictedCount,failedTargets,total:targets.length,summary};
@@ -2585,7 +2606,13 @@ if ($('tt-direct')) {
   getConnection: () => oauthStatus?.tiktok,
   getCaption: () => pd.tiktokPostText({
    title: $('title').value, caption: $('caption').value, tags: $('tags').value
-  }, pdState?.overrides || {})
+  }, pdState?.overrides || {}),
+  onPublished: async clipId => {
+   if (await cleanupUploadedClip(clipId)) {
+    note('Published to TikTok and deleted local video.');
+    try { await reload(); loadExportHistory(); } catch {}
+   }
+  }
  });
  Object.assign(window.snapmaticTikTokDirect, tikTokDirect);
  window.addEventListener('snapmatic:exported', e => {

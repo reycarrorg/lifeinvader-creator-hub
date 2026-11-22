@@ -840,7 +840,7 @@ async fn local_only(
     });
     let bridge_path = matches!(
         path,
-        "/api/bridge/poll" | "/api/bridge/result" | "/api/bridge/check"
+        "/api/bridge/poll" | "/api/bridge/result" | "/api/bridge/check" | "/api/bridge/group-dm"
     );
     if !loopback_host
         || origin.is_some_and(|o| {
@@ -1246,6 +1246,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/bridge/poll", get(bridge::poll))
         .route("/api/bridge/check", get(bridge::check))
         .route("/api/bridge/result", post(bridge::result))
+        .route("/api/bridge/group-dm", post(solo::start_group_dm))
         .route(
             "/api/profiles/{id}/schedule",
             post(scheduler::save_profile_schedule),

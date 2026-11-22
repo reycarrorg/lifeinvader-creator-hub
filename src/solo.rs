@@ -9,6 +9,8 @@ use std::{
 
 pub const SOLO_URL: &str = "https://lifeinvader.local/solo-posts";
 pub const SOLO_FOLDER: &str = "SOLO POSTS";
+pub const GROUP_DM_URL: &str = "https://lifeinvader.local/group-dm/cj_4_prez";
+pub const GROUP_DM_FOLDER: &str = "CJ4PREZ GROUP DM";
 
 #[derive(Deserialize)]
 pub struct Input {
@@ -134,9 +136,65 @@ fn resolve_photo_helper(configured: &str) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
+fn collect_video_files(root: &std::path::Path, dir: &std::path::Path, out: &mut HashSet<String>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_video_files(root, &path, out);
+        } else if path.is_file()
+            && path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+                matches!(e.to_ascii_lowercase().as_str(), "mp4" | "mov" | "webm" | "mkv")
+            })
+            && let Ok(rel) = path.strip_prefix(root)
+        {
+            out.insert(rel.to_string_lossy().replace('\\', "/"));
+        }
+    }
+}
+
 pub async fn start(
     State(app): State<App>,
     Json(input): Json<Input>,
+) -> ApiResult<impl IntoResponse> {
+    start_collection(
+        app,
+        input,
+        SOLO_URL,
+        "SOLO POSTS",
+        "other",
+        SOLO_FOLDER,
+        "[]",
+    )
+    .await
+}
+
+pub async fn start_group_dm(
+    State(app): State<App>,
+    Json(input): Json<Input>,
+) -> ApiResult<impl IntoResponse> {
+    start_collection(
+        app,
+        input,
+        GROUP_DM_URL,
+        "cj_4_prez's group",
+        "tiktok",
+        GROUP_DM_FOLDER,
+        r#"["Group DM"]"#,
+    )
+    .await
+}
+
+async fn start_collection(
+    app: App,
+    input: Input,
+    profile_url: &'static str,
+    profile_name: &'static str,
+    profile_platform: &'static str,
+    folder_name: &'static str,
+    profile_tags: &'static str,
 ) -> ApiResult<impl IntoResponse> {
     let mode = match input
         .mode
@@ -199,13 +257,14 @@ pub async fn start(
         ));
     }
 
-    let dest_preview = root.join(SOLO_FOLDER);
+    let dest_preview = root.join(folder_name);
     let logname = format!("{}.log", Uuid::new_v4());
     fs::create_dir_all(&app.log_dir).map_err(internal)?;
     let mut log = fs::File::create(app.log_dir.join(&logname)).map_err(internal)?;
     writeln!(
         log,
-        "SOLO POSTS: {} link(s) · Mode: {} · Destination: {}",
+        "{}: {} link(s) · Mode: {} · Destination: {}",
+        profile_name,
         links.len(),
         mode,
         dest_preview.display()
@@ -214,13 +273,13 @@ pub async fn start(
 
     let tx = db.transaction().map_err(internal)?;
     tx.execute(
-        "INSERT INTO profiles(name,platform,url,role,tags,source_folder,archived) VALUES('SOLO POSTS','other',?,'source','[]',?,0) \
-         ON CONFLICT(url) DO UPDATE SET name='SOLO POSTS', source_folder=excluded.source_folder, archived=0",
-        params![SOLO_URL, SOLO_FOLDER],
+        "INSERT INTO profiles(name,platform,url,role,tags,source_folder,archived) VALUES(?,?,?,'source',?,?,0) \
+         ON CONFLICT(url) DO UPDATE SET name=excluded.name, source_folder=excluded.source_folder, archived=0",
+        params![profile_name, profile_platform, profile_url, profile_tags, folder_name],
     )
     .map_err(internal)?;
     let id: i64 = tx
-        .query_row("SELECT id FROM profiles WHERE url=?", [SOLO_URL], |r| {
+        .query_row("SELECT id FROM profiles WHERE url=?", [profile_url], |r| {
             r.get(0)
         })
         .map_err(internal)?;
@@ -244,8 +303,12 @@ pub async fn start(
     let mode_resp = mode.clone();
 
     std::thread::spawn(move || {
+        let mut before_videos = HashSet::new();
+        let dest_for_scan = root.join(folder_name);
+        collect_video_files(&root, &dest_for_scan, &mut before_videos);
+
         let result = (|| -> std::io::Result<bool> {
-            let dest = source::ensure_folder(&root, SOLO_FOLDER)?;
+            let dest = source::ensure_folder(&root, folder_name)?;
             let archive = dest.join("download-archive.txt");
             let output = dest.join(
                 "%(uploader,uploader_id,channel,channel_id|Unknown)s/%(title).120B [%(id.-8:)s].%(ext)s",
@@ -354,7 +417,22 @@ pub async fn start(
                 "Finished with errors; check the log."
             }
         );
+        let mut after_videos = HashSet::new();
+        collect_video_files(&root, &dest_for_scan, &mut after_videos);
         if let Ok(db) = db.lock() {
+            let root_str = root.to_string_lossy().into_owned();
+            for rel in after_videos {
+                if before_videos.contains(&rel) {
+                    continue;
+                }
+                let _ = db.execute(
+                    "INSERT INTO source_new_files(profile_id,root,path,downloaded_at,seen) VALUES(?,?,?,unixepoch(),0) \
+                     ON CONFLICT(profile_id,root,path) DO UPDATE SET downloaded_at=excluded.downloaded_at,seen=0",
+                    params![id, &root_str, &rel],
+                );
+                #[cfg(feature = "snapmatic-hud")]
+                crate::workspace_film_roll::auto_add_source_video(&db, id, &rel, &root.join(&rel));
+            }
             let _ = db.execute(
                 "UPDATE source_sync_runs SET state=?,finished=datetime('now'),exit_code=? WHERE id=?",
                 params![if ok { "finished" } else { "error" }, if ok { 0 } else { 1 }, run_id],

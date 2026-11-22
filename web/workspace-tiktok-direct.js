@@ -9,7 +9,7 @@
   const paidVisibility = new Set(['PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS']);
   const allowedToPost = new Set(['none', 'failed']);
 
-  function mount({get, getSelection, getCaption, getConnection}) {
+  function mount({get, getSelection, getCaption, getConnection, onPublished}) {
     const el = name => document.getElementById('tt-direct-' + name);
     const preview = el('preview'), title = el('title'), privacy = el('privacy');
     const message = text => { el('status').textContent = text; };
@@ -259,7 +259,14 @@
         if (current(turn)) { busy = false; render(); }
       }
     }
-    el('publish').onclick = () => submit().catch(() => {});
+    el('publish').onclick = () => {
+      const clipId = getSelection()?.clipId;
+      submit().then(receipt => {
+        if (onPublished && clipId && (receipt?.state === 'complete' || receipt?.state === 'pending')) {
+          onPublished(clipId, receipt);
+        }
+      }).catch(() => {});
+    };
     async function publishReviewed(expected) {
       if (!expected) throw Error('Review the TikTok post before shipping.');
       sync();
