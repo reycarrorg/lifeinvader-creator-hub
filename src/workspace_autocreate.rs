@@ -757,9 +757,38 @@ pub(crate) async fn tiktok_audit(
 // CLOUD AI HELPERS (OPUS.PRO & SUBMAGIC.CO)
 // ============================================================================
 
+struct TempFileGuard(PathBuf);
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn plain_win_path(p: &Path) -> String {
+    let s = p.to_string_lossy();
+    s.strip_prefix(r"\\?\").unwrap_or(&s).to_owned()
+}
+
+fn stage_clean_upload(app: &App, src: &Path) -> Result<TempFileGuard, String> {
+    let ext = src
+        .extension()
+        .and_then(|e| e.to_str())
+        .filter(|e| e.len() <= 5 && e.chars().all(|c| c.is_ascii_alphanumeric()))
+        .unwrap_or("mp4");
+    let staged = exports_dir(app).join(format!(
+        "cloud-upload-{}.{ext}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::copy(src, &staged)
+        .map_err(|e| format!("Could not prepare clean clip copy for upload: {e}"))?;
+    Ok(TempFileGuard(staged))
+}
+
 fn curl_json(args: &[String]) -> Result<(u16, Value, String), String> {
     let mut cmd = Command::new("curl.exe");
     cmd.arg("-sS")
+        .arg("-g")
         .arg("--max-time")
         .arg("180")
         .arg("-w")
@@ -788,7 +817,7 @@ fn download_cloud_mp4(url: &str, dest: &Path, auth_header: Option<&str>) -> Resu
     let tmp = dest.with_extension("cloud.part");
     let _ = std::fs::remove_file(&tmp);
     let mut cmd = Command::new("curl.exe");
-    cmd.args(["-fSL", "--retry", "2", "--max-time", "300"]);
+    cmd.args(["-fSL", "-g", "--retry", "2", "--max-time", "300"]);
     if let Some(h) = auth_header {
         cmd.args(["-H", h]);
     }
@@ -968,11 +997,14 @@ pub(crate) async fn run_opus(
 
             // Step 2: Initiate GCS resumable upload session
             set_job_progress(20, "uploading", "Uploading clip to Opus.pro…");
+            let staged_guard = stage_clean_upload(&app_bg, &src_path)?;
+            let staged_str = plain_win_path(&staged_guard.0);
             let hdr_file = exports_dir(&app_bg).join(format!("opus-hdr-{}.txt", uuid::Uuid::new_v4().simple()));
             let mut init_cmd = Command::new("curl.exe");
             init_cmd
                 .args([
                     "-sS",
+                    "-g",
                     "-X",
                     "POST",
                     "-H",
@@ -1004,11 +1036,12 @@ pub(crate) async fn run_opus(
                 .unwrap_or_else(|| gcs_url.clone());
             let _ = std::fs::remove_file(&hdr_file);
 
-            // Step 3: Upload file bytes
+            // Step 3: Upload file bytes from clean ASCII staging path (--globoff prevents [id] glob errors)
             let mut put_cmd = Command::new("curl.exe");
             put_cmd
                 .args([
                     "-fSL",
+                    "-g",
                     "--max-time",
                     "300",
                     "-X",
@@ -1017,13 +1050,14 @@ pub(crate) async fn run_opus(
                     "Content-Type: video/mp4",
                     "-T",
                 ])
-                .arg(&src_path)
+                .arg(&staged_str)
                 .arg(&location)
                 .stdin(Stdio::null());
             hide_window(&mut put_cmd);
             let put_out = put_cmd
                 .output()
                 .map_err(|e| format!("Opus.pro file upload failed: {e}"))?;
+            drop(staged_guard);
             if !put_out.status.success() {
                 return Err(format!(
                     "Opus.pro upload failed: {}",
@@ -1178,7 +1212,9 @@ pub(crate) async fn run_submagic(
                 .chars()
                 .take(60)
                 .collect::<String>();
-            let file_arg = format!("file=@{}", src_path.to_string_lossy());
+            let staged_guard = stage_clean_upload(&app_bg, &src_path)?;
+            let staged_str = plain_win_path(&staged_guard.0);
+            let file_arg = format!("file=@{staged_str};type=video/mp4");
             let tpl = if creds.template_name.trim().is_empty() {
                 default_submagic_template()
             } else {
@@ -1194,17 +1230,18 @@ pub(crate) async fn run_submagic(
                 key_hdr.clone(),
                 "-F".into(),
                 file_arg,
-                "-F".into(),
+                "--form-string".into(),
                 format!("title={title}"),
-                "-F".into(),
+                "--form-string".into(),
                 "language=en".into(),
-                "-F".into(),
+                "--form-string".into(),
                 format!("templateName={tpl}"),
-                "-F".into(),
+                "--form-string".into(),
                 format!("magicBrolls={}", if creds.magic_brolls { "true" } else { "false" }),
-                "-F".into(),
+                "--form-string".into(),
                 format!("magicZooms={}", if creds.magic_zooms { "true" } else { "false" }),
             ])?;
+            drop(staged_guard);
             if code >= 400 || code == 0 {
                 return Err(format!(
                     "Submagic upload failed (HTTP {code}): {}",
