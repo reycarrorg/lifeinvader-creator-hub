@@ -1,31 +1,37 @@
 // Scans ONLY visible post links inside the targeted TikTok Group DM thread.
-// Never reads cookies, passwords, or unrelated conversations.
+// Supports both main frame and nested TikTok Business Suite iframes.
 function scanGroupDmLinks(targetGroupName) {
-  const needle = String(targetGroupName || 'cj_4_prez').trim().toLowerCase();
-  const bodyText = (document.body?.innerText || '').toLowerCase();
-  if (/log in to tiktok|sign in to tiktok/i.test(bodyText) && !bodyText.includes(needle)) {
+  const norm = s => String(s || '').toLowerCase().replace(/[\u2018\u2019\u2032`]/g, "'").replace(/\s+/g, ' ').trim();
+  const rawNeedle = norm(targetGroupName || "cj_4_prez's group");
+  // Match either full group name or core handle token (e.g., "cj_4_prez") to survive ellipsis truncation
+  const coreToken = rawNeedle.split(/[\s']/)[0] || rawNeedle;
+
+  const bodyText = norm(document.body?.innerText || '');
+  if (!bodyText) return { empty: true, links: [] };
+  if (/log in to tiktok|sign in to tiktok/i.test(bodyText) && !bodyText.includes(coreToken)) {
     return { error: 'login', links: [] };
   }
 
-  // Try clicking the target group row in the left conversation list if not currently active
-  const headerText = (
-    document.querySelector('[class*="Header"], [class*="header"], [data-e2e*="chat-header"], main h1, main h2, main h3')?.innerText || ''
-  ).toLowerCase();
-  if (needle && !headerText.includes(needle)) {
+  const matchesGroup = txt => Boolean(txt) && (txt.includes(rawNeedle) || (coreToken.length >= 4 && txt.includes(coreToken)));
+
+  // Try clicking the target group row in the conversation list if not currently active in header
+  const headerEl = document.querySelector('[class*="Header"], [class*="header"], [data-e2e*="chat-header"], [data-e2e*="nickname"], main h1, main h2, main h3');
+  const headerText = norm(headerEl?.innerText || '');
+  if (!matchesGroup(headerText)) {
     const candidates = Array.from(document.querySelectorAll('div, li, a, span, p')).filter(el => {
-      if (el.children.length > 4) return false;
-      const t = (el.innerText || '').trim().toLowerCase();
-      return t && t.length <= 80 && t.includes(needle);
+      if (el.children.length > 5) return false;
+      const t = norm(el.innerText || '');
+      return t && t.length <= 90 && matchesGroup(t);
     });
     if (candidates.length) {
       candidates[0].click();
     }
   }
 
-  // Verify the target group is visible on the page before collecting links
-  const refreshedText = (document.body?.innerText || '');
-  if (needle && !refreshedText.toLowerCase().includes(needle)) {
-    return { error: 'group_not_open', links: [] };
+  const refreshedRaw = document.body?.innerText || '';
+  const refreshedNorm = norm(refreshedRaw);
+  if (!matchesGroup(refreshedNorm)) {
+    return { error: 'group_not_open', href: location.href, sample: refreshedNorm.slice(0, 120), links: [] };
   }
 
   const found = new Set();
@@ -44,15 +50,46 @@ function scanGroupDmLinks(targetGroupName) {
     } catch {}
   }
 
-  // 1. Anchor tags & clickable shared video cards in chat
+  // 1. Anchor tags & data attributes
   for (const el of document.querySelectorAll('a[href], [data-href], [data-url]')) {
     addUrl(el.getAttribute('href') || el.getAttribute('data-href') || el.getAttribute('data-url'));
   }
 
   // 2. Plain text URLs pasted in messages
-  const urlMatches = refreshedText.match(/https:\/\/[^\s"'<>]+/g) || [];
+  const urlMatches = refreshedRaw.match(/https:\/\/[^\s"'<>]+/g) || [];
   for (const m of urlMatches) addUrl(m);
 
-  return { ok: true, group: targetGroupName, links: Array.from(found) };
+  // 3. Shared TikTok video cards inside React DM elements (extract item_id/aweme_id/author if no <a> href)
+  try {
+    const cards = document.querySelectorAll('[data-e2e*="chat"], [data-e2e*="message"], [class*="Message"], [class*="Video"], [class*="video"]');
+    for (const el of cards) {
+      for (const k of Object.keys(el)) {
+        if (!k.startsWith('__reactProps') && !k.startsWith('__reactFiber')) continue;
+        const seenObj = new WeakSet();
+        const walk = (obj, depth) => {
+          if (!obj || typeof obj !== 'object' || depth > 5 || seenObj.has(obj)) return;
+          seenObj.add(obj);
+          if (typeof obj.share_url === 'string') addUrl(obj.share_url);
+          if (typeof obj.shareUrl === 'string') addUrl(obj.shareUrl);
+          if (typeof obj.href === 'string') addUrl(obj.href);
+          if (typeof obj.url === 'string') addUrl(obj.url);
+          const vid = obj.itemId || obj.item_id || obj.aweme_id || obj.awemeId || obj.videoId || obj.video_id;
+          const uid = obj.uniqueId || obj.unique_id || obj.authorUniqueId || obj.secUid || obj.author?.uniqueId || obj.author?.unique_id;
+          if (vid && /^\d{15,22}$/.test(String(vid))) {
+            const handle = (typeof uid === 'string' && /^[A-Za-z0-9._-]+$/.test(uid)) ? uid : 'tiktok';
+            addUrl(`https://www.tiktok.com/@${handle}/video/${vid}`);
+          }
+          for (const key of Object.keys(obj)) {
+            if (key === 'return' || key === 'stateNode' || key === '_owner') continue;
+            const v = obj[key];
+            if (v && typeof v === 'object') walk(v, depth + 1);
+          }
+        };
+        walk(el[k], 0);
+      }
+    }
+  } catch {}
+
+  return { ok: true, matched: true, href: location.href, group: targetGroupName, links: Array.from(found) };
 }
 if (typeof module !== 'undefined') module.exports = { scanGroupDmLinks };

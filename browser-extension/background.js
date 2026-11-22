@@ -47,8 +47,18 @@ async function runProfileBridge() {
   }
 }
 
+async function findMessageTabs() {
+  const [biz, std] = await Promise.all([
+    chrome.tabs.query({ url: 'https://www.tiktok.com/business-suite/messages*' }),
+    chrome.tabs.query({ url: 'https://www.tiktok.com/messages*' }),
+  ]);
+  const byId = new Map();
+  for (const t of [...biz, ...std]) byId.set(t.id, t);
+  return Array.from(byId.values());
+}
+
 async function ensurePinnedGroupDmTab(activate = false) {
-  const tabs = await chrome.tabs.query({ url: 'https://www.tiktok.com/business-suite/messages*' });
+  const tabs = await findMessageTabs();
   if (tabs.length) {
     const t = tabs[0];
     await chrome.tabs.update(t.id, { pinned: true, ...(activate ? { active: true } : {}) });
@@ -67,9 +77,9 @@ async function runGroupDmSync(manual = false) {
     const groupName = (cfg.dm_group_name || DEFAULT_GROUP_NAME).trim() || DEFAULT_GROUP_NAME;
     const seen = new Set(Array.isArray(cfg.dm_seen_links) ? cfg.dm_seen_links : []);
 
-    const tabs = await chrome.tabs.query({ url: 'https://www.tiktok.com/business-suite/messages*' });
+    const tabs = await findMessageTabs();
     if (!tabs.length) {
-      const msg = 'Open or pin the cj_4_prez\'s group tab in Brave to auto-sync.';
+      const msg = "Open or pin the cj_4_prez's group tab in Brave to auto-sync.";
       await chrome.storage.local.set({ dm_last_status: msg });
       return { status: msg };
     }
@@ -77,27 +87,41 @@ async function runGroupDmSync(manual = false) {
     const tab = tabs[0];
     if (tab.status !== 'complete') return { status: 'Waiting for TikTok Messages tab to finish loading…' };
 
-    const [res] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: true },
       func: scanGroupDmLinks,
       args: [groupName],
     });
-    const scan = res?.result || { error: 'scan_failed', links: [] };
-    if (scan.error === 'login') {
+
+    const allLinks = new Set();
+    let anyMatched = false;
+    let sawLogin = false;
+    let sampleText = '';
+
+    for (const r of results || []) {
+      const scan = r?.result;
+      if (!scan || scan.empty) continue;
+      if (scan.ok && scan.matched) anyMatched = true;
+      if (scan.error === 'login') sawLogin = true;
+      if (scan.sample && !sampleText) sampleText = scan.sample;
+      for (const u of (scan.links || [])) allLinks.add(u);
+    }
+
+    if (!anyMatched && sawLogin) {
       const msg = 'Sign into TikTok in your pinned Brave tab to sync.';
       await chrome.storage.local.set({ dm_last_status: msg });
       return { status: msg };
     }
-    if (scan.error === 'group_not_open') {
-      const msg = `Click "${groupName}" inside your TikTok Messages tab.`;
+    if (!anyMatched) {
+      const msg = `Click "${groupName}" inside your pinned TikTok Messages tab.` + (sampleText ? ` (Saw: ${sampleText.slice(0, 60)})` : '');
       await chrome.storage.local.set({ dm_last_status: msg });
       return { status: msg };
     }
 
-    const links = Array.isArray(scan.links) ? scan.links : [];
-    const fresh = manual ? links.filter(u => !seen.has(u)) : links.filter(u => !seen.has(u));
+    const links = Array.from(allLinks);
+    const fresh = links.filter(u => !seen.has(u));
     if (!fresh.length) {
-      const msg = `Checked ${groupName} (${links.length} post${links.length === 1 ? '' : 's'} seen · up to date).`;
+      const msg = `Synced ${groupName} (${links.length} post${links.length === 1 ? '' : 's'} visible · up to date).`;
       await chrome.storage.local.set({ dm_last_status: msg });
       return { status: msg };
     }
