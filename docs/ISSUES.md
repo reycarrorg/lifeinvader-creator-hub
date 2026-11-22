@@ -2,6 +2,8 @@
 
 ## Changed — Snapmatic local-file imports
 
+Related work: [PR #17](https://github.com/reycarrorg/lifeinvader-creator-hub/pull/17).
+
 New imports previously recorded only the filename even though the file was written in the local drops folder, and the synthetic source could be rejected by source resolution. Repeated names in the same second could also overwrite a file. The Windows setup branch fixes new imports and checks them with disposable videos. Previously imported records are not migrated; investigate and preserve their files before repairing those records. Full editor captioning and social publishing are not established by this test.
 
 ## Open — Solo Post metadata and picker coverage
