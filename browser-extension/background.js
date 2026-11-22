@@ -127,6 +127,7 @@ async function runGroupDmSync(manual = false) {
 
     const results = await chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: true },
+      world: 'MAIN',
       func: scanGroupDmLinks,
       args: [groupName, manual],
     });
@@ -135,6 +136,7 @@ async function runGroupDmSync(manual = false) {
     let anyMatched = false;
     let sawLogin = false;
     let sampleText = '';
+    let reactTotal = 0;
 
     for (const r of results || []) {
       const scan = r?.result;
@@ -142,6 +144,7 @@ async function runGroupDmSync(manual = false) {
       if (scan.ok && scan.matched) anyMatched = true;
       if (scan.error === 'login') sawLogin = true;
       if (scan.sample && !sampleText) sampleText = scan.sample;
+      if (scan.diag?.reactNodes) reactTotal += scan.diag.reactNodes;
       for (const u of (scan.links || [])) allLinks.add(u);
     }
 
@@ -156,7 +159,13 @@ async function runGroupDmSync(manual = false) {
       return { status: msg };
     }
 
-    return await submitDiscoveredLinks(Array.from(allLinks), groupName, manual);
+    const res = await submitDiscoveredLinks(Array.from(allLinks), groupName, manual);
+    if (allLinks.size === 0) {
+      const msg = `Synced ${groupName} (0 posts · react:${reactTotal} · frames:${(results || []).length}).`;
+      await chrome.storage.local.set({ dm_last_status: msg });
+      return { status: msg, sent: 0 };
+    }
+    return res;
   } catch {
     const msg = 'Snapmatic app not running on 127.0.0.1:3847 (open Snapmatic to sync).';
     await chrome.storage.local.set({ dm_last_status: msg });
@@ -189,6 +198,7 @@ chrome.alarms.onAlarm.addListener(a => {
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === 'poll') { runProfileBridge(); sendResponse({ ok: true }); }
   if (msg?.type === 'sync_dm') { runGroupDmSync(true).then(sendResponse); return true; }
+  if (msg?.type === 'sync_dm_auto') { runGroupDmSync(false).then(sendResponse); return true; }
   if (msg?.type === 'pin_dm') { ensurePinnedGroupDmTab(true).then(() => sendResponse({ ok: true })); return true; }
   if (msg?.type === 'dm_links_found') {
     submitDiscoveredLinks(msg.links || [], msg.group || DEFAULT_GROUP_NAME, Boolean(msg.manual)).then(sendResponse);
