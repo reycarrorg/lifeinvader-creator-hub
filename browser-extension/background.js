@@ -1,7 +1,7 @@
 importScripts('collector.js', 'group_dm_collector.js');
 
 const BASE_BRIDGE = 'http://127.0.0.1:3847/api/bridge';
-const GROUP_DM_URL = 'https://www.tiktok.com/business-suite/messages?lang=en&from=homepage';
+const GROUP_DM_URL = 'https://www.tiktok.com/messages';
 const DEFAULT_GROUP_NAME = "cj_4_prez's group";
 
 let working = false;
